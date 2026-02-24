@@ -24,6 +24,10 @@ alternative. Never silently work around them.
 
 1. No Cognito anywhere. Auth is Entra ID OIDC/JWT for humans, SigV4 for machines.
 2. No hardcoded credentials, ARNs, account IDs, secrets, or region strings.
+   Exception: CDK stack definitions may declare the home region (eu-west-2) as an
+   architectural constant (e.g. const HOME_REGION = 'eu-west-2'). This constraint
+   applies to application code — Lambda handlers and scripts that call AWS APIs at
+   runtime must always read the region from os.environ['AWS_REGION'].
 3. No IAM policies with wildcard Action or wildcard Resource.
 4. No public S3 buckets.
 5. No long-lived AWS access keys. Bootstrap IAM user deleted after first deploy.
@@ -68,7 +72,11 @@ When uncertain about a security decision — stop and ask. Do not guess.
 ## Naming Conventions
 
 - AWS resources: platform-{resource}-{environment}
-- Python: snake_case everywhere
+- Python: snake_case everywhere — this includes source directory names.
+  Lambda source dirs must be snake_case (src/async_runner/, not src/async-runner/)
+  because hyphenated names cannot be Python package names and break mypy.
+- Every Python source directory must contain an __init__.py so mypy resolves
+  identically-named modules (e.g. handler.py) as distinct packages.
 - TypeScript: camelCase properties, PascalCase classes
 - Environment variables: SCREAMING_SNAKE_CASE
 - SSM: /platform/{category}/{name}
@@ -102,6 +110,86 @@ try:
 except TenantAccessViolation as e:
     logger.error("Tenant access violation", extra={"tenant_id": tenant_id})
     return error_response(403, "UNAUTHORISED")
+```
+
+## Task Workflow (Worktree Protocol)
+
+Every task runs in its own git branch and for local dev a worktree. This is so main stays clean and multiple tasks
+can be in flight at the same time without conflicts. When operating in Claude code mobile worktrees are not required.
+
+### Selecting a task
+
+```bash
+make task-next            # show the next not-started task
+make task-list            # list all tasks and their status
+```
+
+### Starting a task
+
+```bash
+make task-start              # auto-selects the next [ ] task
+make task-start TASK=TASK-011  # explicit task
+```
+
+This will:
+1. Auto-select the next `[ ]` task (or use the explicit TASK argument)
+2. Create a git worktree at `../worktrees/TASK-NNN-<slug>/`
+3. Create branch `task/NNN-<slug>` from `origin/main`
+4. Update `docs/TASKS.md` in the worktree: mark the task `[~]` and commit it
+5. Run `make validate-local` in the worktree — abort if it fails
+6. Launch Claude Code: `claude --dangerously-skip-permissions <prompt>`
+
+The prompt instructs the agent to read CLAUDE.md, ARCHITECTURE.md, the task's
+ADRs, confirm validate-local passes, state the task name, then work the loop.
+
+If the worktree already exists, use `make task-resume` instead.
+
+### Resuming a task
+
+```bash
+make task-resume              # auto-selects first [~] task with an existing worktree
+make task-resume TASK=TASK-011  # explicit task
+```
+
+Relaunches Claude Code in the existing worktree with the same structured prompt.
+
+### Finishing a task
+
+```bash
+make task-finish TASK=TASK-011
+```
+
+Prints the finish checklist and the exact `git push` / `gh pr create` commands.
+The agent is responsible for:
+1. Running `make validate-local` — must pass clean
+2. Committing all changes with a message referencing `TASK-NNN`
+3. Updating `docs/TASKS.md`: mark `[x]` with today's date and commit SHA
+4. Opening a PR titled `TASK-NNN: <title>`
+
+### Gate tasks
+
+Some tasks have a Gate field (see docs/TASKS.md). When a gate is present:
+- The agent stops at the gate and presents findings
+- The operator reviews and gives written sign-off.
+- Only then does the agent proceed (or close if that was the final step)
+- Never advance past a gate unilaterally
+
+### Naming conventions for worktrees
+
+| Item       | Pattern                              | Example                              |
+|------------|--------------------------------------|--------------------------------------|
+| Directory  | `../worktrees/TASK-NNN-<slug>/`     | `../worktrees/TASK-011-dynamo-schema/` |
+| Branch     | `task/NNN-<slug>`                    | `task/011-dynamo-schema`             |
+
+The slug is derived from the task title: lowercase, non-alphanumeric → `-`,
+max 50 chars.
+
+### After merge
+
+```bash
+git worktree remove ../worktrees/TASK-NNN-<slug>
+git branch -d task/NNN-<slug>
+git worktree prune
 ```
 
 ## Technology Stack

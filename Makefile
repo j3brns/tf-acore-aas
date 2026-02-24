@@ -20,6 +20,7 @@
 .PHONY: ops-update-tenant-budget ops-fail-job ops-audit-export ops-page-security
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-async-runner logs-bff
 .PHONY: plan-dev
+.PHONY: task-next task-list task-start task-resume task-finish task-prompt
 
 ENV ?= dev
 
@@ -95,7 +96,9 @@ validate-local:
 	uv run mypy src/ gateway/ scripts/ --ignore-missing-imports
 	cd infra/cdk && npx tsc --noEmit
 	cd infra/cdk && npx cdk synth --context env=dev --quiet > /dev/null
-	uv run detect-secrets scan --baseline .secrets.baseline
+	(git ls-files -o --exclude-standard; git ls-files) | sort -u | \
+		grep -Ev '\.(lock|log)$$|package-lock\.json' | \
+		tr '\n' '\0' | xargs -0 uv run detect-secrets scan --baseline .secrets.baseline
 	@echo "==> Validation passed"
 
 ## dev: Start local development environment
@@ -202,12 +205,14 @@ infra-rollback-lambda:
 ## Usage: make infra-set-runtime-region REGION=eu-central-1 ENV=prod
 infra-set-runtime-region:
 	@test -n "$(REGION)" || (echo "ERROR: REGION required" && exit 1)
+	@test -n "$$AWS_REGION" || (echo "ERROR: AWS_REGION environment variable not set" && exit 1)
 	aws ssm put-parameter \
+		--region $$AWS_REGION \
 		--name /platform/config/runtime-region \
 		--value $(REGION) \
 		--type String \
 		--overwrite
-	@echo "==> Runtime region set to $(REGION)"
+	@echo "==> Runtime region set to $(REGION) (via SSM in $$AWS_REGION)"
 	@echo "    Allow 90 seconds for all bridge Lambda instances to pick up the change"
 
 ## failover-lock-acquire: Acquire distributed lock before region failover
@@ -402,26 +407,50 @@ ops-page-security:
 # LOG STREAMING
 # =============================================================================
 
-## logs-bridge: Stream bridge Lambda logs
+## logs-bridge: Tail bridge Lambda logs (recent) or stream live
 ## Usage: make logs-bridge [ENV=prod] [MINUTES=30]
 logs-bridge:
-	aws logs tail /platform/bridge/$(ENV) --follow
+	@if [ -n "$(MINUTES)" ]; then \
+		aws logs tail /platform/bridge/$(ENV) --since $(MINUTES)m; \
+	else \
+		aws logs tail /platform/bridge/$(ENV) --follow; \
+	fi
 
-## logs-authoriser: Stream authoriser Lambda logs
+## logs-authoriser: Tail authoriser Lambda logs
+## Usage: make logs-authoriser [ENV=prod] [MINUTES=30]
 logs-authoriser:
-	aws logs tail /platform/authoriser/$(ENV) --follow
+	@if [ -n "$(MINUTES)" ]; then \
+		aws logs tail /platform/authoriser/$(ENV) --since $(MINUTES)m; \
+	else \
+		aws logs tail /platform/authoriser/$(ENV) --follow; \
+	fi
 
-## logs-tenant-api: Stream tenant API Lambda logs
+## logs-tenant-api: Tail tenant API Lambda logs
+## Usage: make logs-tenant-api [ENV=prod] [MINUTES=30]
 logs-tenant-api:
-	aws logs tail /platform/tenant-api/$(ENV) --follow
+	@if [ -n "$(MINUTES)" ]; then \
+		aws logs tail /platform/tenant-api/$(ENV) --since $(MINUTES)m; \
+	else \
+		aws logs tail /platform/tenant-api/$(ENV) --follow; \
+	fi
 
-## logs-async-runner: Stream async runner Lambda logs
+## logs-async-runner: Tail async runner Lambda logs
+## Usage: make logs-async-runner [ENV=prod] [MINUTES=30]
 logs-async-runner:
-	aws logs tail /platform/async-runner/$(ENV) --follow
+	@if [ -n "$(MINUTES)" ]; then \
+		aws logs tail /platform/async-runner/$(ENV) --since $(MINUTES)m; \
+	else \
+		aws logs tail /platform/async-runner/$(ENV) --follow; \
+	fi
 
-## logs-bff: Stream BFF Lambda logs
+## logs-bff: Tail BFF Lambda logs
+## Usage: make logs-bff [ENV=prod] [MINUTES=30]
 logs-bff:
-	aws logs tail /platform/bff/$(ENV) --follow
+	@if [ -n "$(MINUTES)" ]; then \
+		aws logs tail /platform/bff/$(ENV) --since $(MINUTES)m; \
+	else \
+		aws logs tail /platform/bff/$(ENV) --follow; \
+	fi
 
 # =============================================================================
 # PLAN DEV
@@ -432,3 +461,39 @@ logs-bff:
 plan-dev:
 	@test -n "$(TASK)" || (echo "ERROR: TASK required. Usage: make plan-dev TASK=\"describe your task\"" && exit 1)
 	uv run python scripts/plan_dev.py "$(TASK)"
+
+# =============================================================================
+# TASK LIFECYCLE (worktree-based agent sessions)
+# =============================================================================
+
+## task-next: Print the next not-started task from docs/TASKS.md
+task-next:
+	uv run python scripts/task.py next
+
+## task-list: List all tasks with their status
+task-list:
+	uv run python scripts/task.py list
+
+## task-start: Create worktree, mark [~], run validate-local, launch Claude Code
+## Usage: make task-start              # auto-selects next [ ] task
+##        make task-start TASK=TASK-011
+task-start:
+	uv run python scripts/task.py start $(TASK)
+
+## task-resume: Resume an existing worktree session for a task
+## Usage: make task-resume             # auto-selects first [~] task with worktree
+##        make task-resume TASK=TASK-011
+task-resume:
+	uv run python scripts/task.py resume $(TASK)
+
+## task-finish: Print finish checklist and git/gh commands for a task
+## Usage: make task-finish TASK=TASK-011
+task-finish:
+	@test -n "$(TASK)" || (echo "ERROR: TASK required. Usage: make task-finish TASK=TASK-011" && exit 1)
+	uv run python scripts/task.py finish $(TASK)
+
+## task-prompt: Print the agent prompt for a task without creating a worktree
+## Usage: make task-prompt TASK=TASK-011
+task-prompt:
+	@test -n "$(TASK)" || (echo "ERROR: TASK required. Usage: make task-prompt TASK=TASK-011" && exit 1)
+	uv run python scripts/task.py prompt $(TASK)

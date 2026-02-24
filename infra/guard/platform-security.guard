@@ -1,0 +1,17 @@
+# platform-security.guard — cfn-guard security policy rules
+#
+# Enforces platform security constraints on all synthesised CloudFormation templates.
+# Run: cfn-guard validate -r infra/guard/platform-security.guard -d cdk.out/*.template.json
+#
+# Rules implemented in TASK-027:
+#   - no_wildcard_iam_action      No IAM policies with Action: "*"
+#   - no_wildcard_iam_resource    No IAM policies with Resource: "*"
+#   - no_public_s3_bucket         No S3 buckets with public access enabled
+#   - dynamodb_pitr_enabled       All DynamoDB tables have PITR enabled
+#   - dynamodb_kms_encryption     All DynamoDB tables use KMS encryption
+#   - dynamodb_deletion_protection Staging/prod tables have deletion protection
+#   - lambda_dlq_configured       All Lambda functions have a DLQ configured
+#   - lambda_xray_enabled         All Lambda functions have X-Ray tracing enabled
+#   - lambda_in_vpc               All Lambda functions are VPC-attached
+#
+# Implemented in TASK-027.

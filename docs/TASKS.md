@@ -28,45 +28,63 @@ in one session should be split — raise this before starting, not after.
 
 ## Phase 0 — Foundation (no code, decisions only)
 
-[ ] TASK-001  Write CLAUDE.md
+[x] TASK-001  Write CLAUDE.md
               Constraints, priority order, naming conventions, forbidden patterns
               ADRs: none | Tests: none | Gate: operator review
+              Done: 2026-02-24
 
-[ ] TASK-002  Write docs/ARCHITECTURE.md
+[x] TASK-002  Write docs/ARCHITECTURE.md
               Region topology, request lifecycle, data model, scaling, failure modes
               ADRs: none | Tests: none | Gate: operator review
+              Done: 2026-02-24
 
-[ ] TASK-003  Write ADR-001 through ADR-013
+[x] TASK-003  Write ADR-001 through ADR-013
               See docs/decisions/ — one file per ADR
               ADRs: none (these ARE the ADRs) | Tests: none
+              Done: 2026-02-24
 
-[ ] TASK-004  Write docs/operations/ runbooks
-              RUNBOOK-000 through RUNBOOK-008
+[x] TASK-004  Write docs/operations/ runbooks
+              RUNBOOK-000 through RUNBOOK-009
               ADRs: none | Tests: none | Gate: operator review
+              Done: 2026-02-24
 
-[ ] TASK-005  Write docs/PLAN.md, docs/TASKS.md (this file), docs/ROADMAP.md
+[x] TASK-005  Write docs/PLAN.md, docs/TASKS.md (this file), docs/ROADMAP.md
               ADRs: none | Tests: none
+              Done: 2026-02-24
 
-[ ] TASK-006  Write docs/bootstrap-guide.md and docs/entra-setup.md
+[x] TASK-006  Write docs/bootstrap-guide.md and docs/entra-setup.md
               Prerequisites, ordered bootstrap steps, Entra app registration
               ADRs: ADR-002 | Tests: none
+              Done: 2026-02-24
+              Note: Fixed --start-at/--step flag inconsistency (D-003)
 
-[ ] TASK-007  Write docs/security/THREAT-MODEL.md
+[x] TASK-007  Write docs/security/THREAT-MODEL.md
               Threat actors, attack surfaces, mitigations
               ADRs: ADR-004 | Tests: none
+              Done: 2026-02-24
 
-[ ] TASK-008  Write docs/security/COMPLIANCE-CHECKLIST.md
+[x] TASK-008  Write docs/security/COMPLIANCE-CHECKLIST.md
               GDPR, UK ICO, SOC2 controls mapped to implementation
               ADRs: none | Tests: none
+              Done: 2026-02-24
 
-[ ] TASK-009  Write docs/development/AGENT-DEVELOPER-GUIDE.md
+[x] TASK-009  Write docs/development/AGENT-DEVELOPER-GUIDE.md
               Full guide for internal agent developers
               ADRs: ADR-005, ADR-006, ADR-008 | Tests: none
+              Done: 2026-02-24
 
-[ ] TASK-010  Create directory skeleton and Makefile stubs
-              All directories, empty files with header comments
-              All Makefile targets stubbed (echo "not implemented" until Phase 2)
-              ADRs: none | Tests: none
+[x] TASK-010  Create directory skeleton and Makefile stubs
+              src/ gateway/ scripts/ agents/ infra/ spa/ tests/ with stub files
+              Makefile fully stubbed and validate-local passes
+              ADRs: none | Tests: make validate-local passes
+              Done: 2026-02-24
+              Note: Lambda src dirs use snake_case (snake_case everywhere per CLAUDE.md)
+              Note: Fixed Makefile infra-set-runtime-region to use $$AWS_REGION (D-002)
+              Note: Fixed logs-* MINUTES parameter (O-001)
+              Note: Added scripts/task.py + make task-{next,list,start,resume,finish,prompt}
+                    task-start auto-selects next [ ] task; marks [~] in worktree on start
+                    task-resume auto-selects first [~] task with existing worktree
+                    Task Workflow (Worktree Protocol) section added to CLAUDE.md
 
 **Phase 0 Gate**: Platform engineer and operator both sign off all docs before Phase 1.
 

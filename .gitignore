@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.build/
+*.egg-info/
+dist/
+*.egg
+
+# Node
+node_modules/
+dist/
+.npm/
+
+# CDK
+infra/cdk/cdk.out/
+infra/cdk/dist/
+
+# Environment / secrets
+.env.local
+.env.test
+*.env
+
+# Test artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artefacts
+*.zip

@@ -1,0 +1,54 @@
+# docker-compose.yml — Local development environment
+#
+# Services:
+#   localstack      AWS services mock (DynamoDB, S3, SQS, SSM, Secrets Manager)
+#   mock-runtime    Mock AgentCore Runtime (POST /invocations, GET /ping)
+#   mock-jwks       Mock JWKS endpoint (issues test JWTs, serves /.well-known/jwks.json)
+#
+# Implemented in TASK-014.
+#
+# Usage:
+#   make dev        Start all services and seed fixtures
+#   make dev-stop   Stop all services
+
+version: "3.9"
+
+services:
+  # Implemented in TASK-014
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,s3,sqs,ssm,secretsmanager,events
+      - DEFAULT_REGION=eu-west-2
+      - DEBUG=0
+    volumes:
+      - localstack-data:/var/lib/localstack
+
+  # Mock AgentCore Runtime — FastAPI on :8765
+  # POST /invocations — returns canned streaming response
+  # GET /ping — returns {"status": "Healthy"}
+  # Implemented in TASK-014
+  mock-runtime:
+    build:
+      context: .
+      dockerfile: tests/mocks/mock-runtime.Dockerfile
+    ports:
+      - "8765:8765"
+    environment:
+      - LOG_LEVEL=INFO
+
+  # Mock JWKS endpoint — FastAPI on :8766
+  # GET /.well-known/jwks.json — serves test public key
+  # POST /token — issues signed test JWTs
+  # Implemented in TASK-014
+  mock-jwks:
+    build:
+      context: .
+      dockerfile: tests/mocks/mock-jwks.Dockerfile
+    ports:
+      - "8766:8766"
+
+volumes:
+  localstack-data:
