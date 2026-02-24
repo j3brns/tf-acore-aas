@@ -92,13 +92,14 @@ in one session should be split — raise this before starting, not after.
 
 ## Phase 1 — Data Contracts (no infra, no Lambda)
 
-[~] TASK-011  Define all DynamoDB table schemas as Python dataclasses
+[x] TASK-011  Define all DynamoDB table schemas as Python dataclasses
               File: src/data-access-lib/src/data_access/models.py
               Tables: tenants, agents, invocations, jobs, sessions, tools, ops-locks
               PRESENT FOR REVIEW before writing any Lambda code
               ADRs: ADR-012 | Tests: pytest validate schema constraints
               Gate: schema reviewed and confirmed before Phase 2
-              In progress: claude, 2026-02-24
+              Done: 2026-02-24, commit bf9c8dd
+              58 tests passing. validate-local passes.
 
 [ ] TASK-012  Write OpenAPI 3.1 specification
               File: docs/openapi.yaml
