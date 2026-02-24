@@ -15,6 +15,7 @@ dev = [
     "aws-lambda-powertools>=3.3.0",
     "pytest>=8.0.0",
     "pytest-cov>=6.0.0",
+    "data-access-lib",
 ]
 
 [tool.ruff]
@@ -39,3 +40,11 @@ explicit_package_bases = true
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]
 addopts = "--tb=short"
+
+[tool.uv.workspace]
+members = [
+    "src/data-access-lib",
+]
+
+[tool.uv.sources]
+data-access-lib = { workspace = true }
