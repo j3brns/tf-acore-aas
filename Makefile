@@ -3,7 +3,7 @@
 # Run `make help` to see all targets
 # =============================================================================
 
-.PHONY: help bootstrap validate-local dev dev-stop dev-logs dev-invoke
+.PHONY: help bootstrap ensure-tools validate-local dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
 .PHONY: infra-synth infra-diff infra-deploy infra-destroy
@@ -88,8 +88,12 @@ bootstrap-delete-iam-user:
 # LOCAL DEVELOPMENT
 # =============================================================================
 
+## ensure-tools: Install missing dev tools (idempotent — safe to run repeatedly)
+ensure-tools:
+	@bash scripts/install-dev-tools.sh
+
 ## validate-local: Run all local validation checks before commit
-validate-local:
+validate-local: ensure-tools
 	@echo "==> Running local validation"
 	uv run ruff check .
 	uv run ruff format --check .
