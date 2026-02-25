@@ -1,5 +1,16 @@
 # TASKS.md — Atomic Task List for Claude Code Sessions
 
+## Source of Truth Notice (Issue Novation)
+
+As of **2026-02-25 13:00** (local time), task tracking is novated to GitHub Issues
+for this repository. GitHub Issues are now the canonical source of truth for task
+status, sequencing (`Seq:`), and dependencies (`Depends on:`).
+
+GitHub Issues: https://github.com/j3brns/tf-acore-aas/issues
+
+This file remains useful as a historical snapshot/report/export and may lag behind
+live issue state.
+
 ## How To Use This File
 
 Each task is a single Claude Code session. Before starting any task:

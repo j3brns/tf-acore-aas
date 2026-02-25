@@ -29,22 +29,23 @@
 
   ## Begin Task
 
-  Start by assigning yourself the next available task.
+  Start by assigning yourself the next runnable issue from the canonical queue.
 
   Follow `CLAUDE.md` exactly.
 
-  Task selection:
-  1. Read `docs/TASKS.md`
-  2. Pick the next task with status `[ ]` (not started)
-  3. State: `Starting TASK-XXX: <task title>`
-  4. Read the ADR(s) linked to that task before coding
-  5. If running in local WSL, start via the local worktree protocol (`make task-start`) unless the operator explicitly says to work in-place
-  6. Never begin task implementation directly on `main` in the primary repo working tree when local WSL worktree mode is available
-  7. If no `[ ]` task exists, report that clearly and stop
+  Issue selection (canonical):
+  1. GitHub Issues are the source of truth (ordered by `Seq:` and gated by `Depends on:`)
+  2. Run `make issue-queue` and pick the next runnable issue (or use the operator-provided issue)
+  3. State: `Starting issue #NNN: <title>` (include `TASK-XXX` when present in title)
+  4. Read the ADR(s) linked to that issue/task before coding (use `docs/TASKS.md` as a snapshot reference if needed)
+  5. If running in local WSL, start via the issue worktree protocol (`make worktree` or `make worktree-next-issue`) unless the operator explicitly says to work in-place
+  6. Never begin implementation directly on `main` in the primary repo working tree when local WSL worktree mode is available
+  7. If no runnable issue exists, report that clearly and stop
 
-  2. Read `docs/ARCHITECTURE.md`
-  3. Read the relevant ADR(s)
-  4. Give a short plan with expected file changes
+  Then:
+  1. Read `docs/ARCHITECTURE.md`
+  2. Read the relevant ADR(s)
+  3. Give a short plan with expected file changes
 
   Execution rules:
   - Drive the task to completion.
@@ -56,6 +57,7 @@
 
   Completion rules:
   - Run final validation (`make validate-local`; use `make validate-local-full` when a full-repo secret scan is needed).
+  - Before any push, run `make preflight-session` and `make pre-validate-session` (fast path, no cdk synth), or use `make worktree-push-issue`.
   - Run a senior engineer review on your changes (bugs, regressions, risks, missing tests first).
   - Action findings, re-run checks, and review again until clear (or operator explicitly accepts residual risk).
   - Do not close/push until errors are cleared.

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fast local guardrail: block pushes unless repo pre-validation passes.
+# Intentionally skips CDK synth by delegating to `make validate-pre-push`.
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "${REPO_ROOT}" ]; then
+  echo "pre-push: unable to determine repo root; refusing push"
+  exit 1
+fi
+
+REMOTE_NAME="${1:-origin}"
+REMOTE_URL="${2:-}"
+
+if [ "${PRE_PUSH_HOOK_DRY_RUN:-}" = "1" ]; then
+  echo "pre-push (dry-run): repo=${REPO_ROOT} remote=${REMOTE_NAME} url=${REMOTE_URL}"
+  echo "pre-push (dry-run): would run 'make validate-pre-push'"
+  exit 0
+fi
+
+echo "==> pre-push: running fast pre-validation (no cdk synth)"
+echo "    remote: ${REMOTE_NAME} ${REMOTE_URL}"
+
+cd "${REPO_ROOT}"
+make --no-print-directory validate-pre-push
+
+echo "==> pre-push: validation passed"
