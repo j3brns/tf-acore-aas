@@ -143,7 +143,9 @@ Nothing in Phase 2 starts until written confirmation.
               Writes test JWTs to .env.test
               Idempotent — safe to run multiple times
               ADRs: none | Tests: run twice, verify no duplicate records
-              Done: 2026-02-25, commit 81757e0
+              Done: 2026-02-25, commit dab02ba
+              18 tests passing. validate-local passes.
+              Note: createdAt preservation test added (senior engineer review finding)
 
 [ ] TASK-016  Write src/authoriser/handler.py
               Entra JWT path: JWKS fetch+cache, sig validate, expiry, audience, issuer
