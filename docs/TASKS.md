@@ -110,7 +110,7 @@ in one session should be split — raise this before starting, not after.
               Gate: spec reviewed and confirmed before Phase 2
               Done: 2026-02-25, commit b19986c
 
-[ ] TASK-013  Write data-access-lib
+[x] TASK-013  Write data-access-lib
               Files: src/data-access-lib/src/data_access/
               TenantScopedDynamoDB — enforces tenant partition on every operation
               TenantScopedS3 — enforces tenant prefix on every operation
