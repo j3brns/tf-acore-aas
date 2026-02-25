@@ -148,13 +148,16 @@ Nothing in Phase 2 starts until written confirmation.
               ADRs: none | Tests: make dev must start cleanly
               Done: 2026-02-25, commit 38a6dd5
 
-[ ] TASK-015  Write scripts/dev-bootstrap.py
+[x] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
               Seeds all SSM parameters pointing to LocalStack
               Seeds DynamoDB tables with fixtures
               Writes test JWTs to .env.test
               Idempotent — safe to run multiple times
               ADRs: none | Tests: run twice, verify no duplicate records
+              Done: 2026-02-25, commit dab02ba
+              18 tests passing. validate-local passes.
+              Note: createdAt preservation test added (senior engineer review finding)
 
 [ ] TASK-016  Write src/authoriser/handler.py
               Entra JWT path: JWKS fetch+cache, sig validate, expiry, audience, issuer
