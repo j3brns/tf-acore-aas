@@ -184,7 +184,7 @@ Nothing in Phase 2 starts until written confirmation.
               Assumes tenant execution role via STS
               ADRs: ADR-005, ADR-009, ADR-010 | Tests: all three modes mocked
 
-[ ] TASK-019  Implement full Makefile
+[x] TASK-019  Implement full Makefile
               All targets from Makefile skeleton now actually work
               make dev, make dev-stop, make test-unit, make test-int
               make validate-local, make bootstrap, make worktree-*
