@@ -37,6 +37,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -72,6 +73,36 @@ def repo_root() -> Path:
 
 def default_worktrees_dir(root: Path) -> Path:
     return root.parent / "worktrees"
+
+
+RuntimeEnv = Literal["local-wsl", "remote"]
+
+
+def _looks_like_wsl(proc_version: str) -> bool:
+    return "microsoft" in proc_version.lower()
+
+
+def is_wsl_environment() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        return _looks_like_wsl(Path("/proc/version").read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return False
+
+
+def detect_runtime_env(requested: str = "auto") -> RuntimeEnv:
+    req = (requested or "auto").strip().lower()
+    if req == "local":
+        return "local-wsl"
+    if req == "remote":
+        return "remote"
+
+    # Explicit override requested by operator.
+    if os.environ.get("WSL", "").strip().lower() == "local":
+        return "local-wsl"
+
+    return "local-wsl" if is_wsl_environment() else "remote"
 
 
 # ---------------------------------------------------------------------------
@@ -221,8 +252,66 @@ def branch_name(task: Task) -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_prompt(task: Task, wt: Path, branch: str) -> str:
+def generate_prompt(
+    task: Task,
+    wt: Path,
+    branch: str,
+    runtime_env: RuntimeEnv = "local-wsl",
+) -> str:
     adr_list = ", ".join(task.adrs) if task.adrs else "none"
+    is_local = runtime_env == "local-wsl"
+
+    worktree_line = (
+        str(wt) if is_local else "(remote/mobile session; operator will provide repo path)"
+    )
+    preflight_step = (
+        "4. Run `make validate-local` in this worktree — it must pass before you start"
+        if is_local
+        else (
+            "4. Confirm remote/mobile session context with the operator and ask "
+            "for repo path/tool availability before running validation"
+        )
+    )
+    if is_local:
+        work_loop = (
+            "  inspect codebase → state plan with expected file changes →\n"
+            "  implement → run the smallest relevant checks → inspect failures/logs/signals →\n"
+            "  fix next issue → re-run tests / make validate-local → update docs/tests if required → repeat"
+        )
+        constraints_block = (
+            f"  - Work only in this worktree ({wt})\n"
+            f"  - Keep all changes scoped to TASK-{task.number}\n"
+            "  - Follow every forbidden pattern in CLAUDE.md\n"
+            "  - For any security decision: STOP and ask. Do not guess.\n"
+            "  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.\n"
+            "  - Do not stop at the first failure; use test output, validate-local output, synth errors, and logs as signals."
+        )
+    else:
+        work_loop = (
+            "  inspect codebase → state plan with expected file changes →\n"
+            "  implement → run checks/tests (as available) → inspect failures/logs/signals →\n"
+            "  fix next issue → ask operator to run missing local-only checks when needed →\n"
+            "  update docs/tests if required → repeat"
+        )
+        constraints_block = (
+            f"  - Execution context is remote/mobile (`{runtime_env}`); "
+            "do not assume local WSL tooling\n"
+            "  - Do not assume a git worktree exists; ask the operator which "
+            "repo path/branch to use\n"
+            f"  - Keep all changes scoped to TASK-{task.number}\n"
+            "  - Follow every forbidden pattern in CLAUDE.md\n"
+            "  - For any security decision: STOP and ask. Do not guess.\n"
+            "  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.\n"
+            "  - Do not stop at the first failure; use available test output, logs, and operator-provided signals to continue."
+        )
+
+    signals_block = (
+        "  - test failures and stack traces\n"
+        "  - make validate-local / validate-local-full output\n"
+        "  - Ruff / Pyright / TypeScript / CDK synth output\n"
+        "  - local logs (`make dev-logs`, `docker compose logs`) or platform logs (`make logs-*`)\n"
+        "  - git diff/status/conflict state"
+    )
 
     gate_block = ""
     if task.gate:
@@ -239,13 +328,14 @@ Role: rigorous coding agent. CLAUDE.md is your single source of truth. Follow it
 Task:     TASK-{task.number}: {task.title}
 Phase:    {task.phase}
 Branch:   {branch}
-Worktree: {wt}
+Worktree: {worktree_line}
+Context:  {runtime_env}
 
 Before writing any code, do these steps in order — do not skip any:
 1. Read CLAUDE.md (already loaded as system prompt — re-read it now and confirm all constraints)
 2. Read docs/ARCHITECTURE.md
 3. Read ADRs: {adr_list}
-4. Run `make validate-local` in this worktree — it must pass before you start
+{preflight_step}
 5. State explicitly: "Starting TASK-{task.number}: {task.title}"
 
 Task definition:
@@ -253,37 +343,49 @@ Task definition:
 {test_line}{gate_block}
 
 Work loop (repeat until closure condition is met):
-  inspect codebase → state plan with expected file changes →
-  implement → run tests → run make validate-local →
-  update docs/tests if required → repeat
+{work_loop}
+
+Primary diagnostic signals (use what is available):
+{signals_block}
 
 Constraints:
-  - Work only in this worktree ({wt})
-  - Keep all changes scoped to TASK-{task.number}
-  - Follow every forbidden pattern in CLAUDE.md
-  - For any security decision: STOP and ask. Do not guess.
-  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.
+{constraints_block}
 
 Closure condition: {
         "operator sign-off at gate — present findings and stop"
         if task.gate
-        else "make validate-local passes clean; all task tests pass"
+        else "all task tests pass, make validate-local passes clean, and errors are cleared"
     }
 
 Finish protocol (perform in order when closure is reached):
 1. State: "TASK-{task.number} complete. Tests passing."
 2. Run `make validate-local` — confirm it passes (do not skip this)
-3. Commit all changes; commit message must reference TASK-{task.number}
-4. Update docs/TASKS.md: mark this task [x] with today's date and commit SHA
-5. Open PR titled "TASK-{task.number}: {task.title}"
-   Body must include: what was implemented, tests evidence, validate-local output
+3. Run a senior engineer review focused on bugs, regressions, risks, and missing tests
+4. Action review findings and re-run relevant tests/validation
+5. Re-run senior engineer review; repeat steps 4-5 until findings are cleared (or operator accepts residual risk)
+6. Commit all changes; commit message must reference TASK-{task.number}
+7. Update docs/TASKS.md: mark this task [x] with today's date and commit SHA
+8. Push only when errors are cleared, then open PR titled "TASK-{task.number}: {task.title}"
+   Body must include: what was implemented, tests evidence, validate-local output, review findings addressed
 
-Never mark complete if tests are failing or make validate-local fails."""
+Never mark complete or push if tests are failing, make validate-local fails, or unresolved errors remain."""
 
 
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
+
+
+def _print_mobile_prompt(prompt: str, task: Task, runtime_env: RuntimeEnv) -> None:
+    print()
+    print(f"Remote/mobile handoff mode ({runtime_env})")
+    print(
+        "No local worktree was created. Prompt is printed for copy/paste into Claude Code mobile."
+    )
+    print()
+    print("--- BEGIN CLAUDE CODE PROMPT ---")
+    print(prompt)
+    print("--- END CLAUDE CODE PROMPT ---")
 
 
 def cmd_next(tasks: list[Task]) -> None:
@@ -309,15 +411,22 @@ def cmd_list(tasks: list[Task]) -> None:
     print()
 
 
-def cmd_prompt(task_id: str, tasks: list[Task], root: Path) -> None:
+def cmd_prompt(task_id: str, tasks: list[Task], root: Path, runtime_env: RuntimeEnv) -> None:
     task = _require_task(task_id, tasks)
     wt = worktree_path(root, task)
     branch = branch_name(task)
-    print(generate_prompt(task, wt, branch))
+    print(generate_prompt(task, wt, branch, runtime_env))
 
 
-def cmd_start(task_id: str | None, tasks: list[Task], root: Path, dry_run: bool = False) -> None:
-    if not dry_run:
+def cmd_start(
+    task_id: str | None,
+    tasks: list[Task],
+    root: Path,
+    runtime_env: RuntimeEnv,
+    dry_run: bool = False,
+) -> None:
+    is_local = runtime_env == "local-wsl"
+    if is_local and not dry_run:
         ensure_dev_tools(root)
 
     task: Task
@@ -341,28 +450,31 @@ def cmd_start(task_id: str | None, tasks: list[Task], root: Path, dry_run: bool 
 
     wt = worktree_path(root, task)
     branch = branch_name(task)
-    prompt = generate_prompt(task, wt, branch)
+    prompt = generate_prompt(task, wt, branch, runtime_env)
 
     print(f"Task:     TASK-{task.number}: {task.title}")
     print(f"Branch:   {branch}")
     print(f"Worktree: {wt}")
+    print(f"Context:  {runtime_env}")
     print()
-
-    if wt.exists():
-        print(f"Worktree already exists at {wt}")
-        print(f"Run: make task-resume TASK=TASK-{task.number}")
-        sys.exit(1)
-
-    if not shutil.which("claude"):
-        print("ERROR: 'claude' not found in PATH.")
-        print("Install Claude Code: npm install -g @anthropic-ai/claude-code")
-        sys.exit(1)
 
     if dry_run:
         print("--- Generated prompt (dry run — worktree not created) ---")
         print(prompt)
         print("---------------------------------------------------------")
         return
+
+    if not is_local:
+        _print_mobile_prompt(prompt, task, runtime_env)
+        print()
+        print("Note: task status/worktree creation is skipped in remote/mobile mode.")
+        print("Use `--env local` (or `WSL=local`) from WSL to use the full worktree workflow.")
+        return
+
+    if wt.exists():
+        print(f"Worktree already exists at {wt}")
+        print(f"Run: make task-resume TASK=TASK-{task.number}")
+        sys.exit(1)
 
     # Create worktree
     default_worktrees_dir(root).mkdir(parents=True, exist_ok=True)
@@ -408,24 +520,39 @@ def cmd_start(task_id: str | None, tasks: list[Task], root: Path, dry_run: bool 
 
     # Hand off to Claude Code
     print()
-    print("validate-local passed. Launching Claude Code...")
+    print("validate-local passed.")
     print()
+    if not shutil.which("claude"):
+        print("WARNING: 'claude' not found in PATH.")
+        print(
+            "Install Claude Code locally (`npm install -g "
+            "@anthropic-ai/claude-code`) or use the prompt below."
+        )
+        _print_mobile_prompt(prompt, task, runtime_env)
+        return
+    print("Launching Claude Code...")
     os.chdir(wt)
     os.execvp("claude", ["claude", "--dangerously-skip-permissions", prompt])
 
 
-def cmd_resume(task_id: str | None, tasks: list[Task], root: Path) -> None:
-    ensure_dev_tools(root)
+def cmd_resume(task_id: str | None, tasks: list[Task], root: Path, runtime_env: RuntimeEnv) -> None:
+    is_local = runtime_env == "local-wsl"
+    if is_local:
+        ensure_dev_tools(root)
 
     task: Task
     if task_id:
         task = _require_task(task_id, tasks)
     else:
-        # Auto-select: first [~] task whose worktree exists, else any task with a worktree
-        _t = next(
-            (t for t in tasks if t.status == "[~]" and worktree_path(root, t).exists()),
-            None,
-        ) or next((t for t in tasks if worktree_path(root, t).exists()), None)
+        # Auto-select local: first [~] task whose worktree exists, else any task with a worktree.
+        # Auto-select remote/mobile: first [~] task, else any task.
+        if is_local:
+            _t = next(
+                (t for t in tasks if t.status == "[~]" and worktree_path(root, t).exists()),
+                None,
+            ) or next((t for t in tasks if worktree_path(root, t).exists()), None)
+        else:
+            _t = next((t for t in tasks if t.status == "[~]"), None) or next_available(tasks)
         if not _t:
             print("No in-progress tasks found. Use: make task-start")
             sys.exit(1)
@@ -434,24 +561,30 @@ def cmd_resume(task_id: str | None, tasks: list[Task], root: Path) -> None:
 
     wt = worktree_path(root, task)
     branch = branch_name(task)
+    prompt = generate_prompt(task, wt, branch, runtime_env)
 
-    if not wt.exists():
+    if is_local and not wt.exists():
         print(f"Worktree not found at {wt}")
         print(f"Run: make task-start TASK=TASK-{task.number}")
         sys.exit(1)
 
-    if not shutil.which("claude"):
-        print("ERROR: 'claude' not found in PATH.")
-        sys.exit(1)
-
-    prompt = generate_prompt(task, wt, branch)
-
     print(f"Resuming TASK-{task.number}: {task.title}")
     print(f"Worktree: {wt}")
+    print(f"Context:  {runtime_env}")
+
+    if not is_local:
+        _print_mobile_prompt(prompt, task, runtime_env)
+        return
+
     print()
     print("Running make validate-local...")
     subprocess.run(["make", "validate-local"], cwd=wt)
     print()
+    if not shutil.which("claude"):
+        print("WARNING: 'claude' not found in PATH.")
+        print("Use the prompt below in Claude Code mobile or install the CLI locally.")
+        _print_mobile_prompt(prompt, task, runtime_env)
+        return
     print("Launching Claude Code...")
     os.chdir(wt)
     os.execvp("claude", ["claude", "--dangerously-skip-permissions", prompt])
@@ -469,6 +602,9 @@ def cmd_finish(task_id: str, tasks: list[Task], root: Path) -> None:
     print("Before opening PR, confirm all of these:")
     print("  [ ] make validate-local passes")
     print("  [ ] All task tests pass")
+    print("  [ ] Senior engineer review completed (bugs/regressions/risks/missing tests)")
+    print("  [ ] Review findings actioned and re-reviewed clean (or operator accepted residual risk)")
+    print("  [ ] No unresolved errors remain (tests/validation/logs)")
     if task.gate:
         print(f"  [ ] Gate cleared: {task.gate}")
     print(f"  [ ] Commit message references TASK-{task.number}")
@@ -504,6 +640,7 @@ def cmd_finish(task_id: str, tasks: list[Task], root: Path) -> None:
     gh_repo = _detect_gh_repo(root)
 
     print("Next commands:")
+    print("  # Close only after errors are cleared and review findings are addressed")
     print(f"  git -C {wt} push -u origin {branch}")
     if gh_repo:
         print(f"  gh pr create -R {gh_repo} \\")
@@ -559,7 +696,14 @@ def main() -> None:
     p.add_argument(
         "--dry-run", action="store_true", help="Print prompt without creating worktree (start only)"
     )
+    p.add_argument(
+        "--env",
+        choices=["auto", "local", "remote"],
+        default="auto",
+        help="Execution environment for task prompt/launch flow (default: auto via WSL detection)",
+    )
     args = p.parse_args()
+    runtime_env = detect_runtime_env(args.env)
 
     root = repo_root()
     tasks_file = root / "docs" / "TASKS.md"
@@ -575,11 +719,11 @@ def main() -> None:
         case "list":
             cmd_list(tasks)
         case "prompt":
-            cmd_prompt(args.task or _require_task_arg(p), tasks, root)
+            cmd_prompt(args.task or _require_task_arg(p), tasks, root, runtime_env)
         case "start":
-            cmd_start(args.task, tasks, root, args.dry_run)
+            cmd_start(args.task, tasks, root, runtime_env, args.dry_run)
         case "resume":
-            cmd_resume(args.task, tasks, root)
+            cmd_resume(args.task, tasks, root, runtime_env)
         case "finish":
             cmd_finish(args.task or _require_task_arg(p), tasks, root)
 

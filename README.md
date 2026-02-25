@@ -66,7 +66,8 @@ platform/
 # Local inner loop
 make dev                      # Start environment
 make test-unit                # Run all unit tests
-make validate-local           # ruff + mypy + tsc + cdk synth + cfn-guard
+make validate-local           # fast local checks: ruff + pyright + tsc + cdk synth + detect-secrets (diff)
+make validate-local-full      # same, but full-repo secret scan
 
 # Agent developer inner loop
 make agent-push AGENT=my-agent ENV=dev    # Push agent, fast path <30s if deps cached

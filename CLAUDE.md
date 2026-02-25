@@ -48,16 +48,39 @@ Before writing any code:
 1. Read this file
 2. Read docs/ARCHITECTURE.md
 3. Read the ADR(s) linked to the current task in docs/TASKS.md
-4. Run `make validate-local` — confirm it passes
+4. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
+   (use `make validate-local-full` when a full-repo secret scan is required)
 5. State which task you are working on explicitly
 
 Before marking any task complete:
 1. All tests pass
 2. `make validate-local` passes
-3. New infrastructure passes cfn-guard
-4. State "TASK-NNN complete. Tests passing."
+3. Senior engineer review completed (code review mindset: bugs, regressions, risks, missing tests)
+4. Review recommendations are actioned
+5. Senior engineer review re-run and clear (or remaining risks explicitly accepted by operator)
+6. New infrastructure passes cfn-guard
+7. State "TASK-NNN complete. Tests passing."
 
 When uncertain about a security decision — stop and ask. Do not guess.
+
+### Execution Loop (Drive To Completion)
+
+The agent should drive the task to completion without stopping at the first error.
+Use failure output and operational signals to diagnose and fix the next issue until
+the closure criteria are met.
+
+Preferred signals (use what is available in the current environment):
+- Test failures and stack traces (`pytest`, Jest, `make test-*`)
+- Validation output (`make validate-local`, `make validate-local-full`)
+- Lint/typecheck output (Ruff, Pyright, TypeScript)
+- CDK synth/deploy error output
+- Local runtime logs (`make dev-logs`, `docker compose logs`)
+- Platform logs (`make logs-*`, `aws logs tail ...`)
+- Git state (`git status`, diff, merge conflicts)
+
+Do not stop just because one command failed. Investigate the error, form a hypothesis,
+apply a fix, and re-run the smallest relevant check. Only stop for the explicit
+"stop and ask" conditions, gate tasks, or when the operator redirects you.
 
 ## When To Stop And Ask
 
@@ -74,8 +97,8 @@ When uncertain about a security decision — stop and ask. Do not guess.
 - AWS resources: platform-{resource}-{environment}
 - Python: snake_case everywhere — this includes source directory names.
   Lambda source dirs must be snake_case (src/async_runner/, not src/async-runner/)
-  because hyphenated names cannot be Python package names and break mypy.
-- Every Python source directory must contain an __init__.py so mypy resolves
+  because hyphenated names cannot be Python package names and break static type checking.
+- Every Python source directory must contain an __init__.py so Pyright resolves
   identically-named modules (e.g. handler.py) as distinct packages.
 - TypeScript: camelCase properties, PascalCase classes
 - Environment variables: SCREAMING_SNAKE_CASE
@@ -114,8 +137,8 @@ except TenantAccessViolation as e:
 
 ## Task Workflow (Worktree Protocol)
 
-Every task runs in its own git branch and for local dev a worktree. This is so main stays clean and multiple tasks
-can be in flight at the same time without conflicts. When operating in Claude code mobile worktrees are not required.
+Every task runs in its own git branch and for local dev (WSL) a worktree. This is so main stays clean and multiple tasks
+can be in flight at the same time without conflicts. When operating in Claude Code mobile / remote prompt mode, worktrees are not required.
 
 ### Selecting a task
 
@@ -131,7 +154,7 @@ make task-start              # auto-selects the next [ ] task
 make task-start TASK=TASK-011  # explicit task
 ```
 
-This will:
+This will (local WSL mode / default when WSL is detected):
 1. Auto-select the next `[ ]` task (or use the explicit TASK argument)
 2. Create a git worktree at `../worktrees/TASK-NNN-<slug>/`
 3. Create branch `task/NNN-<slug>` from `origin/main`
@@ -139,8 +162,15 @@ This will:
 5. Run `make validate-local` in the worktree — abort if it fails
 6. Launch Claude Code: `claude --dangerously-skip-permissions <prompt>`
 
+In remote/mobile mode (`make task-start ... -- --env remote`, or when not running in WSL):
+1. Auto-select the task (same rules)
+2. Generate and print the structured prompt for copy/paste into Claude Code mobile
+3. Do not create a worktree
+4. Do not mark `docs/TASKS.md` `[~]` automatically
+
 The prompt instructs the agent to read CLAUDE.md, ARCHITECTURE.md, the task's
-ADRs, confirm validate-local passes, state the task name, then work the loop.
+ADRs, state the task name, and work the loop. In local WSL mode it also requires
+`make validate-local`; in remote/mobile mode it first confirms repo path and tool availability.
 
 If the worktree already exists, use `make task-resume` instead.
 
@@ -151,7 +181,8 @@ make task-resume              # auto-selects first [~] task with an existing wor
 make task-resume TASK=TASK-011  # explicit task
 ```
 
-Relaunches Claude Code in the existing worktree with the same structured prompt.
+Relaunches Claude Code in the existing worktree with the same structured prompt (local WSL mode).
+In remote/mobile mode, it prints the prompt for copy/paste and does not require a worktree.
 
 ### Finishing a task
 
@@ -162,9 +193,13 @@ make task-finish TASK=TASK-011
 Prints the finish checklist and the exact `git push` / `gh pr create` commands.
 The agent is responsible for:
 1. Running `make validate-local` — must pass clean
-2. Committing all changes with a message referencing `TASK-NNN`
-3. Updating `docs/TASKS.md`: mark `[x]` with today's date and commit SHA
-4. Opening a PR titled `TASK-NNN: <title>`
+   - Use `make validate-local-full` when you need a full-repo secret scan (the default is diff-only secrets)
+2. Running a senior engineer review (bugs/regressions/risks/missing tests first)
+3. Actioning review findings and re-running relevant tests/validation
+4. Re-running senior engineer review until findings are cleared (or explicitly accepted)
+5. Committing all changes with a message referencing `TASK-NNN`
+6. Updating `docs/TASKS.md`: mark `[x]` with today's date and commit SHA
+7. Closing only when errors are cleared, then pushing and opening a PR titled `TASK-NNN: <title>`
 
 ### Gate tasks
 

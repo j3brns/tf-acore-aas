@@ -1,0 +1,23 @@
+{
+  "include": [
+    "src",
+    "gateway",
+    "scripts"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "infra",
+    "spa",
+    "worktrees"
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "extraPaths": [
+    "src/data-access-lib/src"
+  ]
+}

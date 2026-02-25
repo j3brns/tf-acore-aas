@@ -5,8 +5,8 @@
 # `make task-resume`. Safe to run repeatedly — skips anything already present.
 #
 # Hard requirements for `make validate-local`:
-#   uv     — ruff, mypy, detect-secrets (installed to ~/.local/bin, no sudo)
-#   node   — tsc, cdk synth (any version; v20 preferred)
+#   uv     — ruff, detect-secrets (installed to ~/.local/bin, no sudo)
+#   node   — pyright, tsc, cdk synth (any version; v20 preferred)
 #
 # Soft requirements (warn if missing, do not abort):
 #   aws CLI, gh, cfn-guard, claude

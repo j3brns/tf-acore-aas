@@ -3,7 +3,9 @@
 # Run `make help` to see all targets
 # =============================================================================
 
-.PHONY: help bootstrap ensure-tools validate-local dev dev-stop dev-logs dev-invoke
+.PHONY: help bootstrap ensure-tools validate-local validate-local-full
+.PHONY: validate-local-prereqs validate-python validate-cdk validate-secrets-diff validate-secrets-full
+.PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
 .PHONY: infra-synth infra-diff infra-deploy infra-destroy
@@ -92,18 +94,68 @@ bootstrap-delete-iam-user:
 ensure-tools:
 	@bash scripts/install-dev-tools.sh
 
-## validate-local: Run all local validation checks before commit
-validate-local: ensure-tools
-	@echo "==> Running local validation"
+## validate-local: Run local validation checks before commit (fast path)
+## Uses diff-only secret detection for speed. Run `make validate-local-full` for full repo secret scan.
+validate-local: validate-local-prereqs
+	@echo "==> Running local validation (fast)"
+	@$(MAKE) --no-print-directory validate-python
+	@$(MAKE) --no-print-directory validate-cdk
+	@$(MAKE) --no-print-directory validate-secrets-diff
+	@echo "==> Validation passed"
+
+## validate-local-full: Full local validation including full-repo secret scan
+validate-local-full: validate-local-prereqs
+	@echo "==> Running local validation (full)"
+	@$(MAKE) --no-print-directory validate-python
+	@$(MAKE) --no-print-directory validate-cdk
+	@$(MAKE) --no-print-directory validate-secrets-full
+	@echo "==> Validation passed"
+
+## validate-local-prereqs: Minimal local tool checks (no auto-install)
+validate-local-prereqs:
+	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not found. Run: make ensure-tools" && exit 1)
+	@command -v node >/dev/null 2>&1 || (echo "ERROR: node not found. Run: make ensure-tools" && exit 1)
+	@cd infra/cdk && npx --no-install pyright --version >/dev/null 2>&1 || \
+		(echo "ERROR: pyright not installed in infra/cdk. Run: make ensure-tools" && exit 1)
+
+## validate-python: Python lint/format/type checks
+validate-python:
 	uv run ruff check .
 	uv run ruff format --check .
-	uv run mypy src/ gateway/ scripts/ --ignore-missing-imports
+	cd infra/cdk && npx --no-install pyright --project ../../pyrightconfig.json
+
+## validate-cdk: TypeScript compile and CDK synth
+validate-cdk:
 	cd infra/cdk && npx tsc --noEmit
 	cd infra/cdk && npx cdk synth --context env=dev --quiet > /dev/null
-	(git ls-files -o --exclude-standard; git ls-files) | sort -u | \
-		grep -Ev '\.(lock|log)$$|package-lock\.json' | \
-		tr '\n' '\0' | xargs -0 uv run detect-secrets scan --baseline .secrets.baseline
-	@echo "==> Validation passed"
+
+## validate-secrets-diff: detect-secrets on changed files only (staged, unstaged, untracked)
+validate-secrets-diff:
+	@echo "==> detect-secrets (changed files only)"
+	@files="$$( \
+		{ \
+			git diff --name-only --diff-filter=ACMR; \
+			git diff --cached --name-only --diff-filter=ACMR; \
+			git ls-files -o --exclude-standard; \
+		} | sort -u | grep -Ev '(^|/)(package-lock\.json)$$|\.(lock|log)$$' || true \
+	)"; \
+	if [ -z "$$files" ]; then \
+		echo "==> detect-secrets: no changed files to scan"; \
+		exit 0; \
+	fi; \
+	printf '%s\n' "$$files" | while IFS= read -r f; do \
+		[ -f "$$f" ] && printf '%s\0' "$$f"; \
+	done | xargs -0 -r uv run detect-secrets-hook --baseline .secrets.baseline; \
+	echo "==> detect-secrets diff scan passed"
+
+## validate-secrets-full: detect-secrets on all tracked + untracked files
+validate-secrets-full:
+	@echo "==> detect-secrets (full repo)"
+	@(git ls-files -o --exclude-standard; git ls-files) | sort -u | \
+		grep -Ev '(^|/)(package-lock\.json)$$|\.(lock|log)$$' | \
+		while IFS= read -r f; do [ -f "$$f" ] && printf '%s\0' "$$f"; done | \
+		xargs -0 -r uv run detect-secrets-hook --baseline .secrets.baseline
+	@echo "==> detect-secrets full scan passed"
 
 ## dev: Start local development environment
 dev:
