@@ -84,6 +84,7 @@ class QueueItem:
 class QueueSelection:
     source_mode: str
     items: list[QueueItem]
+    source_note: str = ""
 
     @property
     def runnable(self) -> list[QueueItem]:
@@ -180,6 +181,37 @@ def gh_text(args: list[str], *, root: Path) -> str:
             f"gh command failed ({exc.returncode}): {' '.join(['gh', *args])}\n"
             f"{(exc.stderr or exc.stdout or '').strip()}"
         ) from exc
+
+
+WORKFLOW_LABEL_DEFAULTS: dict[str, tuple[str, str]] = {
+    "ready": ("0E8A16", "Ready to start"),
+    "in-progress": ("FBCA04", "Work in progress"),
+    "review": ("5319E7", "In review"),
+    "done": ("1D76DB", "Completed"),
+    "status:in-progress": ("FBCA04", "Execution started"),
+    "status:not-started": ("C2E0C6", "Not started"),
+    "status:done": ("1D76DB", "Completed"),
+    "status:blocked": ("B60205", "Blocked"),
+}
+
+
+def ensure_label_exists(root: Path, repo: str, label: str) -> None:
+    color, desc = WORKFLOW_LABEL_DEFAULTS.get(label, ("BFDADC", "Workflow label"))
+    gh_text(
+        [
+            "label",
+            "create",
+            label,
+            "-R",
+            repo,
+            "--force",
+            "--color",
+            color,
+            "--description",
+            desc,
+        ],
+        root=root,
+    )
 
 
 def parse_task_id_from_issue(issue: dict) -> str | None:
@@ -279,6 +311,7 @@ def build_queue(
 ) -> QueueSelection:
     task_issues = [i for i in issues if "type:task" in i.labels]
     by_task_id = {i.task_id: i for i in task_issues if i.task_id}
+    source_note = ""
 
     def stream_ok(issue: Issue) -> bool:
         return not stream_label or stream_label in issue.labels
@@ -288,8 +321,11 @@ def build_queue(
 
     source_mode = mode
     if mode == "auto":
-        source_mode = "ready" if open_ready else "open-task"
-
+        if open_ready:
+            source_mode = "ready"
+        else:
+            source_mode = "open-task"
+            source_note = "auto-fallback: no open task issues labeled 'ready'"
     if source_mode == "ready":
         candidates = open_ready
     elif source_mode == "open-task":
@@ -317,7 +353,7 @@ def build_queue(
             item.issue.number,
         )
     )
-    return QueueSelection(source_mode=str(source_mode), items=items)
+    return QueueSelection(source_mode=str(source_mode), items=items, source_note=source_note)
 
 
 def print_queue(
@@ -330,6 +366,8 @@ def print_queue(
         print(f"No issues in queue (source={selection.source_mode}).")
         return
     print(f"Issue queue (source={selection.source_mode}; order=Seq -> priority -> createdAt)")
+    if selection.source_note:
+        print(f"  note: {selection.source_note}")
     for idx, item in enumerate(items, start=1):
         issue = item.issue
         seq_text = str(issue.seq) if issue.seq is not None else "unset"
@@ -442,45 +480,35 @@ def issue_by_number(issues: list[Issue], number: int) -> Issue:
     raise CliError(f"Issue #{number} not found in fetched dataset")
 
 
-def claim_issue(root: Path, repo: str, issue: Issue) -> None:
+def claim_issue(root: Path, repo: str, issue: Issue) -> bool:
     # Re-fetch labels to reduce stale-queue races.
     data = gh_json(["issue", "view", str(issue.number), "-R", repo, "--json", "labels"], root=root)
     if not isinstance(data, dict):
         raise CliError(f"Unexpected response while checking issue #{issue.number}")
     labels = [x["name"] for x in data.get("labels", []) if isinstance(x, dict) and "name" in x]
-    if "ready" not in labels:
-        raise CliError(
-            f"Issue #{issue.number} is no longer labeled 'ready'; refusing to auto-claim"
-        )
+    had_ready = "ready" in labels
+    ensure_label_exists(root, repo, "status:in-progress")
 
-    args = [
-        "issue",
-        "edit",
-        str(issue.number),
-        "-R",
-        repo,
-        "--add-label",
-        "in-progress",
-        "--remove-label",
-        "ready",
-    ]
+    args = ["issue", "edit", str(issue.number), "-R", repo]
+    if had_ready:
+        args += ["--remove-label", "ready"]
     if "status:not-started" in labels:
-        args += ["--remove-label", "status:not-started", "--add-label", "status:in-progress"]
+        args += ["--remove-label", "status:not-started"]
+    if "status:in-progress" not in labels:
+        args += ["--add-label", "status:in-progress"]
     gh_text(args, root=root)
+    return had_ready
 
 
-def unclaim_issue(root: Path, repo: str, issue: Issue) -> None:
-    args = [
-        "issue",
-        "edit",
-        str(issue.number),
-        "-R",
-        repo,
-        "--add-label",
-        "ready",
-        "--remove-label",
-        "in-progress",
-    ]
+def unclaim_issue(root: Path, repo: str, issue: Issue, *, add_ready: bool = True) -> None:
+    ensure_label_exists(root, repo, "status:not-started")
+    if add_ready:
+        ensure_label_exists(root, repo, "ready")
+    args = ["issue", "edit", str(issue.number), "-R", repo]
+    # Best-effort rollback for failed worktree creation.
+    args += ["--remove-label", "status:in-progress", "--add-label", "status:not-started"]
+    if add_ready:
+        args += ["--add-label", "ready"]
     gh_text(args, root=root)
 
 
@@ -535,18 +563,22 @@ def create_worktree_for_issue(
         return wt_path
 
     claimed = False
+    claim_had_ready = False
     try:
         if auto_claim:
-            claim_issue(root, repo, issue)
+            claim_had_ready = claim_issue(root, repo, issue)
             claimed = True
-            print(f"Claimed issue #{issue.number} (ready -> in-progress)")
+            if claim_had_ready:
+                print(f"Claimed issue #{issue.number} (ready -> in-progress)")
+            else:
+                print(f"Claimed issue #{issue.number} (set in-progress; no ready label to remove)")
 
         run(["git", "worktree", "add", str(wt_path), "-b", branch, start_ref], cwd=root)
         print(f"Created worktree at {wt_path}")
     except Exception:
         if claimed:
             try:
-                unclaim_issue(root, repo, issue)
+                unclaim_issue(root, repo, issue, add_ready=claim_had_ready)
                 eprint(f"Rolled back claim for issue #{issue.number}")
             except Exception as rollback_exc:  # pragma: no cover - best effort
                 eprint(f"WARNING: failed to roll back claim for #{issue.number}: {rollback_exc}")
@@ -1022,21 +1054,15 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
     if info and str(info.get("state", "")).upper() == "CLOSED":
         print(f"Issue #{issue_id} already closed.")
         return
-    args = [
-        "issue",
-        "edit",
-        str(issue_id),
-        "-R",
-        repo,
-        "--add-label",
-        "done",
-        "--remove-label",
-        "review",
-        "--remove-label",
-        "in-progress",
-    ]
+    args = ["issue", "edit", str(issue_id), "-R", repo]
     if info:
         label_names = [x["name"] for x in info.get("labels", []) if isinstance(x, dict)]
+        if "review" in label_names:
+            args += ["--remove-label", "review"]
+        if "in-progress" in label_names:
+            args += ["--remove-label", "in-progress"]
+        if "done" in label_names:
+            args += ["--add-label", "done"]
         if "status:in-progress" in label_names:
             args += ["--remove-label", "status:in-progress"]
         if "status:not-started" in label_names:
@@ -1120,7 +1146,16 @@ def cmd_issue_queue(args: argparse.Namespace) -> int:
                     "task_id": item.issue.task_id,
                 }
             )
-        print(json.dumps({"source_mode": selection.source_mode, "items": payload}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "source_mode": selection.source_mode,
+                    "source_note": selection.source_note,
+                    "items": payload,
+                },
+                indent=2,
+            )
+        )
     return 0
 
 
@@ -1171,12 +1206,6 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         Path(args.base_dir).expanduser().resolve() if args.base_dir else default_worktrees_dir(root)
     )
     auto_claim = not args.no_claim
-    if auto_claim and selection.source_mode != "ready":
-        print(
-            f"Queue source is '{selection.source_mode}' (not ready-labeled); "
-            "auto-claim disabled for this run."
-        )
-        auto_claim = False
 
     wt_path = create_worktree_for_issue(
         root=root,
@@ -1217,12 +1246,6 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
         Path(args.base_dir).expanduser().resolve() if args.base_dir else default_worktrees_dir(root)
     )
     auto_claim = not args.no_claim
-    if auto_claim and selection.source_mode != "ready":
-        print(
-            f"Queue source is '{selection.source_mode}' (not ready-labeled); "
-            "auto-claim disabled for this run."
-        )
-        auto_claim = False
 
     wt_path = create_worktree_for_issue(
         root=root,
