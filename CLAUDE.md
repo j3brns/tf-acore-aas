@@ -48,9 +48,11 @@ Before writing any code:
 1. Read this file
 2. Read docs/ARCHITECTURE.md
 3. Read the ADR(s) linked to the current task in docs/TASKS.md
-4. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
+4. In local WSL, confirm you are in a task worktree on a task branch (not `main` in the primary repo working tree)
+5. If not, start via `make task-start` unless the operator explicitly instructs in-place work
+6. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
    (use `make validate-local-full` when a full-repo secret scan is required)
-5. State which task you are working on explicitly
+7. State which task you are working on explicitly
 
 Before marking any task complete:
 1. All tests pass
@@ -173,6 +175,26 @@ ADRs, state the task name, and work the loop. In local WSL mode it also requires
 `make validate-local`; in remote/mobile mode it first confirms repo path and tool availability.
 
 If the worktree already exists, use `make task-resume` instead.
+
+### Local WSL Safety Rule (mandatory)
+
+In local WSL mode, do not implement task changes directly on `main` in the
+primary repo working tree. Use the worktree protocol (`make task-start` /
+`make task-resume`) by default.
+
+Only work in-place if the operator explicitly instructs that exception in
+writing.
+
+Before implementation in local WSL mode, state:
+- current branch
+- whether you are in a task worktree (or remote/mobile prompt mode)
+
+If task implementation has already started in the wrong location (for example,
+on `main` in the primary repo working tree):
+- Stop creating new edits
+- Create a task branch immediately from the current state
+- Continue on the task branch (or move to a worktree if practical)
+- State the deviation and correction in your session output
 
 ### Resuming a task
 
