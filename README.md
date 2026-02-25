@@ -2,10 +2,14 @@
 
 ## What This Is
 
-An enterprise-grade Agent as a Service platform running on Amazon Bedrock AgentCore.
-B2B tenants invoke AI agents via REST API with full isolation, billing attribution,
-and compliance controls. Internal agent developer teams push new agents independently
-via a self-service pipeline.
+An enterprise-style Agent as a Service platform running Amazon Bedrock AgentCore.
+B2E tenants invoke AI agents via REST API with full isolation, billing attribution,
+and compliance controls.
+
+Internal agent developer teams push new agents independently
+via a self-service pipeline. Identity and 3LO baked in, Strands keeps things simple.
+
+DevX, I've heard of it.. Inner-loop for responsive boto3 backed localstack experimentations.
 
 ## Quick Start
 
