@@ -136,13 +136,14 @@ Nothing in Phase 2 starts until written confirmation.
               Mock JWKS: FastAPI on :8766, issues test JWTs, serves /.well-known/jwks.json
               ADRs: none | Tests: make dev must start cleanly
 
-[~] TASK-015  Write scripts/dev-bootstrap.py
+[x] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
               Seeds all SSM parameters pointing to LocalStack
               Seeds DynamoDB tables with fixtures
               Writes test JWTs to .env.test
               Idempotent — safe to run multiple times
               ADRs: none | Tests: run twice, verify no duplicate records
+              Done: 2026-02-25
 
 [ ] TASK-016  Write src/authoriser/handler.py
               Entra JWT path: JWKS fetch+cache, sig validate, expiry, audience, issuer
