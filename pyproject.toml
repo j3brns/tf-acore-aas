@@ -3,7 +3,11 @@ name = "platform-aas"
 version = "0.1.0"
 description = "AgentCore Agent as a Service platform"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "aws-xray-sdk>=2.15.0",
+    "cryptography>=46.0.5",
+    "pyjwt>=2.11.0",
+]
 
 [dependency-groups]
 dev = [
