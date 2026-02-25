@@ -1,4 +1,4 @@
-# AgentCore Multi-Tenant AaaS Platform
+# AgentCore Multi-Tenant AaaS Small team Platform 
 
 ## What This Is
 
