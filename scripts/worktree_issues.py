@@ -769,6 +769,22 @@ def choose_handoff_action_interactive(default: str = "execute-now") -> str:
         print("Invalid choice.")
 
 
+def choose_post_create_action_interactive() -> str:
+    while True:
+        print("Next action after worktree creation:")
+        print("  1) Open shell with agent handoff (default)")
+        print("  2) Return to menu")
+        print("  0) Back")
+        raw = input("Choice [1]: ").strip() or "1"
+        if raw in {"1", "shell"}:
+            return "shell"
+        if raw in {"2", "return"}:
+            return "return"
+        if raw in {"0", "back"}:
+            raise CliError("Back")
+        print("Invalid choice.")
+
+
 def worktree_issue_id(path: Path) -> int | None:
     try:
         branch = current_branch(path)
@@ -1346,6 +1362,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 )
                 cmd_issue_queue(ns)
             elif choice == "2":
+                post_create = choose_post_create_action_interactive()
                 ns = argparse.Namespace(
                     repo=args.repo,
                     stream_label=args.stream_label,
@@ -1360,10 +1377,15 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     no_claim=False,
                     no_preflight=False,
                     dry_run=False,
-                    open_shell=False,
+                    open_shell=(post_create == "shell"),
+                    agent=None,
+                    agent_mode=None,
+                    handoff=None,
+                    print_only=False,
                 )
                 cmd_worktree_next(ns)
             elif choice == "3":
+                post_create = choose_post_create_action_interactive()
                 ns = argparse.Namespace(
                     repo=args.repo,
                     stream_label=args.stream_label,
@@ -1378,7 +1400,11 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     no_claim=False,
                     no_preflight=False,
                     dry_run=False,
-                    open_shell=False,
+                    open_shell=(post_create == "shell"),
+                    agent=None,
+                    agent_mode=None,
+                    handoff=None,
+                    print_only=False,
                 )
                 cmd_worktree_next(ns)
             elif choice == "4":
