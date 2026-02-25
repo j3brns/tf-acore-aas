@@ -126,8 +126,8 @@ validate-python:
 
 ## validate-cdk: TypeScript compile and CDK synth
 validate-cdk:
-	cd infra/cdk && npx tsc --noEmit
-	cd infra/cdk && npx cdk synth --context env=dev --quiet > /dev/null
+	cd infra/cdk && npx --no-install tsc --noEmit
+	cd infra/cdk && npx --no-install cdk synth --context env=dev --quiet > /dev/null
 
 ## validate-secrets-diff: detect-secrets on changed files only (staged, unstaged, untracked)
 validate-secrets-diff:
