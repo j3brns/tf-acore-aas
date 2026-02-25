@@ -341,8 +341,7 @@ def build_queue(
         else:
             source_mode = "open-task"
             source_note = (
-                "auto-fallback: no queued task issues labeled 'ready' "
-                "(excludes status:in-progress)"
+                "auto-fallback: no queued task issues labeled 'ready' (excludes status:in-progress)"
             )
     if source_mode == "ready":
         candidates = open_ready
