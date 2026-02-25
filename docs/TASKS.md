@@ -129,12 +129,13 @@ Nothing in Phase 2 starts until written confirmation.
 
 ## Phase 2 — Local Development Loop
 
-[~] TASK-014  Write docker-compose.yml
+[x] TASK-014  Write docker-compose.yml
               Services: LocalStack, mock AgentCore Runtime, mock JWKS endpoint
               Mock Runtime: FastAPI on :8765, POST /invocations, GET /ping
               Returns canned streaming response. Logs tenant context headers.
               Mock JWKS: FastAPI on :8766, issues test JWTs, serves /.well-known/jwks.json
               ADRs: none | Tests: make dev must start cleanly
+              Done: 2026-02-25, commit TBD
 
 [ ] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
