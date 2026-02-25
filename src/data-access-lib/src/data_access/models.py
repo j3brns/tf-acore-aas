@@ -342,3 +342,26 @@ class OpsLockRecord:
     @property
     def sk(self) -> str:
         return "METADATA"
+
+
+# ---------------------------------------------------------------------------
+# TenantContext — runtime identity injected by the Authoriser Lambda
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TenantContext:
+    """
+    Tenant identity context returned by the Authoriser Lambda.
+
+    Passed to TenantScopedDynamoDB and TenantScopedS3 to scope all
+    data access to the authenticated tenant's partition.
+
+    Fields align with the authoriser response context:
+        tenantid, appid, tier, sub.
+    """
+
+    tenant_id: str
+    app_id: str
+    tier: TenantTier
+    sub: str  # JWT subject (user ID or machine identity)
