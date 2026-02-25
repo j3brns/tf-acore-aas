@@ -38,7 +38,9 @@
   2. Pick the next task with status `[ ]` (not started)
   3. State: `Starting TASK-XXX: <task title>`
   4. Read the ADR(s) linked to that task before coding
-  5. If no `[ ]` task exists, report that clearly and stop
+  5. If running in local WSL, start via the local worktree protocol (`make task-start`) unless the operator explicitly says to work in-place
+  6. Never begin task implementation directly on `main` in the primary repo working tree when local WSL worktree mode is available
+  7. If no `[ ]` task exists, report that clearly and stop
 
   2. Read `docs/ARCHITECTURE.md`
   3. Read the relevant ADR(s)
