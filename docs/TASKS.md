@@ -135,7 +135,7 @@ Nothing in Phase 2 starts until written confirmation.
               Returns canned streaming response. Logs tenant context headers.
               Mock JWKS: FastAPI on :8766, issues test JWTs, serves /.well-known/jwks.json
               ADRs: none | Tests: make dev must start cleanly
-              Done: 2026-02-25, commit TBD
+              Done: 2026-02-25, commit 38a6dd5
 
 [ ] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
