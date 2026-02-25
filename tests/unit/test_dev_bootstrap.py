@@ -151,10 +151,32 @@ class TestIdempotency:
             jwt_second, "PREMIUM_TENANT_JWT"
         )
 
+    # ---------------------------------------------------------------------------
+    # Table creation tests
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Table creation tests
-# ---------------------------------------------------------------------------
+    def test_created_at_not_overwritten_on_second_run(
+        self, bootstrap_module: Any, tmp_path: Path
+    ) -> None:
+        """Tenant createdAt must be preserved across repeated bootstrap runs.
+
+        If the conditional put is accidentally changed to an unconditional put,
+        createdAt would be refreshed on every run, losing the original value.
+        """
+        env_test = tmp_path / ".env.test"
+        with mock_aws():
+            bootstrap_module.run(env_test_path=env_test)
+            items_first = _scan_table("platform-tenants")
+            created_at_first = {i["PK"]: i["createdAt"] for i in items_first}
+
+            bootstrap_module.run(env_test_path=env_test)
+            items_second = _scan_table("platform-tenants")
+            created_at_second = {i["PK"]: i["createdAt"] for i in items_second}
+
+        assert created_at_first == created_at_second, (
+            "createdAt was overwritten on second bootstrap run — "
+            "conditional put is not working correctly"
+        )
 
 
 class TestTableCreation:
