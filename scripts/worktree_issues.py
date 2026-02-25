@@ -239,6 +239,19 @@ def parse_depends(text: str | None) -> list[str]:
     return out
 
 
+def lifecycle_status(issue: Issue) -> str:
+    labels = set(issue.labels)
+    if "status:blocked" in labels:
+        return "blocked"
+    if "status:in-progress" in labels:
+        return "in-progress"
+    if "status:done" in labels:
+        return "done"
+    if "status:not-started" in labels:
+        return "not-started"
+    return "unknown"
+
+
 def parse_issue_meta(body: str) -> tuple[int | None, list[str]]:
     seq = int(m.group(1)) if (m := SEQ_RE.search(body or "")) else None
     depends = parse_depends(m.group(1)) if (m := DEPENDS_RE.search(body or "")) else []
@@ -317,7 +330,9 @@ def build_queue(
         return not stream_label or stream_label in issue.labels
 
     open_task = [i for i in task_issues if i.state == "open" and stream_ok(i)]
-    open_ready = [i for i in open_task if "ready" in i.labels]
+    # Queue excludes actively worked items. They remain visible via issue views / finish-summary.
+    queued_open_task = [i for i in open_task if lifecycle_status(i) != "in-progress"]
+    open_ready = [i for i in queued_open_task if "ready" in i.labels]
 
     source_mode = mode
     if mode == "auto":
@@ -325,17 +340,22 @@ def build_queue(
             source_mode = "ready"
         else:
             source_mode = "open-task"
-            source_note = "auto-fallback: no open task issues labeled 'ready'"
+            source_note = (
+                "auto-fallback: no queued task issues labeled 'ready' "
+                "(excludes status:in-progress)"
+            )
     if source_mode == "ready":
         candidates = open_ready
     elif source_mode == "open-task":
-        candidates = open_task
+        candidates = queued_open_task
     else:
         raise CliError(f"Unsupported queue mode: {mode}")
 
     items: list[QueueItem] = []
     for issue in candidates:
         reasons: list[str] = []
+        if lifecycle_status(issue) == "blocked":
+            reasons.append("blocked by status label (status:blocked)")
         for dep_task_id in issue.depends_on:
             dep = by_task_id.get(dep_task_id)
             if dep is None:
