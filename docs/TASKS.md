@@ -101,13 +101,14 @@ in one session should be split — raise this before starting, not after.
               Done: 2026-02-24, commit bf9c8dd
               58 tests passing. validate-local passes.
 
-[ ] TASK-012  Write OpenAPI 3.1 specification
+[x] TASK-012  Write OpenAPI 3.1 specification
               File: docs/openapi.yaml
               All routes, request schemas, response schemas, error codes
               Include: /v1/agents, /v1/tenants, /v1/jobs, /v1/webhooks, /v1/bff, /v1/health
               PRESENT FOR REVIEW before implementing any routes
               ADRs: ADR-003 | Tests: spectral lint must pass
               Gate: spec reviewed and confirmed before Phase 2
+              Done: 2026-02-25, commit b19986c
 
 [ ] TASK-013  Write data-access-lib
               Files: src/data-access-lib/src/data_access/
