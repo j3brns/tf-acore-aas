@@ -515,6 +515,7 @@ def cmd_start(
         print(f"WARNING: could not update TASKS.md status: {e}")
 
     # Preflight
+    ensure_dev_tools(wt)
     print("Running make validate-local in new worktree...")
     result = subprocess.run(["make", "validate-local"], cwd=wt)
     if result.returncode != 0:
@@ -543,8 +544,6 @@ def cmd_start(
 
 def cmd_resume(task_id: str | None, tasks: list[Task], root: Path, runtime_env: RuntimeEnv) -> None:
     is_local = runtime_env == "local-wsl"
-    if is_local:
-        ensure_dev_tools(root)
 
     task: Task
     if task_id:
@@ -582,6 +581,7 @@ def cmd_resume(task_id: str | None, tasks: list[Task], root: Path, runtime_env: 
         _print_mobile_prompt(prompt, task, runtime_env)
         return
 
+    ensure_dev_tools(wt)
     print()
     print("Running make validate-local...")
     subprocess.run(["make", "validate-local"], cwd=wt)
