@@ -1,0 +1,154 @@
+{
+  "_comment": "Golden test cases for echo-agent. 3 cases per invocation mode.",
+  "sync": [
+    {
+      "id": "sync-hello",
+      "description": "Simple greeting echoed synchronously",
+      "input": {
+        "prompt": "hello",
+        "mode": "sync",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected": {
+        "echo": "hello",
+        "mode": "sync",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      }
+    },
+    {
+      "id": "sync-empty",
+      "description": "Empty prompt echoed synchronously",
+      "input": {
+        "prompt": "",
+        "mode": "sync",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected": {
+        "echo": "",
+        "mode": "sync",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      }
+    },
+    {
+      "id": "sync-sentence",
+      "description": "Multi-word sentence echoed synchronously",
+      "input": {
+        "prompt": "the quick brown fox",
+        "mode": "sync",
+        "appid": "test-app",
+        "tenantId": "t-test-002"
+      },
+      "expected": {
+        "echo": "the quick brown fox",
+        "mode": "sync",
+        "appid": "test-app",
+        "tenantId": "t-test-002"
+      }
+    }
+  ],
+  "streaming": [
+    {
+      "id": "streaming-single-word",
+      "description": "Single word echoed as streaming chunks",
+      "input": {
+        "prompt": "hello",
+        "mode": "streaming",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected_chunks": [
+        {"chunk": "hello", "index": 0, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"},
+        {"done": true, "total_chunks": 1, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"}
+      ],
+      "expected_word_count": 1
+    },
+    {
+      "id": "streaming-two-words",
+      "description": "Two-word phrase echoed word-by-word as streaming chunks",
+      "input": {
+        "prompt": "hello world",
+        "mode": "streaming",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected_chunks": [
+        {"chunk": "hello", "index": 0, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"},
+        {"chunk": "world", "index": 1, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"},
+        {"done": true, "total_chunks": 2, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"}
+      ],
+      "expected_word_count": 2
+    },
+    {
+      "id": "streaming-empty",
+      "description": "Empty prompt yields a single empty-string chunk then done",
+      "input": {
+        "prompt": "",
+        "mode": "streaming",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected_chunks": [
+        {"chunk": "", "index": 0, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"},
+        {"done": true, "total_chunks": 1, "mode": "streaming", "appid": "test-app", "tenantId": "t-test-001"}
+      ],
+      "expected_word_count": 1
+    }
+  ],
+  "async": [
+    {
+      "id": "async-hello",
+      "description": "Simple greeting accepted asynchronously",
+      "input": {
+        "prompt": "hello",
+        "mode": "async",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected": {
+        "accepted": true,
+        "echo": "hello",
+        "mode": "async",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      }
+    },
+    {
+      "id": "async-empty",
+      "description": "Empty prompt accepted asynchronously",
+      "input": {
+        "prompt": "",
+        "mode": "async",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      },
+      "expected": {
+        "accepted": true,
+        "echo": "",
+        "mode": "async",
+        "appid": "test-app",
+        "tenantId": "t-test-001"
+      }
+    },
+    {
+      "id": "async-sentence",
+      "description": "Multi-word sentence accepted asynchronously with task_id present",
+      "input": {
+        "prompt": "process this in the background please",
+        "mode": "async",
+        "appid": "test-app",
+        "tenantId": "t-test-002"
+      },
+      "expected": {
+        "accepted": true,
+        "echo": "process this in the background please",
+        "mode": "async",
+        "appid": "test-app",
+        "tenantId": "t-test-002"
+      }
+    }
+  ]
+}
