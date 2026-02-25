@@ -129,7 +129,7 @@ Nothing in Phase 2 starts until written confirmation.
 
 ## Phase 2 — Local Development Loop
 
-[ ] TASK-014  Write docker-compose.yml
+[~] TASK-014  Write docker-compose.yml
               Services: LocalStack, mock AgentCore Runtime, mock JWKS endpoint
               Mock Runtime: FastAPI on :8765, POST /invocations, GET /ping
               Returns canned streaming response. Logs tenant context headers.
