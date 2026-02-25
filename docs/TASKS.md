@@ -136,7 +136,7 @@ Nothing in Phase 2 starts until written confirmation.
               Mock JWKS: FastAPI on :8766, issues test JWTs, serves /.well-known/jwks.json
               ADRs: none | Tests: make dev must start cleanly
 
-[ ] TASK-015  Write scripts/dev-bootstrap.py
+[~] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
               Seeds all SSM parameters pointing to LocalStack
               Seeds DynamoDB tables with fixtures
