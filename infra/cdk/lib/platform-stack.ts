@@ -10,11 +10,461 @@
  * ADRs: ADR-003, ADR-004, ADR-011
  */
 import * as cdk from 'aws-cdk-lib';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
+import * as path from 'path';
+
+type PythonLambdaProps = {
+  assetPath: string;
+  handler: string;
+  functionNameSuffix: string;
+  timeout: cdk.Duration;
+  memorySize: number;
+  environment?: Record<string, string>;
+};
 
 export class PlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
-    // TODO: Implemented in TASK-023
+
+    const bridgeFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/bridge'),
+      handler: 'handler.handler',
+      functionNameSuffix: 'bridge',
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 1024,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'bridge',
+      },
+    });
+
+    const bffFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/bff'),
+      handler: 'handler.handler',
+      functionNameSuffix: 'bff',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'bff',
+      },
+    });
+
+    const authoriserFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/authoriser'),
+      handler: 'handler.handler',
+      functionNameSuffix: 'authoriser',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'authoriser',
+        ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
+        ENTRA_AUDIENCE: 'platform-api',
+        ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
+        TENANTS_TABLE: 'platform-tenants',
+      },
+    });
+
+    const requestInterceptorFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../gateway/interceptors'),
+      handler: 'request_interceptor.handler',
+      functionNameSuffix: 'interceptor-request',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'gateway-request-interceptor',
+      },
+    });
+
+    const responseInterceptorFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../gateway/interceptors'),
+      handler: 'response_interceptor.handler',
+      functionNameSuffix: 'interceptor-response',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'gateway-response-interceptor',
+      },
+    });
+
+    const authoriserAlias = new lambda.Alias(this, 'AuthoriserLiveAlias', {
+      aliasName: 'live',
+      version: authoriserFn.currentVersion,
+      provisionedConcurrentExecutions: 10,
+    });
+
+    const restAuthorizer = new apigateway.TokenAuthorizer(this, 'RestTokenAuthorizer', {
+      handler: authoriserAlias,
+      identitySource: apigateway.IdentitySource.header('Authorization'),
+      resultsCacheTtl: cdk.Duration.minutes(5),
+    });
+
+    const api = new apigateway.RestApi(this, 'PlatformRestApi', {
+      restApiName: `${this.stackName}-rest-api`,
+      description: 'Platform northbound REST API (ADR-003)',
+      apiKeySourceType: apigateway.ApiKeySourceType.AUTHORIZER,
+      deployOptions: {
+        stageName: 'prod',
+        tracingEnabled: true,
+        metricsEnabled: true,
+        methodOptions: {
+          '/v1/invoke/POST': {
+            throttlingRateLimit: 50,
+            throttlingBurstLimit: 100,
+            metricsEnabled: true,
+          },
+          '/v1/jobs/{jobId}/GET': {
+            throttlingRateLimit: 100,
+            throttlingBurstLimit: 200,
+            metricsEnabled: true,
+          },
+          '/v1/bff/token-refresh/POST': {
+            throttlingRateLimit: 30,
+            throttlingBurstLimit: 60,
+            metricsEnabled: true,
+          },
+          '/v1/bff/session-keepalive/POST': {
+            throttlingRateLimit: 120,
+            throttlingBurstLimit: 240,
+            metricsEnabled: true,
+          },
+        },
+      },
+    });
+
+    const v1 = api.root.addResource('v1');
+    const invoke = v1.addResource('invoke');
+    const jobs = v1.addResource('jobs');
+    const jobById = jobs.addResource('{jobId}');
+    const bff = v1.addResource('bff');
+    const tokenRefresh = bff.addResource('token-refresh');
+    const sessionKeepalive = bff.addResource('session-keepalive');
+
+    const securedMethodOptions: apigateway.MethodOptions = {
+      authorizer: restAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM,
+      apiKeyRequired: true,
+    };
+
+    invoke.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(bridgeFn, { proxy: true }),
+      securedMethodOptions,
+    );
+    jobById.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(bridgeFn, { proxy: true }),
+      securedMethodOptions,
+    );
+    tokenRefresh.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(bffFn, { proxy: true }),
+      securedMethodOptions,
+    );
+    sessionKeepalive.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(bffFn, { proxy: true }),
+      securedMethodOptions,
+    );
+
+    const usagePlanDefinitions = [
+      {
+        id: 'BasicUsagePlan',
+        name: 'basic',
+        rateLimit: 10,
+        burstLimit: 100,
+        quotaLimit: 1000,
+      },
+      {
+        id: 'StandardUsagePlan',
+        name: 'standard',
+        rateLimit: 50,
+        burstLimit: 500,
+        quotaLimit: 10_000,
+      },
+      {
+        id: 'PremiumUsagePlan',
+        name: 'premium',
+        rateLimit: 500,
+        burstLimit: 2_000,
+      },
+    ];
+
+    for (const plan of usagePlanDefinitions) {
+      new apigateway.UsagePlan(this, plan.id, {
+        name: `${this.stackName}-${plan.name}`,
+        throttle: {
+          rateLimit: plan.rateLimit,
+          burstLimit: plan.burstLimit,
+        },
+        quota:
+          plan.quotaLimit === undefined
+            ? undefined
+            : {
+                limit: plan.quotaLimit,
+                period: apigateway.Period.DAY,
+              },
+        apiStages: [
+          {
+            api,
+            stage: api.deploymentStage,
+          },
+        ],
+      });
+    }
+
+    const apiWebAcl = new wafv2.CfnWebACL(this, 'ApiWebAcl', {
+      defaultAction: { allow: {} },
+      scope: 'REGIONAL',
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        metricName: `${this.stackName}-api-waf`,
+        sampledRequestsEnabled: true,
+      },
+      rules: [
+        {
+          name: 'AWSManagedRulesCommonRuleSet',
+          priority: 0,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: 'aws-managed-common',
+            sampledRequestsEnabled: true,
+          },
+        },
+        {
+          name: 'UkIpRateLimit',
+          priority: 1,
+          action: { block: {} },
+          statement: {
+            rateBasedStatement: {
+              aggregateKeyType: 'IP',
+              limit: 2000,
+              scopeDownStatement: {
+                geoMatchStatement: {
+                  countryCodes: ['GB'],
+                },
+              },
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: 'uk-ip-rate-limit',
+            sampledRequestsEnabled: true,
+          },
+        },
+        {
+          name: 'BlockSqlmapUserAgent',
+          priority: 2,
+          action: { block: {} },
+          statement: {
+            byteMatchStatement: {
+              fieldToMatch: {
+                singleHeader: {
+                  Name: 'user-agent',
+                },
+              },
+              positionalConstraint: 'CONTAINS',
+              searchString: 'sqlmap',
+              textTransformations: [
+                {
+                  priority: 0,
+                  type: 'LOWERCASE',
+                },
+              ],
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: 'block-sqlmap-user-agent',
+            sampledRequestsEnabled: true,
+          },
+        },
+      ],
+    });
+
+    new wafv2.CfnWebACLAssociation(this, 'ApiWebAclAssociation', {
+      resourceArn: api.deploymentStage.stageArn,
+      webAclArn: apiWebAcl.attrArn,
+    });
+
+    const spaBucket = new s3.Bucket(this, 'SpaBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+    });
+
+    const spaCspPolicy = new cloudfront.CfnResponseHeadersPolicy(this, 'SpaCspResponseHeadersPolicy', {
+      responseHeadersPolicyConfig: {
+        name: `${this.stackName}-spa-csp`,
+        comment: 'CSP headers for platform SPA',
+        customHeadersConfig: {
+          items: [
+            {
+              header: 'Content-Security-Policy',
+              value:
+                "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; connect-src 'self' https:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self';",
+              override: true,
+            },
+          ],
+        },
+      },
+    });
+
+    const spaOriginAccessControl = new cloudfront.CfnOriginAccessControl(this, 'SpaOriginAccessControl', {
+      originAccessControlConfig: {
+        name: `${this.stackName}-spa-oac`,
+        description: 'OAC for SPA bucket origin',
+        originAccessControlOriginType: 's3',
+        signingBehavior: 'always',
+        signingProtocol: 'sigv4',
+      },
+    });
+
+    const spaDistribution = new cloudfront.CfnDistribution(this, 'SpaDistribution', {
+      distributionConfig: {
+        enabled: true,
+        comment: 'Platform SPA distribution',
+        defaultRootObject: 'index.html',
+        httpVersion: 'http2',
+        priceClass: 'PriceClass_100',
+        ipv6Enabled: true,
+        origins: [
+          {
+            id: 'SpaS3Origin',
+            domainName: spaBucket.bucketRegionalDomainName,
+            originAccessControlId: spaOriginAccessControl.attrId,
+            s3OriginConfig: {
+              originAccessIdentity: '',
+            },
+          },
+        ],
+        defaultCacheBehavior: {
+          targetOriginId: 'SpaS3Origin',
+          viewerProtocolPolicy: 'redirect-to-https',
+          compress: true,
+          allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
+          cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
+          cachePolicyId: cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId,
+          responseHeadersPolicyId: spaCspPolicy.attrId,
+        },
+        restrictions: {
+          geoRestriction: {
+            restrictionType: 'none',
+          },
+        },
+        viewerCertificate: {
+          cloudFrontDefaultCertificate: true,
+        },
+      },
+    });
+
+    spaBucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudFrontOacRead',
+        effect: iam.Effect.ALLOW,
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        actions: ['s3:GetObject'],
+        resources: [spaBucket.arnForObjects('*')],
+        conditions: {
+          StringEquals: {
+            'AWS:SourceArn': cdk.Fn.join('', [
+              'arn:',
+              cdk.Aws.PARTITION,
+              ':cloudfront::',
+              cdk.Aws.ACCOUNT_ID,
+              ':distribution/',
+              spaDistribution.ref,
+            ]),
+          },
+        },
+      }),
+    );
+
+    const agentCoreGatewayRole = new iam.Role(this, 'AgentCoreGatewayExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
+      description: 'Execution role for AgentCore Gateway interceptors',
+    });
+    agentCoreGatewayRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'],
+        resources: [requestInterceptorFn.functionArn, responseInterceptorFn.functionArn],
+      }),
+    );
+
+    new cdk.CfnResource(this, 'AgentCoreGateway', {
+      type: 'AWS::BedrockAgentCore::Gateway',
+      properties: {
+        Name: `${this.stackName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-gateway`,
+        Description: 'Platform AgentCore Gateway with request/response interceptors',
+        AuthorizerType: 'AWS_IAM',
+        ProtocolType: 'MCP',
+        RoleArn: agentCoreGatewayRole.roleArn,
+        InterceptorConfigurations: [
+          {
+            InterceptionPoints: ['REQUEST'],
+            InputConfiguration: {
+              PassRequestHeaders: true,
+            },
+            Interceptor: {
+              Lambda: {
+                Arn: requestInterceptorFn.functionArn,
+              },
+            },
+          },
+          {
+            InterceptionPoints: ['RESPONSE'],
+            InputConfiguration: {
+              PassRequestHeaders: true,
+            },
+            Interceptor: {
+              Lambda: {
+                Arn: responseInterceptorFn.functionArn,
+              },
+            },
+          },
+        ],
+        Tags: {
+          stack: this.stackName,
+          component: 'platform-gateway',
+        },
+      },
+    });
+  }
+
+  private createPythonLambda(props: PythonLambdaProps): lambda.Function {
+    const dlq = new sqs.Queue(this, `${props.functionNameSuffix}Dlq`, {
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    return new lambda.Function(this, `${props.functionNameSuffix}Lambda`, {
+      functionName: `${this.stackName}-${props.functionNameSuffix}`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      handler: props.handler,
+      code: lambda.Code.fromAsset(props.assetPath),
+      tracing: lambda.Tracing.ACTIVE,
+      deadLetterQueueEnabled: true,
+      deadLetterQueue: dlq,
+      timeout: props.timeout,
+      memorySize: props.memorySize,
+      environment: {
+        LOG_LEVEL: 'INFO',
+        ...props.environment,
+      },
+    });
   }
 }

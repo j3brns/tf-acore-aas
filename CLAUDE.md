@@ -47,12 +47,13 @@ alternative. Never silently work around them.
 Before writing any code:
 1. Read this file
 2. Read docs/ARCHITECTURE.md
-3. Read the ADR(s) linked to the current task in docs/TASKS.md
-4. In local WSL, confirm you are in a task worktree on a task branch (not `main` in the primary repo working tree)
-5. If not, start via `make task-start` unless the operator explicitly instructs in-place work
-6. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
+3. Identify the issue you are working on (GitHub Issues are the canonical task queue; `docs/TASKS.md` is a snapshot)
+4. Read the ADR(s) linked to the current task/issue (use `docs/TASKS.md` as a reference snapshot when needed)
+5. In local WSL, confirm you are in an issue worktree on a policy branch (not `main` in the primary repo working tree)
+6. If not, start via `make worktree` / `make worktree-next-issue` unless the operator explicitly instructs in-place work
+7. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
    (use `make validate-local-full` when a full-repo secret scan is required)
-7. State which task you are working on explicitly
+8. State which issue/task you are working on explicitly
 
 Before marking any task complete:
 1. All tests pass
@@ -61,7 +62,8 @@ Before marking any task complete:
 4. Review recommendations are actioned
 5. Senior engineer review re-run and clear (or remaining risks explicitly accepted by operator)
 6. New infrastructure passes cfn-guard
-7. State "TASK-NNN complete. Tests passing."
+7. Before any push: run `make preflight-session` and `make pre-validate-session` (fast path, no cdk synth)
+8. State completion with the issue/task identifier (for legacy tasks, `TASK-NNN complete. Tests passing.`)
 
 When uncertain about a security decision — stop and ask. Do not guess.
 
@@ -74,6 +76,7 @@ the closure criteria are met.
 Preferred signals (use what is available in the current environment):
 - Test failures and stack traces (`pytest`, Jest, `make test-*`)
 - Validation output (`make validate-local`, `make validate-local-full`)
+- Fast pre-push validation (`make validate-pre-push`, `make pre-validate-session`)
 - Lint/typecheck output (Ruff, Pyright, TypeScript)
 - CDK synth/deploy error output
 - Local runtime logs (`make dev-logs`, `docker compose logs`)
@@ -137,10 +140,51 @@ except TenantAccessViolation as e:
     return error_response(403, "UNAUTHORISED")
 ```
 
-## Task Workflow (Worktree Protocol)
+## Issue Workflow (Canonical)
+
+GitHub Issues are the canonical task queue (effective 2026-02-25 13:00 local).
+Use issue `Seq:` for ordering and `Depends on:` for dependency gating.
+`docs/TASKS.md` is a snapshot/report and may lag.
+
+### Queue and worktree commands (preferred)
+
+```bash
+make issue-queue                    # dependency-aware queue ordered by Seq
+make worktree-next-issue            # create worktree for next runnable issue
+make worktree                       # interactive queue/worktree/finish menu
+make worktree-create-issue ISSUE=23 # explicit issue
+make worktree-resume-issue          # resume existing linked issue worktree
+```
+
+### Push policy (mandatory)
+
+All pushes must be pre-validated. Use the enforced path:
+
+```bash
+make worktree-push-issue            # runs preflight + validate-pre-push, then pushes
+```
+
+Or, at minimum, run before a manual push:
+
+```bash
+make preflight-session
+make pre-validate-session           # fast path, no cdk synth
+```
+
+Install local hook once per clone:
+
+```bash
+make install-git-hooks              # installs .githooks/pre-push
+```
+
+The pre-push hook runs `make validate-pre-push` (fast path; no CDK synth).
+
+## Task Workflow (Legacy / Snapshot-Driven)
 
 Every task runs in its own git branch and for local dev (WSL) a worktree. This is so main stays clean and multiple tasks
 can be in flight at the same time without conflicts. When operating in Claude Code mobile / remote prompt mode, worktrees are not required.
+
+This legacy flow (`make task-*`) is still available during transition, but GitHub Issues are now canonical.
 
 ### Selecting a task
 

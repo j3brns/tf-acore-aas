@@ -1,352 +1,394 @@
 """
-tests/unit/test_dev_bootstrap.py — Idempotency tests for dev-bootstrap.py.
+tests/unit/test_dev_bootstrap.py — Tests for scripts/dev-bootstrap.py
 
-Key assertion (per TASK-015 spec):
-    Running dev-bootstrap.py twice must produce the same set of records
-    with no duplicates.
+Validates:
+  - All DynamoDB tables are created on first run
+  - Tenant, agent, and tool fixture records are seeded correctly
+  - SSM parameters are seeded correctly
+  - .env.test is written with expected keys and values
+  - Idempotency: running twice produces no duplicate records (same item counts)
+  - JWT fetch failure: bootstrap still completes, .env.test written with empty JWTs
 
-All AWS calls are intercepted by moto's mock_aws context.  No LocalStack
-instance is required.
+Test requirement (TASK-015): run twice, verify no duplicate records.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
-from typing import Any
+from unittest.mock import MagicMock, patch
 
 import boto3
-import pytest
 from moto import mock_aws
 
-# ---------------------------------------------------------------------------
-# Module loader
-# ---------------------------------------------------------------------------
 
-
-def _load_bootstrap() -> Any:
+def _load_bootstrap_module() -> object:
+    """Load scripts/dev-bootstrap.py as a Python module via importlib."""
     repo_root = Path(__file__).resolve().parents[2]
     spec = importlib.util.spec_from_file_location(
-        "dev_bootstrap",
-        repo_root / "scripts" / "dev-bootstrap.py",
+        "dev_bootstrap", repo_root / "scripts" / "dev-bootstrap.py"
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    sys.modules["dev_bootstrap"] = module
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
 
 
-@pytest.fixture(scope="module")
-def bootstrap_module() -> Any:
-    """Load dev-bootstrap.py once for the test module."""
-    return _load_bootstrap()
+bootstrap = _load_bootstrap_module()
+
+_REGION = "eu-west-2"
+_EXPECTED_TABLE_NAMES = {d["TableName"] for d in bootstrap.TABLE_DEFINITIONS}  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
-# Environment fixture — sets required env vars for every test
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Inject the environment variables that dev-bootstrap.py requires.
+def _make_aws_clients() -> tuple[object, object, object]:
+    """Return moto-backed DynamoDB client, DynamoDB resource, and SSM client."""
+    ddb_client = boto3.client("dynamodb", region_name=_REGION)
+    ddb_resource = boto3.resource("dynamodb", region_name=_REGION)
+    ssm_client = boto3.client("ssm", region_name=_REGION)
+    return ddb_client, ddb_resource, ssm_client
 
-    LOCALSTACK_ENDPOINT is deliberately NOT set here so that boto3 uses its
-    default endpoint URL — this allows moto's mock_aws to intercept all calls
-    without a real LocalStack process.  The production dev flow sets
-    LOCALSTACK_ENDPOINT=http://localhost:4566 via .env.local / Makefile.
-    """
-    monkeypatch.setenv("AWS_REGION", "eu-west-2")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-2")
-    monkeypatch.delenv("LOCALSTACK_ENDPOINT", raising=False)
+
+def _scan_table(ddb_resource: object, table_name: str) -> list[dict]:
+    """Scan all items from a DynamoDB table and return them."""
+    return ddb_resource.Table(table_name).scan()["Items"]  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
-# Helper — scan all items from a DynamoDB table via the mocked resource
+# Table creation
 # ---------------------------------------------------------------------------
 
 
-def _scan_table(table_name: str) -> list[dict[str, Any]]:
-    dynamodb = boto3.resource("dynamodb", region_name="eu-west-2")
-    table = dynamodb.Table(table_name)
-    return table.scan()["Items"]
+@mock_aws
+def test_ensure_tables_creates_all_tables() -> None:
+    ddb_client, _, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    tables = set(ddb_client.list_tables()["TableNames"])  # type: ignore[union-attr]
+    assert _EXPECTED_TABLE_NAMES <= tables
+
+
+@mock_aws
+def test_ensure_tables_is_idempotent() -> None:
+    """Calling ensure_tables twice must not raise and must not duplicate tables."""
+    ddb_client, _, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    tables = [t for t in ddb_client.list_tables()["TableNames"] if t.startswith("platform-")]  # type: ignore[union-attr]
+    assert len(tables) == len(bootstrap.TABLE_DEFINITIONS)  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
-# Idempotency tests — the core TASK-015 requirement
+# Tenant seeding
 # ---------------------------------------------------------------------------
 
 
-class TestIdempotency:
-    """Running dev-bootstrap twice must not create duplicate DynamoDB records."""
+@mock_aws
+def test_seed_tenants_creates_two_records() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-tenants")
+    assert len(items) == 2
 
-    def test_no_duplicate_tenants(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """Exactly two tenant records exist after two bootstrap runs."""
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-            bootstrap_module.run(env_test_path=env_test)
 
-            items = _scan_table("platform-tenants")
+@mock_aws
+def test_seed_tenants_correct_tiers() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
+    items = {item["tenant_id"]: item for item in _scan_table(ddb_resource, "platform-tenants")}
+    assert items["t-basic-001"]["tier"] == "basic"
+    assert items["t-premium-001"]["tier"] == "premium"
 
-        pks = {item["PK"] for item in items}
-        assert pks == {"TENANT#t-basic-001", "TENANT#t-premium-001"}
-        assert len(items) == 2, f"Expected 2 tenant records, got {len(items)}"
 
-    def test_no_duplicate_agents(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """Exactly one agent record exists after two bootstrap runs."""
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-            count_after_first = len(_scan_table("platform-agents"))
+@mock_aws
+def test_seed_tenants_both_active() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-tenants")
+    assert all(item["status"] == "active" for item in items)
 
-            bootstrap_module.run(env_test_path=env_test)
-            count_after_second = len(_scan_table("platform-agents"))
 
-        assert count_after_first == count_after_second
-        assert count_after_first == 1
+@mock_aws
+def test_seed_tenants_idempotent_no_duplicates() -> None:
+    """Running seed_tenants twice must not create duplicate records."""
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
+    bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-tenants")
+    assert len(items) == 2
 
-    def test_no_duplicate_tools(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """Exactly two tool records exist after two bootstrap runs."""
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-            count_after_first = len(_scan_table("platform-tools"))
 
-            bootstrap_module.run(env_test_path=env_test)
-            count_after_second = len(_scan_table("platform-tools"))
+# ---------------------------------------------------------------------------
+# Agent seeding
+# ---------------------------------------------------------------------------
 
-        assert count_after_first == count_after_second
-        assert count_after_first == 2
 
-    def test_jwt_secret_stable_across_runs(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """The JWT signing secret is created once and reused on subsequent runs.
+@mock_aws
+def test_seed_agents_creates_echo_agent() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_agents(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-agents")
+    assert len(items) == 1
+    assert items[0]["agent_name"] == "echo-agent"
+    assert items[0]["version"] == "1.0.0"
 
-        If a new secret were generated on every run the JWTs in .env.test
-        would change on each bootstrap, breaking any in-flight test sessions.
-        """
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-            jwt_first = (tmp_path / ".env.test").read_text()
 
-            bootstrap_module.run(env_test_path=env_test)
-            jwt_second = (tmp_path / ".env.test").read_text()
+@mock_aws
+def test_seed_agents_idempotent_no_duplicates() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_agents(ddb_resource)  # type: ignore[attr-defined]
+    bootstrap.seed_agents(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-agents")
+    assert len(items) == 1
 
-        # The JWT values in .env.test must be identical between runs
-        def _extract_jwt(content: str, key: str) -> str:
-            for line in content.splitlines():
-                if line.startswith(f"{key}="):
-                    return line.split("=", 1)[1]
-            raise AssertionError(f"{key} not found in .env.test")
 
-        assert _extract_jwt(jwt_first, "BASIC_TENANT_JWT") == _extract_jwt(
-            jwt_second, "BASIC_TENANT_JWT"
+# ---------------------------------------------------------------------------
+# Tool seeding
+# ---------------------------------------------------------------------------
+
+
+@mock_aws
+def test_seed_tools_creates_echo_tool() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_tools(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-tools")
+    assert len(items) == 1
+    assert items[0]["tool_name"] == "echo"
+
+
+@mock_aws
+def test_seed_tools_idempotent_no_duplicates() -> None:
+    ddb_client, ddb_resource, _ = _make_aws_clients()
+    bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
+    bootstrap.seed_tools(ddb_resource)  # type: ignore[attr-defined]
+    bootstrap.seed_tools(ddb_resource)  # type: ignore[attr-defined]
+    items = _scan_table(ddb_resource, "platform-tools")
+    assert len(items) == 1
+
+
+# ---------------------------------------------------------------------------
+# SSM parameter seeding
+# ---------------------------------------------------------------------------
+
+
+@mock_aws
+def test_seed_ssm_runtime_region() -> None:
+    _, _, ssm_client = _make_aws_clients()
+    bootstrap.seed_ssm_parameters(  # type: ignore[attr-defined]
+        ssm_client,
+        mock_jwks_url="http://localhost:8766",
+        localstack_endpoint="http://localhost:4566",
+    )
+    resp = ssm_client.get_parameter(Name="/platform/config/runtime-region")  # type: ignore[union-attr]
+    assert resp["Parameter"]["Value"] == "eu-west-1"
+
+
+@mock_aws
+def test_seed_ssm_jwks_url() -> None:
+    _, _, ssm_client = _make_aws_clients()
+    bootstrap.seed_ssm_parameters(  # type: ignore[attr-defined]
+        ssm_client,
+        mock_jwks_url="http://localhost:8766",
+        localstack_endpoint="http://localhost:4566",
+    )
+    resp = ssm_client.get_parameter(Name="/platform/config/jwks-url")  # type: ignore[union-attr]
+    assert resp["Parameter"]["Value"] == "http://localhost:8766/.well-known/jwks.json"
+
+
+@mock_aws
+def test_seed_ssm_api_audience() -> None:
+    _, _, ssm_client = _make_aws_clients()
+    bootstrap.seed_ssm_parameters(  # type: ignore[attr-defined]
+        ssm_client,
+        mock_jwks_url="http://localhost:8766",
+        localstack_endpoint="http://localhost:4566",
+    )
+    resp = ssm_client.get_parameter(Name="/platform/config/api-audience")  # type: ignore[union-attr]
+    assert resp["Parameter"]["Value"] == "api://platform-local"
+
+
+@mock_aws
+def test_seed_ssm_pii_patterns_is_valid_json() -> None:
+    _, _, ssm_client = _make_aws_clients()
+    bootstrap.seed_ssm_parameters(  # type: ignore[attr-defined]
+        ssm_client,
+        mock_jwks_url="http://localhost:8766",
+        localstack_endpoint="http://localhost:4566",
+    )
+    resp = ssm_client.get_parameter(Name="/platform/gateway/pii-patterns/default")  # type: ignore[union-attr]
+    patterns = json.loads(resp["Parameter"]["Value"])
+    assert isinstance(patterns, list)
+    assert len(patterns) > 0
+
+
+@mock_aws
+def test_seed_ssm_idempotent() -> None:
+    """Seeding SSM parameters twice must not raise."""
+    _, _, ssm_client = _make_aws_clients()
+    for _ in range(2):
+        bootstrap.seed_ssm_parameters(  # type: ignore[attr-defined]
+            ssm_client,
+            mock_jwks_url="http://localhost:8766",
+            localstack_endpoint="http://localhost:4566",
         )
-        assert _extract_jwt(jwt_first, "PREMIUM_TENANT_JWT") == _extract_jwt(
-            jwt_second, "PREMIUM_TENANT_JWT"
+    resp = ssm_client.get_parameter(Name="/platform/config/env")  # type: ignore[union-attr]
+    assert resp["Parameter"]["Value"] == "local"
+
+
+# ---------------------------------------------------------------------------
+# JWT fetching
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_jwts_returns_empty_when_service_unavailable() -> None:
+    """When mock-jwks is not reachable, fetch_jwts must return an empty dict."""
+    import urllib.error
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.URLError("Connection refused"),
+    ):
+        tokens = bootstrap.fetch_jwts("http://127.0.0.1:19997")  # type: ignore[attr-defined]
+    assert tokens == {}
+
+
+def test_fetch_jwts_returns_three_tokens_when_service_available() -> None:
+    """Mock the HTTP call and verify all three roles receive a token."""
+
+    def _make_response() -> MagicMock:
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(
+            {"access_token": "mock-jwt", "token_type": "Bearer", "expires_in": 86400}
+        ).encode()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    with patch("urllib.request.urlopen", side_effect=[_make_response() for _ in range(3)]):
+        tokens = bootstrap.fetch_jwts("http://localhost:8766")  # type: ignore[attr-defined]
+
+    assert set(tokens.keys()) == {"basic", "premium", "admin"}
+    assert all(v == "mock-jwt" for v in tokens.values())
+
+
+# ---------------------------------------------------------------------------
+# .env.test writing
+# ---------------------------------------------------------------------------
+
+
+def test_write_env_test_with_tokens(tmp_path: Path) -> None:
+    env_test_path = tmp_path / ".env.test"
+    tokens = {"basic": "jwt-basic", "premium": "jwt-premium", "admin": "jwt-admin"}
+    bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
+    content = env_test_path.read_text()
+    assert "TEST_JWT_BASIC=jwt-basic" in content
+    assert "TEST_JWT_PREMIUM=jwt-premium" in content
+    assert "TEST_JWT_ADMIN=jwt-admin" in content
+    assert "AWS_REGION=eu-west-2" in content
+    assert "LOCALSTACK_ENDPOINT=http://localhost:4566" in content
+
+
+def test_write_env_test_without_tokens_writes_empty_values(tmp_path: Path) -> None:
+    env_test_path = tmp_path / ".env.test"
+    bootstrap.write_env_test({}, env_test_path)  # type: ignore[attr-defined]
+    content = env_test_path.read_text()
+    assert "TEST_JWT_BASIC=" in content
+    assert "TEST_JWT_PREMIUM=" in content
+    assert "mock-jwks service was not running" in content
+
+
+def test_write_env_test_is_idempotent(tmp_path: Path) -> None:
+    """Writing .env.test twice must produce stable output (no appending)."""
+    env_test_path = tmp_path / ".env.test"
+    tokens = {"basic": "jwt-b", "premium": "jwt-p", "admin": "jwt-a"}
+    bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
+    first_content = env_test_path.read_text()
+    bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
+    second_content = env_test_path.read_text()
+    assert first_content == second_content
+
+
+# ---------------------------------------------------------------------------
+# Full end-to-end idempotency (TASK-015 requirement: run twice, no duplicates)
+# ---------------------------------------------------------------------------
+
+
+@mock_aws
+def test_run_bootstrap_full_first_run(tmp_path: Path) -> None:
+    """run_bootstrap produces all expected records on first run."""
+    import urllib.error
+
+    ddb_client = boto3.client("dynamodb", region_name=_REGION)
+    ddb_resource = boto3.resource("dynamodb", region_name=_REGION)
+    ssm_client = boto3.client("ssm", region_name=_REGION)
+    env_test_path = tmp_path / ".env.test"
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.URLError("Connection refused"),
+    ):
+        bootstrap.run_bootstrap(  # type: ignore[attr-defined]
+            ddb_client=ddb_client,
+            ddb_resource=ddb_resource,
+            ssm_client=ssm_client,
+            env_test_path=env_test_path,
         )
 
-    # ---------------------------------------------------------------------------
-    # Table creation tests
-    # ---------------------------------------------------------------------------
-
-    def test_created_at_not_overwritten_on_second_run(
-        self, bootstrap_module: Any, tmp_path: Path
-    ) -> None:
-        """Tenant createdAt must be preserved across repeated bootstrap runs.
-
-        If the conditional put is accidentally changed to an unconditional put,
-        createdAt would be refreshed on every run, losing the original value.
-        """
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-            items_first = _scan_table("platform-tenants")
-            created_at_first = {i["PK"]: i["createdAt"] for i in items_first}
-
-            bootstrap_module.run(env_test_path=env_test)
-            items_second = _scan_table("platform-tenants")
-            created_at_second = {i["PK"]: i["createdAt"] for i in items_second}
-
-        assert created_at_first == created_at_second, (
-            "createdAt was overwritten on second bootstrap run — "
-            "conditional put is not working correctly"
-        )
+    assert len(_scan_table(ddb_resource, "platform-tenants")) == 2
+    assert len(_scan_table(ddb_resource, "platform-agents")) == 1
+    assert len(_scan_table(ddb_resource, "platform-tools")) == 1
+    assert env_test_path.exists()
 
 
-class TestTableCreation:
-    """All required DynamoDB tables are created."""
+@mock_aws
+def test_run_bootstrap_twice_no_duplicate_records(tmp_path: Path) -> None:
+    """TASK-015 acceptance: run twice, verify no duplicate records in any table."""
+    import urllib.error
 
-    def test_all_tables_created(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        expected = {
-            "platform-tenants",
-            "platform-agents",
-            "platform-invocations",
-            "platform-jobs",
-            "platform-sessions",
-            "platform-tools",
-            "platform-ops-locks",
+    ddb_client = boto3.client("dynamodb", region_name=_REGION)
+    ddb_resource = boto3.resource("dynamodb", region_name=_REGION)
+    ssm_client = boto3.client("ssm", region_name=_REGION)
+    env_test_path = tmp_path / ".env.test"
+
+    run_kwargs = {
+        "ddb_client": ddb_client,
+        "ddb_resource": ddb_resource,
+        "ssm_client": ssm_client,
+        "env_test_path": env_test_path,
+    }
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.URLError("Connection refused"),
+    ):
+        bootstrap.run_bootstrap(**run_kwargs)  # type: ignore[attr-defined]
+        counts_after_first = {
+            "tenants": len(_scan_table(ddb_resource, "platform-tenants")),
+            "agents": len(_scan_table(ddb_resource, "platform-agents")),
+            "tools": len(_scan_table(ddb_resource, "platform-tools")),
         }
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            dynamodb = boto3.client("dynamodb", region_name="eu-west-2")
-            response = dynamodb.list_tables()
-            tables = set(response["TableNames"])
 
-        assert expected.issubset(tables), f"Missing tables: {expected - tables}"
-
-    def test_table_creation_idempotent(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """Running bootstrap twice must not raise on existing tables."""
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            # Second run must not raise ResourceInUseException
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-
-
-# ---------------------------------------------------------------------------
-# Tenant fixture content tests
-# ---------------------------------------------------------------------------
-
-
-class TestTenantFixtures:
-    """Seeded tenant records have the correct attributes."""
-
-    def test_basic_tenant_attributes(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            items = _scan_table("platform-tenants")
-
-        basic = next(i for i in items if i["PK"] == "TENANT#t-basic-001")
-        assert basic["SK"] == "METADATA"
-        assert basic["tier"] == "basic"
-        assert basic["status"] == "active"
-        assert basic["tenantId"] == "t-basic-001"
-        assert basic["appId"] == "app-basic-001"
-
-    def test_premium_tenant_attributes(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            items = _scan_table("platform-tenants")
-
-        premium = next(i for i in items if i["PK"] == "TENANT#t-premium-001")
-        assert premium["tier"] == "premium"
-        assert premium["status"] == "active"
-        assert premium["tenantId"] == "t-premium-001"
-
-
-# ---------------------------------------------------------------------------
-# SSM parameter tests
-# ---------------------------------------------------------------------------
-
-
-class TestSsmParameters:
-    """Required SSM parameters are seeded with correct values."""
-
-    def _get_param(self, name: str) -> str:
-        ssm = boto3.client("ssm", region_name="eu-west-2")
-        return ssm.get_parameter(Name=name)["Parameter"]["Value"]
-
-    def test_runtime_region_seeded(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            value = self._get_param("/platform/config/runtime-region")
-        assert value == "eu-west-1"
-
-    def test_environment_seeded(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            value = self._get_param("/platform/config/environment")
-        assert value == "local"
-
-    def test_jwks_url_points_to_mock(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            value = self._get_param("/platform/auth/jwks-url")
-        assert "localhost:8766" in value
-        assert value.endswith("/.well-known/jwks.json")
-
-    def test_jwt_secret_seeded(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            value = self._get_param("/platform/local/jwt-secret")
-        # Secret is a 64-char hex string (32 bytes)
-        assert len(value) == 64
-        assert all(c in "0123456789abcdef" for c in value)
-
-    def test_localstack_endpoint_seeded(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """The localstack endpoint SSM param is seeded (defaults to localhost:4566)."""
-        with mock_aws():
-            bootstrap_module.run(env_test_path=tmp_path / ".env.test")
-            value = self._get_param("/platform/local/localstack-endpoint")
-        # In test mode LOCALSTACK_ENDPOINT is not set; the seed function writes
-        # the effective endpoint (None → default "http://localhost:4566")
-        assert value  # non-empty
-
-
-# ---------------------------------------------------------------------------
-# .env.test content tests
-# ---------------------------------------------------------------------------
-
-
-class TestEnvTestFile:
-    """The .env.test file has the required keys and well-formed values."""
-
-    def _parse_env(self, path: Path) -> dict[str, str]:
-        result = {}
-        for line in path.read_text().splitlines():
-            if line and not line.startswith("#") and "=" in line:
-                key, _, val = line.partition("=")
-                result[key] = val
-        return result
-
-    def test_required_keys_present(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-
-        env = self._parse_env(env_test)
-        required = {
-            "BASIC_TENANT_ID",
-            "BASIC_APP_ID",
-            "BASIC_TENANT_JWT",
-            "PREMIUM_TENANT_ID",
-            "PREMIUM_APP_ID",
-            "PREMIUM_TENANT_JWT",
-            "AWS_REGION",
-            "LOCALSTACK_ENDPOINT",
+        bootstrap.run_bootstrap(**run_kwargs)  # type: ignore[attr-defined]
+        counts_after_second = {
+            "tenants": len(_scan_table(ddb_resource, "platform-tenants")),
+            "agents": len(_scan_table(ddb_resource, "platform-agents")),
+            "tools": len(_scan_table(ddb_resource, "platform-tools")),
         }
-        missing = required - set(env.keys())
-        assert not missing, f"Missing keys in .env.test: {missing}"
 
-    def test_tenant_ids_correct(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-
-        env = self._parse_env(env_test)
-        assert env["BASIC_TENANT_ID"] == "t-basic-001"
-        assert env["PREMIUM_TENANT_ID"] == "t-premium-001"
-
-    def test_jwts_are_three_part_tokens(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        """JWTs have three base64url-encoded parts separated by dots."""
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-
-        env = self._parse_env(env_test)
-        for key in ("BASIC_TENANT_JWT", "PREMIUM_TENANT_JWT"):
-            parts = env[key].split(".")
-            assert len(parts) == 3, f"{key} is not a valid JWT (expected 3 parts)"
-
-    def test_aws_region_written(self, bootstrap_module: Any, tmp_path: Path) -> None:
-        env_test = tmp_path / ".env.test"
-        with mock_aws():
-            bootstrap_module.run(env_test_path=env_test)
-
-        env = self._parse_env(env_test)
-        assert env["AWS_REGION"] == "eu-west-2"
+    assert counts_after_second == counts_after_first
+    assert counts_after_second["tenants"] == 2
+    assert counts_after_second["agents"] == 1
+    assert counts_after_second["tools"] == 1

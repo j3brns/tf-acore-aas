@@ -1,19 +1,49 @@
+# Scratch / local-only tooling
+.scratch/
+
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
+.python-version
 .venv/
+.tox/
+.nox/
+.hypothesis/
+.pyre/
 .build/
 *.egg-info/
 dist/
 *.egg
+.ruff_cache/
+pip-wheel-metadata/
 
 # Node
 node_modules/
 dist/
 .npm/
+.pnpm-store/
+.yarn/
+.next/
+.turbo/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
 
-# CDK
+# Terraform / CDK
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan-*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+terraform/.terraform/
 infra/cdk/cdk.out/
 infra/cdk/dist/
 
@@ -21,10 +51,13 @@ infra/cdk/dist/
 .env.local
 .env.test
 *.env
+.env.*
+!.env.example
 
 # Test artefacts
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .mypy_cache/
 
@@ -32,6 +65,7 @@ htmlcov/
 .idea/
 .vscode/
 *.swp
+*.swo
 
 # OS
 .DS_Store
@@ -39,3 +73,11 @@ Thumbs.db
 
 # Build artefacts
 *.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Local logs / temp files
+*.log
+*.tmp
+*.temp

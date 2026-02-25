@@ -23,6 +23,10 @@ make dev-invoke               # Confirms echo-agent works end-to-end locally
 See docs/development/LOCAL-SETUP.md for full setup instructions.
 See docs/bootstrap-guide.md for first-time environment deployment.
 
+Task tracking source of truth (effective 2026-02-25 13:00 local): GitHub Issues
+(`Seq:` + `Depends on:` in issue bodies). `docs/TASKS.md` is now a snapshot/report.
+Issue queue: https://github.com/j3brns/tf-acore-aas/issues
+
 ## Project Structure
 
 ```
@@ -30,10 +34,11 @@ platform/
 ├── CLAUDE.md                  AI assistant rules — read first every session
 ├── README.md                  This file
 ├── Makefile                   All development and operations commands
+├── .githooks/                 Repo-local Git hooks (fast pre-push validation)
 ├── .env.example               Required environment variable template
 ├── docs/
 │   ├── PLAN.md                Phased delivery plan and milestones
-│   ├── TASKS.md               Atomic task list for Claude Code sessions
+│   ├── TASKS.md               Historical task snapshot/report (Issues are canonical)
 │   ├── ARCHITECTURE.md        System design, data flows, constraints
 │   ├── bootstrap-guide.md     Day-zero platform deployment
 │   ├── entra-setup.md         Entra app registration instructions
@@ -68,6 +73,15 @@ make dev                      # Start environment
 make test-unit                # Run all unit tests
 make validate-local           # fast local checks: ruff + pyright + tsc + cdk synth + detect-secrets (diff)
 make validate-local-full      # same, but full-repo secret scan
+make install-git-hooks        # installs repo pre-push hook (fast validation, no cdk synth)
+
+# Issue-driven worktree flow (canonical)
+make issue-queue              # show queue ordered by Seq (dependency-aware)
+make worktree-next-issue      # create worktree for next runnable issue
+make worktree                 # interactive issue worktree menu
+make preflight-session        # worktree branch/issue policy checks
+make pre-validate-session     # fast pre-push validation (no cdk synth)
+make worktree-push-issue      # push branch with preflight + pre-validate enforced
 
 # Agent developer inner loop
 make agent-push AGENT=my-agent ENV=dev    # Push agent, fast path <30s if deps cached
@@ -101,7 +115,8 @@ make failover-lock-acquire && make infra-set-runtime-region REGION=eu-central-1 
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Delivery Plan](docs/PLAN.md)
-- [Task List](docs/TASKS.md)
+- [Task Snapshot](docs/TASKS.md)
+- [GitHub Issues (canonical task queue)](https://github.com/j3brns/tf-acore-aas/issues)
 - [Bootstrap Guide](docs/bootstrap-guide.md)
 - [Operator Runbooks](docs/operations/)
 - [Agent Developer Guide](docs/development/AGENT-DEVELOPER-GUIDE.md)

@@ -1,5 +1,16 @@
 # TASKS.md — Atomic Task List for Claude Code Sessions
 
+## Source of Truth Notice (Issue Novation)
+
+As of **2026-02-25 13:00** (local time), task tracking is novated to GitHub Issues
+for this repository. GitHub Issues are now the canonical source of truth for task
+status, sequencing (`Seq:`), and dependencies (`Depends on:`).
+
+GitHub Issues: https://github.com/j3brns/tf-acore-aas/issues
+
+This file remains useful as a historical snapshot/report/export and may lag behind
+live issue state.
+
 ## How To Use This File
 
 Each task is a single Claude Code session. Before starting any task:
@@ -129,12 +140,13 @@ Nothing in Phase 2 starts until written confirmation.
 
 ## Phase 2 — Local Development Loop
 
-[~] TASK-014  Write docker-compose.yml
+[x] TASK-014  Write docker-compose.yml
               Services: LocalStack, mock AgentCore Runtime, mock JWKS endpoint
               Mock Runtime: FastAPI on :8765, POST /invocations, GET /ping
               Returns canned streaming response. Logs tenant context headers.
               Mock JWKS: FastAPI on :8766, issues test JWTs, serves /.well-known/jwks.json
               ADRs: none | Tests: make dev must start cleanly
+              Done: 2026-02-25, commit 38a6dd5
 
 [x] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
@@ -175,7 +187,7 @@ Nothing in Phase 2 starts until written confirmation.
               Assumes tenant execution role via STS
               ADRs: ADR-005, ADR-009, ADR-010 | Tests: all three modes mocked
 
-[ ] TASK-019  Implement full Makefile
+[x] TASK-019  Implement full Makefile
               All targets from Makefile skeleton now actually work
               make dev, make dev-stop, make test-unit, make test-int
               make validate-local, make bootstrap, make worktree-*

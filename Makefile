@@ -4,7 +4,8 @@
 # =============================================================================
 
 .PHONY: help bootstrap ensure-tools validate-local validate-local-full
-.PHONY: validate-local-prereqs validate-python validate-cdk validate-secrets-diff validate-secrets-full
+.PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-synth
+.PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
 .PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
@@ -23,6 +24,9 @@
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-async-runner logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
+.PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
+.PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
+.PHONY: agent-handoff install-git-hooks hooks-status
 
 ENV ?= dev
 
@@ -111,6 +115,14 @@ validate-local-full: validate-local-prereqs
 	@$(MAKE) --no-print-directory validate-secrets-full
 	@echo "==> Validation passed"
 
+## validate-pre-push: Pre-push validation (skips cdk synth; repo should already synth clean)
+validate-pre-push: validate-local-prereqs
+	@echo "==> Running pre-push validation (no cdk synth)"
+	@$(MAKE) --no-print-directory validate-python
+	@$(MAKE) --no-print-directory validate-cdk-ts
+	@$(MAKE) --no-print-directory validate-secrets-push
+	@echo "==> Pre-push validation passed"
+
 ## validate-local-prereqs: Minimal local tool checks (no auto-install)
 validate-local-prereqs:
 	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not found. Run: make ensure-tools" && exit 1)
@@ -126,7 +138,15 @@ validate-python:
 
 ## validate-cdk: TypeScript compile and CDK synth
 validate-cdk:
+	@$(MAKE) --no-print-directory validate-cdk-ts
+	@$(MAKE) --no-print-directory validate-cdk-synth
+
+## validate-cdk-ts: TypeScript compile only (no synth)
+validate-cdk-ts:
 	cd infra/cdk && npx --no-install tsc --noEmit
+
+## validate-cdk-synth: CDK synth only
+validate-cdk-synth:
 	cd infra/cdk && npx --no-install cdk synth --context env=dev --quiet > /dev/null
 
 ## validate-secrets-diff: detect-secrets on changed files only (staged, unstaged, untracked)
@@ -147,6 +167,30 @@ validate-secrets-diff:
 		[ -f "$$f" ] && printf '%s\0' "$$f"; \
 	done | xargs -0 -r uv run detect-secrets-hook --baseline .secrets.baseline; \
 	echo "==> detect-secrets diff scan passed"
+
+## validate-secrets-push: detect-secrets on files in commits that will be pushed (fast pre-push path)
+validate-secrets-push:
+	@echo "==> detect-secrets (files in commits-to-push)"
+	@files="$$( \
+		upstream="$$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"; \
+		if [ -n "$$upstream" ]; then \
+			git diff --name-only --diff-filter=ACMR "$$upstream...HEAD"; \
+		elif git show-ref --verify --quiet refs/remotes/origin/main; then \
+			git diff --name-only --diff-filter=ACMR origin/main...HEAD; \
+		elif git rev-parse --verify --quiet HEAD~1 >/dev/null; then \
+			git diff --name-only --diff-filter=ACMR HEAD~1...HEAD; \
+		fi; \
+	)"; \
+	files="$$(printf '%s\n' "$$files" | sort -u | grep -Ev '(^|/)(package-lock\.json)$$|\.(lock|log)$$' || true)"; \
+	if [ -z "$$files" ]; then \
+		echo "==> detect-secrets: no commits-to-push files detected; falling back to changed-files scan"; \
+		$(MAKE) --no-print-directory validate-secrets-diff; \
+		exit 0; \
+	fi; \
+	printf '%s\n' "$$files" | while IFS= read -r f; do \
+		[ -f "$$f" ] && printf '%s\0' "$$f"; \
+	done | xargs -0 -r uv run detect-secrets-hook --baseline .secrets.baseline; \
+	echo "==> detect-secrets push scan passed"
 
 ## validate-secrets-full: detect-secrets on all tracked + untracked files
 validate-secrets-full:
@@ -553,3 +597,126 @@ task-finish:
 task-prompt:
 	@test -n "$(TASK)" || (echo "ERROR: TASK required. Usage: make task-prompt TASK=TASK-011" && exit 1)
 	uv run python scripts/task.py prompt $(TASK)
+
+# =============================================================================
+# ISSUE-DRIVEN WORKTREE FLOW (GitHub Issues SoT)
+# =============================================================================
+
+## issue-queue: Show issue queue ordered by Seq (with dependency blocking)
+## Usage: make issue-queue [QUEUE_MODE=auto|ready|open-task] [STREAM=a] [LIMIT=20]
+issue-queue:
+	uv run python scripts/worktree_issues.py issue-queue \
+		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
+		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(LIMIT),--limit $(LIMIT),)
+
+## worktree: Interactive issue-driven worktree menu (Seq/Depends on aware)
+## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a]
+worktree:
+	uv run python scripts/worktree_issues.py menu \
+		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
+		$(if $(STREAM),--stream-label "$(STREAM)",)
+
+## worktree-next-issue: Create a worktree for the next runnable issue in the queue
+## Usage: make worktree-next-issue [QUEUE_MODE=auto|ready|open-task] [DRY_RUN=1] [OPEN_SHELL=1]
+worktree-next-issue:
+	uv run python scripts/worktree_issues.py worktree-next \
+		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
+		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(DRY_RUN),--dry-run,) \
+		$(if $(OPEN_SHELL),--open-shell,) \
+		$(if $(NO_CLAIM),--no-claim,) \
+		$(if $(NO_PREFLIGHT),--no-preflight,) \
+		$(if $(ALLOW_BLOCKED),--allow-blocked,) \
+		$(if $(AGENT),--agent "$(AGENT)",) \
+		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
+		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(PRINT_ONLY),--print-only,)
+
+## worktree-create-issue: Create a worktree for a specific issue number
+## Usage: make worktree-create-issue ISSUE=23 [DRY_RUN=1] [OPEN_SHELL=1]
+worktree-create-issue:
+	@test -n "$(ISSUE)" || (echo "ERROR: ISSUE required. Usage: make worktree-create-issue ISSUE=23" && exit 1)
+	uv run python scripts/worktree_issues.py worktree-create \
+		--issue $(ISSUE) \
+		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
+		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(DRY_RUN),--dry-run,) \
+		$(if $(OPEN_SHELL),--open-shell,) \
+		$(if $(NO_CLAIM),--no-claim,) \
+		$(if $(NO_PREFLIGHT),--no-preflight,) \
+		$(if $(ALLOW_BLOCKED),--allow-blocked,) \
+		$(if $(AGENT),--agent "$(AGENT)",) \
+		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
+		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(PRINT_ONLY),--print-only,) \
+		$(if $(SCOPE),--scope "$(SCOPE)",) \
+		$(if $(SLUG),--slug "$(SLUG)",) \
+		$(if $(NAME),--name "$(NAME)",) \
+		$(if $(BASE_REF),--base-ref "$(BASE_REF)",) \
+		$(if $(BASE_DIR),--base-dir "$(BASE_DIR)",)
+
+## worktree-resume-issue: Resume/select a linked issue worktree (preflight + optional shell/command)
+## Usage: make worktree-resume-issue [OPEN_SHELL=1] [CMD='make test-unit']
+worktree-resume-issue:
+	uv run python scripts/worktree_issues.py worktree-resume \
+		$(if $(WT_PATH),--path "$(WT_PATH)",) \
+		$(if $(NO_PREFLIGHT),--no-preflight,) \
+		$(if $(CMD),--command "$(CMD)",) \
+		$(if $(OPEN_SHELL),--open-shell,) \
+		$(if $(AGENT),--agent "$(AGENT)",) \
+		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
+		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(PRINT_ONLY),--print-only,)
+
+## preflight-session: Run issue-worktree preflight checks for current worktree
+preflight-session:
+	uv run python scripts/worktree_issues.py preflight
+
+## pre-validate-session: Run enforced pre-push validation (skips cdk synth)
+## Usage: make pre-validate-session [WT_PATH=../worktrees/wt23]
+pre-validate-session:
+	uv run python scripts/worktree_issues.py pre-validate \
+		$(if $(WT_PATH),--path "$(WT_PATH)",)
+
+## worktree-push-issue: Push current issue worktree branch (preflight + pre-validate enforced)
+## Usage: make worktree-push-issue [WT_PATH=../worktrees/wt23] [DRY_RUN=1]
+worktree-push-issue:
+	uv run python scripts/worktree_issues.py push-branch \
+		$(if $(WT_PATH),--path "$(WT_PATH)",) \
+		$(if $(DRY_RUN),--dry-run,)
+
+## finish-worktree-summary: Show guided finish summary for current worktree
+## Usage: make finish-worktree-summary [WT_PATH=../worktrees/wt23]
+finish-worktree-summary:
+	uv run python scripts/worktree_issues.py finish-summary \
+		$(if $(WT_PATH),--path "$(WT_PATH)",)
+
+## finish-worktree-close: Close the current worktree issue after merge verification
+## Usage: make finish-worktree-close [WT_PATH=../worktrees/wt23] [FORCE=1]
+finish-worktree-close:
+	uv run python scripts/worktree_issues.py finish-close \
+		$(if $(WT_PATH),--path "$(WT_PATH)",) \
+		$(if $(FORCE),--force,)
+
+## agent-handoff: Print/launch agent command with agent selection and yolo modes for current path
+## Usage: make agent-handoff [AGENT=codex] [AGENT_MODE=yolo] [HANDOFF=print-only]
+agent-handoff:
+	uv run python scripts/worktree_issues.py agent-handoff \
+		$(if $(WT_PATH),--path "$(WT_PATH)",) \
+		$(if $(AGENT),--agent "$(AGENT)",) \
+		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
+		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(PRINT_ONLY),--print-only,)
+
+## install-git-hooks: Install repo-local Git hooks (pre-push runs fast pre-validation)
+install-git-hooks:
+	@git config core.hooksPath .githooks
+	@chmod +x .githooks/pre-push
+	@echo "==> Installed Git hooks (core.hooksPath=.githooks)"
+	@echo "==> pre-push will run: make validate-pre-push (no cdk synth)"
+
+## hooks-status: Show current hooksPath and installed repo hooks
+hooks-status:
+	@echo "core.hooksPath=$$(git config --get core.hooksPath || echo .git/hooks)"
+	@ls -la .githooks 2>/dev/null || echo "No .githooks directory present"
