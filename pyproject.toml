@@ -15,6 +15,7 @@ dev = [
     "aws-lambda-powertools>=3.3.0",
     "pytest>=8.0.0",
     "pytest-cov>=6.0.0",
+    "moto[dynamodb,s3]>=5.0.0",
     "data-access-lib",
 ]
 
