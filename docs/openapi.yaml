@@ -1,0 +1,1160 @@
+openapi: 3.1.0
+info:
+  title: Platform AaaS Northbound API
+  version: 0.1.0
+  summary: Multi-tenant Agent as a Service REST API
+  description: >
+    OpenAPI 3.1 contract for tenant-facing and operator-facing northbound routes.
+    This spec is the Phase 1 API contract and must be reviewed before route
+    implementation. REST API Gateway is used (ADR-003) to support usage plans,
+    per-method throttling, WAF association, and streaming responses.
+  contact:
+    name: Platform Engineering
+tags:
+  - name: Health
+    description: Health and readiness endpoints
+  - name: Agents
+    description: Agent discovery and invocation routes
+  - name: Tenants
+    description: Tenant management APIs
+  - name: Jobs
+    description: Async job polling APIs
+  - name: Webhooks
+    description: Webhook registration and lifecycle
+  - name: BFF
+    description: Thin backend-for-frontend endpoints
+servers:
+  - url: https://api.example.com
+    description: Production placeholder
+  - url: https://api.dev.example.com
+    description: Development placeholder
+security:
+  - BearerAuth: []
+  - SigV4Auth: []
+paths:
+  /v1/health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Health check
+      description: >
+        Returns platform health status suitable for load balancer / smoke checks.
+        May return degraded status when non-critical dependencies are unavailable.
+      security: []
+      responses:
+        "200":
+          description: Platform is reachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/agents:
+    get:
+      tags: [Agents]
+      operationId: listAgents
+      summary: List invokable agents
+      description: >
+        Returns agent metadata visible to the caller's tenant tier. Hidden or
+        disabled agents are omitted.
+      responses:
+        "200":
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/agents/{agentName}:
+    get:
+      tags: [Agents]
+      operationId: getAgent
+      summary: Get agent details
+      description: Returns agent metadata, supported versions, and invocation settings.
+      parameters:
+        - $ref: "#/components/parameters/AgentName"
+      responses:
+        "200":
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/agents/{agentName}/invoke:
+    post:
+      tags: [Agents]
+      operationId: invokeAgent
+      summary: Invoke an agent
+      description: >
+        Unified invoke route for sync, streaming, and async agents. The platform
+        reads the agent's declared invocation mode from the registry (ADR-005);
+        clients do not select mode at runtime. Response shape/content type depends
+        on the agent's configured mode.
+      parameters:
+        - $ref: "#/components/parameters/AgentName"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentInvokeRequest"
+      responses:
+        "200":
+          description: Sync or streaming agent response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentInvokeSyncResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream emitted for streaming agents
+        "202":
+          description: Async job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentInvokeAsyncAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+
+  /v1/tenants:
+    post:
+      tags: [Tenants]
+      operationId: createTenant
+      summary: Create tenant
+      description: >
+        Creates a tenant registry record and starts downstream provisioning
+        workflow. Admin/operator route.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantCreateRequest"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    get:
+      tags: [Tenants]
+      operationId: listTenants
+      summary: List tenants
+      description: >
+        Lists tenants visible to the caller. Platform admin/operator callers may
+        list all tenants. Non-admin tenant callers receive only their own tenant
+        record in the response.
+      parameters:
+        - in: query
+          name: status
+          description: Filter by tenant status
+          schema:
+            $ref: "#/components/schemas/TenantStatus"
+        - in: query
+          name: tier
+          description: Filter by tier
+          schema:
+            $ref: "#/components/schemas/TenantTier"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: nextToken
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tenant list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tenant"
+                  nextToken:
+                    type: [string, "null"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/tenants/{tenantId}:
+    get:
+      tags: [Tenants]
+      operationId: getTenant
+      summary: Get tenant
+      description: Retrieves a single tenant record by tenant identifier.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    patch:
+      tags: [Tenants]
+      operationId: updateTenant
+      summary: Update tenant
+      description: >
+        Admin/operator route for tier, budget, and status changes. Partial update.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantUpdateRequest"
+      responses:
+        "200":
+          description: Tenant updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      tags: [Tenants]
+      operationId: deleteTenant
+      summary: Soft-delete tenant
+      description: >
+        Marks tenant deleted with retention period; data is not immediately purged.
+        Admin/operator route.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "202":
+          description: Delete accepted / soft-delete scheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantDeleteAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/tenants/{tenantId}/audit-export:
+    get:
+      tags: [Tenants]
+      operationId: exportTenantAudit
+      summary: Export tenant audit data
+      description: >
+        Returns a presigned URL for a tenant audit export (data subject rights /
+        admin export workflow). Included in the northbound contract for future
+        implementation.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: Presigned audit export URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditExportResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/jobs/{jobId}:
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      summary: Get async job status
+      description: >
+        Polls async job status. When complete, may include a presigned result URL.
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/webhooks:
+    post:
+      tags: [Webhooks]
+      operationId: registerWebhook
+      summary: Register webhook callback
+      description: >
+        Registers a webhook callback URL for async job completion/failure events.
+        Delivery is signed with HMAC-SHA256. The webhook verification secret is
+        generated and stored server-side only and is not returned by this API.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookRegistrationRequest"
+      responses:
+        "201":
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRegistrationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/webhooks/{webhookId}:
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhook
+      summary: Deregister webhook callback
+      description: Deletes a previously registered webhook callback endpoint.
+      parameters:
+        - $ref: "#/components/parameters/WebhookId"
+      responses:
+        "204":
+          description: Webhook deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/bff/token-refresh:
+    post:
+      tags: [BFF]
+      operationId: refreshBffToken
+      summary: Refresh SPA scoped token
+      description: >
+        Thin BFF endpoint for Entra on-behalf-of token exchange. Does not invoke agents.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BffTokenRefreshRequest"
+      responses:
+        "200":
+          description: New scoped token returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BffTokenRefreshResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/bff/session-keepalive:
+    post:
+      tags: [BFF]
+      operationId: keepaliveSession
+      summary: Keep an AgentCore session active
+      description: >
+        Fire-and-forget keepalive ping for long-lived UI sessions.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BffSessionKeepaliveRequest"
+      responses:
+        "202":
+          description: Keepalive accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BffSessionKeepaliveAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Microsoft Entra OIDC access token
+    SigV4Auth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: >
+        AWS Signature Version 4 Authorization header. SigV4 callers must also send
+        x-amz-date and x-tenant-id headers.
+
+  parameters:
+    AgentName:
+      in: path
+      name: agentName
+      required: true
+      description: Agent registry name (e.g. echo-agent)
+      schema:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+    TenantId:
+      in: path
+      name: tenantId
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    JobId:
+      in: path
+      name: jobId
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    WebhookId:
+      in: path
+      name: webhookId
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      description: Optional idempotency key for safe client retries
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalid_request:
+              value:
+                error:
+                  code: INVALID_REQUEST
+                  message: Request body failed schema validation
+                  requestId: req-123
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            unauthorized:
+              value:
+                error:
+                  code: UNAUTHENTICATED
+                  message: Missing or invalid credentials
+                  requestId: req-123
+    Forbidden:
+      description: Authenticated but not allowed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            forbidden:
+              value:
+                error:
+                  code: FORBIDDEN
+                  message: Caller is not permitted to perform this action
+                  requestId: req-123
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Resource state conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: Semantically invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: Rate limit or quota exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 0
+          description: Seconds before retry
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadGateway:
+      description: Upstream runtime/gateway failure
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Service unavailable / degraded dependency
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    GatewayTimeout:
+      description: Upstream request timed out
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    TenantTier:
+      type: string
+      enum: [basic, standard, premium]
+    TenantStatus:
+      type: string
+      enum: [active, suspended, deleted]
+    InvocationMode:
+      type: string
+      enum: [sync, streaming, async]
+    InvocationStatus:
+      type: string
+      enum: [success, error, timeout, throttled]
+    JobStatus:
+      type: string
+      enum: [pending, running, completed, failed]
+    UtcTimestamp:
+      type: string
+      format: date-time
+      description: ISO 8601 UTC timestamp
+
+    ErrorDetail:
+      type: object
+      additionalProperties: true
+      properties:
+        field:
+          type: string
+        issue:
+          type: string
+        value:
+          description: Rejected value
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string
+            details:
+              type: array
+              items:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    HealthResponse:
+      type: object
+      required: [status, timestamp, version]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, fail]
+        version:
+          type: string
+        timestamp:
+          $ref: "#/components/schemas/UtcTimestamp"
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            required: [status]
+            properties:
+              status:
+                type: string
+                enum: [ok, degraded, fail]
+              latencyMs:
+                type: integer
+                minimum: 0
+              detail:
+                type: string
+
+    AgentSummary:
+      type: object
+      required:
+        - agentName
+        - latestVersion
+        - tierMinimum
+        - invocationMode
+        - streamingEnabled
+      properties:
+        agentName:
+          type: string
+        latestVersion:
+          type: string
+        tierMinimum:
+          $ref: "#/components/schemas/TenantTier"
+        invocationMode:
+          $ref: "#/components/schemas/InvocationMode"
+        streamingEnabled:
+          type: boolean
+        estimatedDurationSeconds:
+          type: [integer, "null"]
+          minimum: 0
+        ownerTeam:
+          type: string
+
+    AgentDetail:
+      allOf:
+        - $ref: "#/components/schemas/AgentSummary"
+        - type: object
+          properties:
+            versions:
+              type: array
+              items:
+                type: object
+                required: [version, deployedAt]
+                properties:
+                  version:
+                    type: string
+                  deployedAt:
+                    $ref: "#/components/schemas/UtcTimestamp"
+                  invocationMode:
+                    $ref: "#/components/schemas/InvocationMode"
+                  streamingEnabled:
+                    type: boolean
+
+    AgentInvokeRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: string
+          minLength: 1
+          maxLength: 50000
+        sessionId:
+          type: string
+          description: Optional existing session identifier for continuity
+        context:
+          type: object
+          additionalProperties: true
+          description: Non-sensitive client metadata/context for the agent
+        webhookId:
+          type: string
+          description: Optional webhook registration id for async completion callback
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: String metadata echoed to logs/records when allowed
+
+    AgentInvokeSyncResponse:
+      type: object
+      required:
+        - invocationId
+        - agentName
+        - mode
+        - status
+        - output
+        - timestamp
+      properties:
+        invocationId:
+          type: string
+        agentName:
+          type: string
+        agentVersion:
+          type: string
+        mode:
+          $ref: "#/components/schemas/InvocationMode"
+        status:
+          $ref: "#/components/schemas/InvocationStatus"
+        output:
+          type: string
+        sessionId:
+          type: [string, "null"]
+        usage:
+          type: object
+          properties:
+            inputTokens:
+              type: integer
+              minimum: 0
+            outputTokens:
+              type: integer
+              minimum: 0
+            latencyMs:
+              type: integer
+              minimum: 0
+        timestamp:
+          $ref: "#/components/schemas/UtcTimestamp"
+
+    AgentInvokeAsyncAccepted:
+      type: object
+      required: [jobId, status, mode, pollUrl]
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [accepted]
+        mode:
+          type: string
+          enum: [async]
+        pollUrl:
+          type: string
+          format: uri-reference
+          description: Relative or absolute URL for GET job polling
+        webhookDelivery:
+          type: string
+          enum: [registered, not_registered]
+
+    Tenant:
+      type: object
+      required:
+        - tenantId
+        - appId
+        - displayName
+        - tier
+        - status
+        - createdAt
+        - updatedAt
+        - ownerEmail
+        - ownerTeam
+        - accountId
+      properties:
+        tenantId:
+          type: string
+        appId:
+          type: string
+        displayName:
+          type: string
+        tier:
+          $ref: "#/components/schemas/TenantTier"
+        status:
+          $ref: "#/components/schemas/TenantStatus"
+        createdAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        updatedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        ownerEmail:
+          type: string
+          format: email
+        ownerTeam:
+          type: string
+        accountId:
+          type: string
+          pattern: "^[0-9]{12}$"
+        memoryStoreArn:
+          type: [string, "null"]
+        runtimeRegion:
+          type: [string, "null"]
+        fallbackRegion:
+          type: [string, "null"]
+        apiKeySecretArn:
+          type: [string, "null"]
+        monthlyBudgetUsd:
+          type: [number, "null"]
+          minimum: 0
+
+    TenantCreateRequest:
+      type: object
+      required:
+        - tenantId
+        - appId
+        - displayName
+        - tier
+        - ownerEmail
+        - ownerTeam
+        - accountId
+      properties:
+        tenantId:
+          type: string
+        appId:
+          type: string
+        displayName:
+          type: string
+        tier:
+          $ref: "#/components/schemas/TenantTier"
+        ownerEmail:
+          type: string
+          format: email
+        ownerTeam:
+          type: string
+        accountId:
+          type: string
+          pattern: "^[0-9]{12}$"
+        monthlyBudgetUsd:
+          type: [number, "null"]
+          minimum: 0
+
+    TenantUpdateRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        displayName:
+          type: string
+        tier:
+          $ref: "#/components/schemas/TenantTier"
+        status:
+          $ref: "#/components/schemas/TenantStatus"
+        runtimeRegion:
+          type: string
+        fallbackRegion:
+          type: string
+        monthlyBudgetUsd:
+          type: [number, "null"]
+          minimum: 0
+
+    TenantDeleteAccepted:
+      type: object
+      required: [tenantId, status, retentionDays]
+      properties:
+        tenantId:
+          type: string
+        status:
+          type: string
+          enum: [delete_scheduled]
+        retentionDays:
+          type: integer
+          minimum: 1
+          example: 30
+
+    AuditExportResponse:
+      type: object
+      required: [tenantId, downloadUrl, expiresAt]
+      properties:
+        tenantId:
+          type: string
+        downloadUrl:
+          type: string
+          format: uri
+        expiresAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+
+    JobStatusResponse:
+      type: object
+      required: [jobId, tenantId, agentName, status, createdAt]
+      properties:
+        jobId:
+          type: string
+        tenantId:
+          type: string
+        agentName:
+          type: string
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        createdAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        startedAt:
+          oneOf:
+            - $ref: "#/components/schemas/UtcTimestamp"
+            - type: "null"
+        completedAt:
+          oneOf:
+            - $ref: "#/components/schemas/UtcTimestamp"
+            - type: "null"
+        resultUrl:
+          type: [string, "null"]
+          format: uri
+          description: Presigned URL for completed job result
+        errorMessage:
+          type: [string, "null"]
+        webhookDelivered:
+          type: boolean
+        webhookUrl:
+          type: [string, "null"]
+          format: uri
+
+    WebhookEventType:
+      type: string
+      enum:
+        - job.completed
+        - job.failed
+
+    WebhookRegistrationRequest:
+      type: object
+      required: [callbackUrl, events]
+      properties:
+        callbackUrl:
+          type: string
+          format: uri
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        description:
+          type: string
+          maxLength: 256
+
+    WebhookRegistrationResponse:
+      type: object
+      required:
+        - webhookId
+        - callbackUrl
+        - events
+        - createdAt
+        - signatureHeader
+      properties:
+        webhookId:
+          type: string
+        callbackUrl:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        createdAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        signatureHeader:
+          type: string
+          example: X-Platform-Signature
+        signatureAlgorithm:
+          type: string
+          example: HMAC-SHA256
+
+    BffTokenRefreshRequest:
+      type: object
+      required: [scopes]
+      properties:
+        scopes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        sessionId:
+          type: [string, "null"]
+        audience:
+          type: [string, "null"]
+
+    BffTokenRefreshResponse:
+      type: object
+      required: [accessToken, expiresAt, tokenType]
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        scope:
+          type: string
+
+    BffSessionKeepaliveRequest:
+      type: object
+      required: [sessionId, agentName]
+      properties:
+        sessionId:
+          type: string
+        agentName:
+          type: string
+
+    BffSessionKeepaliveAccepted:
+      type: object
+      required: [sessionId, status]
+      properties:
+        sessionId:
+          type: string
+        status:
+          type: string
+          enum: [accepted]
+        expiresAt:
+          oneOf:
+            - $ref: "#/components/schemas/UtcTimestamp"
+            - type: "null"

@@ -276,7 +276,8 @@ def generate_prompt(
         work_loop = (
             "  inspect codebase → state plan with expected file changes →\n"
             "  implement → run the smallest relevant checks → inspect failures/logs/signals →\n"
-            "  fix next issue → re-run tests / make validate-local → update docs/tests if required → repeat"
+            "  fix next issue → re-run tests / make validate-local → "
+            "update docs/tests if required → repeat"
         )
         constraints_block = (
             f"  - Work only in this worktree ({wt})\n"
@@ -284,7 +285,8 @@ def generate_prompt(
             "  - Follow every forbidden pattern in CLAUDE.md\n"
             "  - For any security decision: STOP and ask. Do not guess.\n"
             "  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.\n"
-            "  - Do not stop at the first failure; use test output, validate-local output, synth errors, and logs as signals."
+            "  - Do not stop at the first failure; use test output, "
+            "validate-local output, synth errors, and logs as signals."
         )
     else:
         work_loop = (
@@ -302,7 +304,8 @@ def generate_prompt(
             "  - Follow every forbidden pattern in CLAUDE.md\n"
             "  - For any security decision: STOP and ask. Do not guess.\n"
             "  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.\n"
-            "  - Do not stop at the first failure; use available test output, logs, and operator-provided signals to continue."
+            "  - Do not stop at the first failure; use available test output, "
+            "logs, and operator-provided signals to continue."
         )
 
     signals_block = (
@@ -362,13 +365,16 @@ Finish protocol (perform in order when closure is reached):
 2. Run `make validate-local` — confirm it passes (do not skip this)
 3. Run a senior engineer review focused on bugs, regressions, risks, and missing tests
 4. Action review findings and re-run relevant tests/validation
-5. Re-run senior engineer review; repeat steps 4-5 until findings are cleared (or operator accepts residual risk)
+5. Re-run senior engineer review; repeat steps 4-5 until findings are cleared
+   (or operator accepts residual risk)
 6. Commit all changes; commit message must reference TASK-{task.number}
 7. Update docs/TASKS.md: mark this task [x] with today's date and commit SHA
 8. Push only when errors are cleared, then open PR titled "TASK-{task.number}: {task.title}"
-   Body must include: what was implemented, tests evidence, validate-local output, review findings addressed
+   Body must include: what was implemented, tests evidence, validate-local output,
+   review findings addressed
 
-Never mark complete or push if tests are failing, make validate-local fails, or unresolved errors remain."""
+Never mark complete or push if tests are failing, make validate-local fails,
+or unresolved errors remain."""
 
 
 # ---------------------------------------------------------------------------
@@ -603,7 +609,9 @@ def cmd_finish(task_id: str, tasks: list[Task], root: Path) -> None:
     print("  [ ] make validate-local passes")
     print("  [ ] All task tests pass")
     print("  [ ] Senior engineer review completed (bugs/regressions/risks/missing tests)")
-    print("  [ ] Review findings actioned and re-reviewed clean (or operator accepted residual risk)")
+    print(
+        "  [ ] Review findings actioned and re-reviewed clean (or operator accepted residual risk)"
+    )
     print("  [ ] No unresolved errors remain (tests/validation/logs)")
     if task.gate:
         print(f"  [ ] Gate cleared: {task.gate}")
