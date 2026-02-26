@@ -1,4 +1,4 @@
-# AgentCore Saas-ified Cell Templates: Agents-aaT packaged for two-pizza teams to experiment. 
+# Saas-ified Cell Templates: AgentCore Agents-aaT packaged for two-pizza teams to experiment. 
 
 ## What This Is
 
