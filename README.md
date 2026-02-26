@@ -3,13 +3,14 @@
 ## What This Is
 
 A small cell enterprise-style Agent as a Template platform vended on Amazon Bedrock AgentCore.
-B2E tenant squads experiment with AI agents via REST API with full isolation, billing attribution,
+
+Small squads can experiment with AI agents via REST API with full isolation, billing attribution,
 and compliance controls. SPA annd OIDC included, along with a few sample Strands and 'bare' agents.
 
-Internal agent developer teams are the owners and may push new agents independently
-via a self-service pipeline. Identity and 3LO baked in, Strands keeps things simple. Langgraph when its not.
+Internal agent developer teams are the empowered and may push new agents independently
+via a self-service pipeline. OIDC Identity and 3LO baked in, Strands keeps things simple. Langgraph for when its not.
 
-DevX, I've heard of it.. Inner-loop for responsive boto3 backed localstack experimentations.
+DevX, I've heard of it.. Added a TuI inner-loop for responsive boto3 backed localstack experimentations.
 
 ## Quick Start
 
