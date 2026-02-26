@@ -1,13 +1,13 @@
-# AgentCore Multi-Tenant AaaS Small team Platform 
+# AgentCore Saas-ified Cell Templates: Agents-aaT packaged for two-pizza teams to experiment. 
 
 ## What This Is
 
-An enterprise-style Agent as a Service platform running Amazon Bedrock AgentCore.
-B2E tenants invoke AI agents via REST API with full isolation, billing attribution,
-and compliance controls.
+A small cell enterprise-style Agent as a Template platform vended on Amazon Bedrock AgentCore.
+B2E tenant squads experiment with AI agents via REST API with full isolation, billing attribution,
+and compliance controls. SPA annd OIDC included, along with a few sample Strands and 'bare' agents.
 
-Internal agent developer teams push new agents independently
-via a self-service pipeline. Identity and 3LO baked in, Strands keeps things simple.
+Internal agent developer teams are the owners and may push new agents independently
+via a self-service pipeline. Identity and 3LO baked in, Strands keeps things simple. Langgraph when its not.
 
 DevX, I've heard of it.. Inner-loop for responsive boto3 backed localstack experimentations.
 
