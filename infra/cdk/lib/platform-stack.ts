@@ -53,6 +53,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly bridgeFn: lambda.Function;
   public readonly bffFn: lambda.Function;
   public readonly authoriserFn: lambda.Function;
+  public readonly tenantApiFn: lambda.Function;
   public readonly requestInterceptorFn: lambda.Function;
   public readonly responseInterceptorFn: lambda.Function;
 
@@ -64,6 +65,8 @@ export class PlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PlatformStackProps) {
     super(scope, id, props);
     this.vpc = props.vpc;
+
+    const env = this.node.tryGetContext('env') as string;
 
     // --- DynamoDB Tables (ADR-012) ---
 
@@ -158,6 +161,36 @@ export class PlatformStack extends cdk.Stack {
 
     // --- Lambdas ---
 
+    this.tenantApiFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/tenant_api'),
+      handler: 'handler.lambda_handler',
+      functionNameSuffix: 'tenant-api',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'tenant-api',
+        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        EVENT_BUS_NAME: 'default',
+        TENANT_API_KEY_SECRET_PREFIX: 'platform/tenants', // pragma: allowlist secret
+      },
+    });
+
+    this.tenantsTable.grantReadWriteData(this.tenantApiFn);
+    this.tenantApiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/tenants/*`,
+        ],
+      }),
+    );
+    this.tenantApiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+
     this.bridgeFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bridge'),
       handler: 'handler.handler',
@@ -166,6 +199,9 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 1024,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'bridge',
+        AGENTS_TABLE: this.agentsTable.tableName,
+        INVOCATIONS_TABLE: this.invocationsTable.tableName,
+        JOBS_TABLE: this.jobsTable.tableName,
       },
     });
 
@@ -194,6 +230,8 @@ export class PlatformStack extends cdk.Stack {
         TENANTS_TABLE: this.tenantsTable.tableName,
       },
     });
+
+    this.tenantsTable.grantReadData(this.authoriserFn);
 
     this.requestInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),
@@ -270,11 +308,34 @@ export class PlatformStack extends cdk.Stack {
     const tokenRefresh = bff.addResource('token-refresh');
     const sessionKeepalive = bff.addResource('session-keepalive');
 
+    const tenants = v1.addResource('tenants');
+    const tenantById = tenants.addResource('{tenantId}');
+    const auditExport = tenantById.addResource('audit-export');
+    const platform = v1.addResource('platform');
+    const failover = platform.addResource('failover');
+    const quota = platform.addResource('quota');
+    const splitAccounts = quota.addResource('split-accounts');
+
     const securedMethodOptions: apigateway.MethodOptions = {
       authorizer: restAuthorizer,
       authorizationType: apigateway.AuthorizationType.CUSTOM,
       apiKeyRequired: true,
     };
+
+    const tenantApiIntegration = new apigateway.LambdaIntegration(this.tenantApiFn, { proxy: true });
+
+    tenants.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    tenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+
+    tenantById.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    tenantById.addMethod('PATCH', tenantApiIntegration, securedMethodOptions);
+    tenantById.addMethod('DELETE', tenantApiIntegration, securedMethodOptions);
+
+    auditExport.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+
+    failover.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    quota.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    splitAccounts.addMethod('POST', tenantApiIntegration, securedMethodOptions);
 
     invoke.addMethod(
       'POST',
@@ -319,8 +380,6 @@ export class PlatformStack extends cdk.Stack {
         burstLimit: 2_000,
       },
     ];
-
-    const env = this.node.tryGetContext('env') as string;
 
     new ssm.StringParameter(this, 'RestApiIdParam', {
       parameterName: `/platform/core/${env}/rest-api-id`,
