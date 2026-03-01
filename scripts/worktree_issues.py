@@ -738,6 +738,7 @@ def create_worktree_for_issue(
 
         run(["git", "worktree", "add", str(wt_path), "-b", branch, start_ref], cwd=root)
         print(f"Created worktree at {wt_path}")
+        ensure_uv_venv(wt_path)
     except Exception:
         if claimed:
             try:
@@ -863,6 +864,33 @@ def list_resume_candidates(root: Path) -> list[WorktreeInfo]:
     return [wt for wt in worktrees if not wt.is_primary]
 
 
+def find_linked_worktree_for_issue(root: Path, issue_number: int) -> WorktreeInfo | None:
+    for wt in list_resume_candidates(root):
+        if extract_issue_id_from_branch(wt.branch) == issue_number:
+            return wt
+    return None
+
+
+def choose_next_runnable_without_existing_worktree(
+    root: Path, selection: QueueSelection
+) -> tuple[QueueItem, list[tuple[int, Path]]]:
+    skipped: list[tuple[int, Path]] = []
+    for item in selection.items:
+        if not item.runnable:
+            continue
+        existing = find_linked_worktree_for_issue(root, item.issue.number)
+        if existing is None:
+            return item, skipped
+        skipped.append((item.issue.number, existing.path))
+    if skipped:
+        skipped_text = ", ".join(f"#{num}:{path}" for num, path in skipped)
+        raise CliError(
+            "All runnable queue issues already have linked worktrees. "
+            f"Use worktree-resume to continue them ({skipped_text})."
+        )
+    raise CliError(f"No runnable issues found in queue (source={selection.source_mode}).")
+
+
 def select_worktree_interactive(worktrees: list[WorktreeInfo]) -> WorktreeInfo:
     if not worktrees:
         raise CliError("No linked worktrees available")
@@ -881,11 +909,33 @@ def select_worktree_interactive(worktrees: list[WorktreeInfo]) -> WorktreeInfo:
         print("Invalid choice.")
 
 
+def ensure_uv_venv(path: Path) -> None:
+    venv_activate = path / ".venv" / "bin" / "activate"
+    if venv_activate.exists():
+        print(f"Python venv ready: {venv_activate.parent.parent}")
+        return
+    if shutil_which("uv") is None:
+        eprint("WARNING: uv not found; skipping virtual environment creation")
+        return
+    try:
+        run(["uv", "venv"], cwd=path)
+        print("Created .venv with `uv venv`")
+    except subprocess.CalledProcessError as exc:
+        eprint(f"WARNING: failed to create .venv with uv: {exc}")
+
+
 def open_shell(path: Path) -> None:
     shell = os.environ.get("SHELL") or "bash"
-    print(f"Opening shell in {path}")
-    os.chdir(path)
-    os.execvp(shell, [shell, "-l"])
+    ensure_uv_venv(path)
+    print(f"Opening shell in {path} (with .venv activation when available)")
+    path_q = shell_quote(str(path))
+    shell_q = shell_quote(shell)
+    cmd = (
+        f"cd {path_q} && "
+        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
+        f"exec {shell_q} -l"
+    )
+    os.execvp("bash", ["bash", "-lc", cmd])
 
 
 def shell_quote(value: str) -> str:
@@ -1045,6 +1095,7 @@ def handoff_to_agent_or_shell(
     handoff: str | None = None,
     print_only_override: bool = False,
 ) -> None:
+    ensure_uv_venv(path)
     agent_val = (agent or choose_agent_interactive()).lower()
     mode_val = (agent_mode or choose_agent_mode_interactive()).lower()
     handoff_val = (handoff or choose_handoff_action_interactive()).lower()
@@ -1066,8 +1117,13 @@ def handoff_to_agent_or_shell(
     sys.stdout.flush()
 
     if handoff_val == "execute-now":
-        os.chdir(path)
-        os.execvp("bash", ["bash", "-lc", command])
+        path_q = shell_quote(str(path))
+        cmd = (
+            f"cd {path_q} && "
+            "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
+            f"{command}"
+        )
+        os.execvp("bash", ["bash", "-lc", cmd])
 
     if not sys.stdin.isatty():
         return
@@ -1421,8 +1477,26 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         if queue_item and (not queue_item.runnable) and not args.allow_blocked:
             blocked_msg = "; ".join(queue_item.blocked_reasons)
             raise CliError(f"Selected issue #{issue.number} is blocked: {blocked_msg}")
+        existing_wt = find_linked_worktree_for_issue(root, issue.number)
+        if existing_wt is not None:
+            print(f"Issue #{issue.number} already has linked worktree: {existing_wt.path}")
+            if args.open_shell and not args.dry_run:
+                if not args.no_preflight:
+                    run_preflight(path=existing_wt.path, root=root, repo=repo)
+                handoff_to_agent_or_shell(
+                    path=existing_wt.path,
+                    root=root,
+                    repo=repo,
+                    agent=args.agent,
+                    agent_mode=args.agent_mode,
+                    handoff=args.handoff,
+                    print_only_override=args.print_only,
+                )
+            return 0
     else:
-        queue_item = choose_next_runnable(selection)
+        queue_item, skipped = choose_next_runnable_without_existing_worktree(root, selection)
+        for issue_number, wt_path in skipped:
+            print(f"Skipping issue #{issue_number}: existing linked worktree at {wt_path}")
         issue = queue_item.issue
 
     if (not args.allow_blocked) and queue_item and not queue_item.runnable:
@@ -1464,6 +1538,22 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
     repo = args.repo or origin_repo_slug(root)
     issues = fetch_repo_issues(root, repo, state="all")
     issue = issue_by_number(issues, args.issue)
+    existing_wt = find_linked_worktree_for_issue(root, issue.number)
+    if existing_wt is not None:
+        print(f"Issue #{issue.number} already has linked worktree: {existing_wt.path}")
+        if args.open_shell and not args.dry_run:
+            if not args.no_preflight:
+                run_preflight(path=existing_wt.path, root=root, repo=repo)
+            handoff_to_agent_or_shell(
+                path=existing_wt.path,
+                root=root,
+                repo=repo,
+                agent=args.agent,
+                agent_mode=args.agent_mode,
+                handoff=args.handoff,
+                print_only_override=args.print_only,
+            )
+        return 0
     assert_issue_startable(issue, allow_blocked=args.allow_blocked)
     selection = build_queue(issues, stream_label=args.stream_label, mode=args.mode)
     item = next((x for x in selection.items if x.issue.number == issue.number), None)
@@ -1528,14 +1618,18 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
     if args.command:
         run_command_in_worktree(target.path, args.command)
     elif args.open_shell:
+        agent = getattr(args, "agent", None)
+        agent_mode = getattr(args, "agent_mode", None)
+        handoff = getattr(args, "handoff", None)
+        print_only = bool(getattr(args, "print_only", False))
         handoff_to_agent_or_shell(
             path=target.path,
             root=root,
             repo=repo,
-            agent=args.agent,
-            agent_mode=args.agent_mode,
-            handoff=args.handoff,
-            print_only_override=args.print_only,
+            agent=agent,
+            agent_mode=agent_mode,
+            handoff=handoff,
+            print_only_override=print_only,
         )
     else:
         print(target.path)
@@ -1659,12 +1753,26 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 cmd_worktree_next(ns)
             elif choice == "4":
                 ns = argparse.Namespace(
-                    path=None, no_preflight=False, open_shell=True, command=None
+                    path=None,
+                    no_preflight=False,
+                    open_shell=True,
+                    command=None,
+                    agent=None,
+                    agent_mode=None,
+                    handoff=None,
+                    print_only=False,
                 )
                 cmd_worktree_resume(ns)
             elif choice == "5":
                 ns = argparse.Namespace(
-                    path=None, no_preflight=False, open_shell=False, command=None
+                    path=None,
+                    no_preflight=False,
+                    open_shell=False,
+                    command=None,
+                    agent=None,
+                    agent_mode=None,
+                    handoff=None,
+                    print_only=False,
                 )
                 cmd_worktree_resume(ns)
             elif choice == "6":

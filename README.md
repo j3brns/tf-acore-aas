@@ -87,6 +87,9 @@ make worktree                 # interactive issue worktree menu
 make preflight-session        # worktree branch/issue policy checks
 make pre-validate-session     # fast pre-push validation (no cdk synth)
 make worktree-push-issue      # push branch with preflight + pre-validate enforced
+make issues-audit             # validate issue lifecycle/queue invariants
+make docs-sync-audit          # docs/code semver + drift heuristics audit
+make docs-sync-stamp          # refresh docs/DOCS_SYNC.json (release checkpoint)
 
 # Agent developer inner loop
 make agent-push AGENT=my-agent ENV=dev    # Push agent, fast path <30s if deps cached

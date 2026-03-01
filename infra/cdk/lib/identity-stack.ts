@@ -12,6 +12,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -171,6 +172,18 @@ export class IdentityStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'LogsKmsKeyArn', {
       value: this.logsKey.keyArn,
+    });
+
+    new ssm.StringParameter(this, 'TenantDataKmsKeyArnParam', {
+      parameterName: `/platform/identity/${envName}/tenant-data-kms-key-arn`,
+      stringValue: this.tenantDataKey.keyArn,
+      description: 'KMS key ARN for tenant data encryption',
+    });
+
+    new ssm.StringParameter(this, 'PlatformConfigKmsKeyArnParam', {
+      parameterName: `/platform/identity/${envName}/platform-config-kms-key-arn`,
+      stringValue: this.platformConfigKey.keyArn,
+      description: 'KMS key ARN for platform configuration encryption',
     });
   }
 

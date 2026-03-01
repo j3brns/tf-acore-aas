@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
-import * as kms from 'aws-cdk-lib/aws-kms';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { PlatformStack } from '../lib/platform-stack';
 
 describe('PlatformStack (TASK-023)', () => {
@@ -9,8 +10,24 @@ describe('PlatformStack (TASK-023)', () => {
     const env = { account: '123456789012', region: 'eu-west-2' };
     const identityStack = new cdk.Stack(app, 'IdentityStack', { env });
     const mockKey = new kms.Key(identityStack, 'MockKey');
+
+    const networkStack = new cdk.Stack(app, 'NetworkStack', { env });
+    const mockVpc = new ec2.Vpc(networkStack, 'MockVpc', {
+      subnetConfiguration: [
+        {
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+        },
+        {
+          name: 'Isolated',
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        },
+      ],
+    });
+
     const stack = new PlatformStack(app, 'platform-core-dev', {
       env,
+      vpc: mockVpc,
       tenantDataKey: mockKey,
       platformConfigKey: mockKey,
     });

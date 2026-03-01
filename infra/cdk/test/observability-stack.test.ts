@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -17,8 +18,23 @@ describe('ObservabilityStack (TASK-026)', () => {
     const identityStack = new cdk.Stack(app, 'IdentityStack', { env });
     const mockKey = new kms.Key(identityStack, 'MockKey');
     
+    const networkStack = new cdk.Stack(app, 'NetworkStack', { env });
+    const mockVpc = new ec2.Vpc(networkStack, 'MockVpc', {
+      subnetConfiguration: [
+        {
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+        },
+        {
+          name: 'Isolated',
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        },
+      ],
+    });
+
     const platformStack = new PlatformStack(app, 'PlatformStack', {
       env,
+      vpc: mockVpc,
       tenantDataKey: mockKey,
       platformConfigKey: mockKey,
     });

@@ -13,11 +13,13 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -32,11 +34,13 @@ type PythonLambdaProps = {
 };
 
 export interface PlatformStackProps extends cdk.StackProps {
+  readonly vpc: ec2.IVpc;
   readonly tenantDataKey: kms.IKey;
   readonly platformConfigKey: kms.IKey;
 }
 
 export class PlatformStack extends cdk.Stack {
+  public readonly vpc: ec2.IVpc;
   public readonly api: apigateway.RestApi;
   public readonly tenantsTable: dynamodb.Table;
   public readonly agentsTable: dynamodb.Table;
@@ -59,6 +63,7 @@ export class PlatformStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: PlatformStackProps) {
     super(scope, id, props);
+    this.vpc = props.vpc;
 
     // --- DynamoDB Tables (ADR-012) ---
 
@@ -315,8 +320,16 @@ export class PlatformStack extends cdk.Stack {
       },
     ];
 
+    const env = this.node.tryGetContext('env') as string;
+
+    new ssm.StringParameter(this, 'RestApiIdParam', {
+      parameterName: `/platform/core/${env}/rest-api-id`,
+      stringValue: this.api.restApiId,
+      description: 'REST API ID for the platform northbound API',
+    });
+
     for (const plan of usagePlanDefinitions) {
-      new apigateway.UsagePlan(this, plan.id, {
+      const usagePlan = new apigateway.UsagePlan(this, plan.id, {
         name: `${this.stackName}-${plan.name}`,
         throttle: {
           rateLimit: plan.rateLimit,
@@ -336,7 +349,19 @@ export class PlatformStack extends cdk.Stack {
           },
         ],
       });
+
+      new ssm.StringParameter(this, `${plan.id}IdParam`, {
+        parameterName: `/platform/core/${env}/usage-plan-${plan.name}-id`,
+        stringValue: usagePlan.usagePlanId,
+        description: `Usage plan ID for ${plan.name} tier`,
+      });
     }
+
+    new ssm.StringParameter(this, 'BridgeLambdaRoleArnParam', {
+      parameterName: `/platform/core/${env}/bridge-lambda-role-arn`,
+      stringValue: this.bridgeFn.role!.roleArn,
+      description: 'IAM role ARN for the Bridge Lambda function',
+    });
 
     this.apiWebAcl = new wafv2.CfnWebACL(this, 'ApiWebAcl', {
       name: `${this.stackName}-api-waf`,
@@ -425,6 +450,21 @@ export class PlatformStack extends cdk.Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       versioned: true,
+    });
+
+    const resultsBucket = new s3.Bucket(this, 'ResultsBucket', {
+      bucketName: `platform-results-${env}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    new ssm.StringParameter(this, 'ResultsBucketArnParam', {
+      parameterName: `/platform/core/${env}/results-bucket-arn`,
+      stringValue: resultsBucket.bucketArn,
+      description: 'ARN for the platform results S3 bucket',
     });
 
     const spaCspPolicy = new cloudfront.CfnResponseHeadersPolicy(this, 'SpaCspResponseHeadersPolicy', {
@@ -583,6 +623,8 @@ export class PlatformStack extends cdk.Stack {
       deadLetterQueue: dlq,
       timeout: props.timeout,
       memorySize: props.memorySize,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       environment: {
         LOG_LEVEL: 'INFO',
         ...props.environment,

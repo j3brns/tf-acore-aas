@@ -12,6 +12,8 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 
 export class NetworkStack extends cdk.Stack {
+  public readonly vpc: ec2.Vpc;
+
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
@@ -20,7 +22,7 @@ export class NetworkStack extends cdk.Stack {
       subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
     };
 
-    const vpc = new ec2.Vpc(this, 'PlatformVpc', {
+    this.vpc = new ec2.Vpc(this, 'PlatformVpc', {
       ipAddresses: ec2.IpAddresses.cidr('10.42.0.0/16'),
       maxAzs: 2,
       natGateways: 0,
@@ -39,13 +41,13 @@ export class NetworkStack extends cdk.Stack {
     });
 
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
-      vpc,
+      vpc: this.vpc,
       allowAllOutbound: false,
       description: 'Security group for platform Lambdas running in private subnets',
     });
 
     const endpointSecurityGroup = new ec2.SecurityGroup(this, 'InterfaceEndpointSecurityGroup', {
-      vpc,
+      vpc: this.vpc,
       allowAllOutbound: false,
       description: 'Interface VPC endpoints for platform control-plane services',
     });
@@ -61,38 +63,38 @@ export class NetworkStack extends cdk.Stack {
       'Allow HTTPS to interface VPC endpoints',
     );
     lambdaSecurityGroup.addEgressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
       ec2.Port.udp(53),
       'Allow DNS (UDP) to VPC resolver',
     );
     lambdaSecurityGroup.addEgressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
       ec2.Port.tcp(53),
       'Allow DNS (TCP) to VPC resolver',
     );
 
-    vpc.addGatewayEndpoint('S3GatewayEndpoint', {
+    this.vpc.addGatewayEndpoint('S3GatewayEndpoint', {
       service: ec2.GatewayVpcEndpointAwsService.S3,
       subnets: [privateSubnetSelection],
     });
-    vpc.addGatewayEndpoint('DynamoDbGatewayEndpoint', {
+    this.vpc.addGatewayEndpoint('DynamoDbGatewayEndpoint', {
       service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
       subnets: [privateSubnetSelection],
     });
 
-    vpc.addInterfaceEndpoint('SsmInterfaceEndpoint', {
+    this.vpc.addInterfaceEndpoint('SsmInterfaceEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.SSM,
       privateDnsEnabled: true,
       securityGroups: [endpointSecurityGroup],
       subnets: privateSubnetSelection,
     });
-    vpc.addInterfaceEndpoint('SecretsManagerInterfaceEndpoint', {
+    this.vpc.addInterfaceEndpoint('SecretsManagerInterfaceEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
       privateDnsEnabled: true,
       securityGroups: [endpointSecurityGroup],
       subnets: privateSubnetSelection,
     });
-    vpc.addInterfaceEndpoint('AgentCoreInterfaceEndpoint', {
+    this.vpc.addInterfaceEndpoint('AgentCoreInterfaceEndpoint', {
       service: new ec2.InterfaceVpcEndpointService(
         `com.amazonaws.${region}.bedrock-agentcore`,
         443,
@@ -101,7 +103,7 @@ export class NetworkStack extends cdk.Stack {
       securityGroups: [endpointSecurityGroup],
       subnets: privateSubnetSelection,
     });
-    vpc.addInterfaceEndpoint('AgentCoreGatewayInterfaceEndpoint', {
+    this.vpc.addInterfaceEndpoint('AgentCoreGatewayInterfaceEndpoint', {
       service: new ec2.InterfaceVpcEndpointService(
         `com.amazonaws.${region}.bedrock-agentcore.gateway`,
         443,
@@ -111,24 +113,24 @@ export class NetworkStack extends cdk.Stack {
       subnets: privateSubnetSelection,
     });
 
-    const publicNetworkAcl = new ec2.NetworkAcl(this, 'PublicSubnetNetworkAcl', { vpc });
-    const privateNetworkAcl = new ec2.NetworkAcl(this, 'PrivateSubnetNetworkAcl', { vpc });
+    const publicNetworkAcl = new ec2.NetworkAcl(this, 'PublicSubnetNetworkAcl', { vpc: this.vpc });
+    const privateNetworkAcl = new ec2.NetworkAcl(this, 'PrivateSubnetNetworkAcl', { vpc: this.vpc });
 
-    for (const [index, subnet] of vpc.publicSubnets.entries()) {
+    for (const [index, subnet] of this.vpc.publicSubnets.entries()) {
       new ec2.SubnetNetworkAclAssociation(this, `PublicSubnetAclAssociation${index + 1}`, {
         subnet,
         networkAcl: publicNetworkAcl,
       });
     }
-    for (const [index, subnet] of vpc.isolatedSubnets.entries()) {
+    for (const [index, subnet] of this.vpc.isolatedSubnets.entries()) {
       new ec2.SubnetNetworkAclAssociation(this, `PrivateSubnetAclAssociation${index + 1}`, {
         subnet,
         networkAcl: privateNetworkAcl,
       });
     }
 
-    this.addPublicSubnetAclRules(publicNetworkAcl, vpc.vpcCidrBlock);
-    this.addPrivateSubnetAclRules(privateNetworkAcl, vpc.vpcCidrBlock);
+    this.addPublicSubnetAclRules(publicNetworkAcl, this.vpc.vpcCidrBlock);
+    this.addPrivateSubnetAclRules(privateNetworkAcl, this.vpc.vpcCidrBlock);
 
     const enableRuntimeVpcPeering = new cdk.CfnParameter(this, 'EnableRuntimeVpcPeering', {
       type: 'String',
@@ -163,7 +165,7 @@ export class NetworkStack extends cdk.Stack {
     });
 
     const runtimeVpcPeering = new ec2.CfnVPCPeeringConnection(this, 'RuntimeVpcPeeringConnection', {
-      vpcId: vpc.vpcId,
+      vpcId: this.vpc.vpcId,
       peerVpcId: runtimePeerVpcId.valueAsString,
       peerOwnerId: runtimePeerAccountId.valueAsString,
       peerRegion: 'eu-west-1',
@@ -171,7 +173,7 @@ export class NetworkStack extends cdk.Stack {
     });
     runtimeVpcPeering.cfnOptions.condition = runtimePeeringConfigured;
 
-    for (const [index, subnet] of vpc.isolatedSubnets.entries()) {
+    for (const [index, subnet] of this.vpc.isolatedSubnets.entries()) {
       const isolatedSubnet = subnet as ec2.Subnet;
       const route = new ec2.CfnRoute(this, `RuntimePeerRoute${index + 1}`, {
         routeTableId: isolatedSubnet.routeTable.routeTableId,
@@ -193,17 +195,17 @@ export class NetworkStack extends cdk.Stack {
     runtimePeerEgress.cfnOptions.condition = runtimePeeringConfigured;
 
     new cdk.CfnOutput(this, 'VpcId', {
-      value: vpc.vpcId,
+      value: this.vpc.vpcId,
       description: 'Primary platform VPC ID',
       exportName: `${this.stackName}-VpcId`,
     });
     new cdk.CfnOutput(this, 'PrivateSubnetIds', {
-      value: cdk.Fn.join(',', vpc.isolatedSubnets.map((subnet) => subnet.subnetId)),
+      value: cdk.Fn.join(',', this.vpc.isolatedSubnets.map((subnet) => subnet.subnetId)),
       description: 'Private isolated subnet IDs for Lambda placement',
       exportName: `${this.stackName}-PrivateSubnetIds`,
     });
     new cdk.CfnOutput(this, 'PublicSubnetIds', {
-      value: cdk.Fn.join(',', vpc.publicSubnets.map((subnet) => subnet.subnetId)),
+      value: cdk.Fn.join(',', this.vpc.publicSubnets.map((subnet) => subnet.subnetId)),
       description: 'Public subnet IDs (reserved for edge/public-facing infra)',
       exportName: `${this.stackName}-PublicSubnetIds`,
     });

@@ -169,7 +169,7 @@ Nothing in Phase 2 starts until written confirmation.
               Test cases: valid JWT, expired, wrong audience, wrong issuer,
               cross-tenant header injection, suspended tenant, admin route non-admin JWT
 
-[ ] TASK-017  Write src/tenant-api/handler.py
+[ ] TASK-017  Write src/tenant_api/handler.py
               CREATE: validate, conditional write, provision Memory store,
               create API key in Secrets Manager, publish EventBridge event
               READ: authorise (own tenant or Platform.Admin), enrich with usage
@@ -237,12 +237,13 @@ Echo agent invocable end-to-end in local environment in all three modes.
               Observability metric stream eu-west-1→eu-west-2
               ADRs: ADR-001, ADR-009 | Tests: Jest construct tests
 
-[ ] TASK-025  TenantStack
+[x] TASK-025  TenantStack
               Provisioned per-tenant by EventBridge trigger on platform.tenant.created
               Creates: Memory store, execution role (scoped to tenant S3/DynamoDB),
               usage plan API key, SSM parameters for tenant
               CDK context input: tenantId, tier, accountId
               ADRs: ADR-012 | Tests: Jest construct tests
+              Done: 2026-03-01
 
 [x] TASK-026  ObservabilityStack
               Per-tenant CloudWatch dashboard (provisioned in TenantStack)
@@ -252,11 +253,12 @@ Echo agent invocable end-to-end in local environment in all three modes.
               Metric streams AgentCore Observability eu-west-1 → CloudWatch eu-west-2
               ADRs: none | Tests: Jest construct tests
 
-[ ] TASK-027  cfn-guard rules
-              File: infra/cdk/guard/platform-security.guard
+[x] TASK-027  cfn-guard rules
+              File: infra/guard/platform-security.guard
               Rules: no wildcard IAM, no public S3, PITR on DynamoDB, KMS encryption,
               deletion protection, VPC for Lambdas, DLQ configured, X-Ray enabled
               ADRs: none | Tests: cfn-guard validate against synthesised templates
+              Done: 2026-03-01
 
 **Phase 3 Gate**: cdk synth passes. cfn-guard passes. infra-diff reviewed by operator.
 make bootstrap-dev succeeds. Operator completes RUNBOOK-001 in dev.
@@ -433,7 +435,7 @@ sees results. Admin view shows platform health metrics.
 
 ## Phase 8 — Async and Long-Running Agents
 
-[ ] TASK-046  Write src/async-runner/handler.py
+[ ] TASK-046  Write src/async_runner/handler.py
               NOT SQS-triggered — this is a background task within Runtime session
               Agent code uses app.add_async_task to start background work
               Agent code uses app.complete_async_task when done
@@ -442,7 +444,7 @@ sees results. Admin view shows platform health metrics.
               Writes JOB record updates as status progresses
               ADRs: ADR-010 | Tests: HealthyBusy ping, task completion
 
-[ ] TASK-047  Write src/webhook-delivery/handler.py
+[ ] TASK-047  Write src/webhook_delivery/handler.py
               EventBridge rule on DynamoDB Stream for JOB table status=complete
               POST to registered webhookUrl with HMAC-SHA256 signature
               Retry: 3 attempts, exponential backoff (2s, 4s, 8s)
