@@ -269,16 +269,16 @@ dev-invoke:
 
 ## test-unit: Run all unit tests against LocalStack
 test-unit:
-	uv run pytest tests/unit/ src/ -v --tb=short
+	PYTHONPATH=. uv run pytest tests/unit/ src/ -v --tb=short
 
 ## test-int: Run integration tests (requires make dev running)
 test-int:
-	uv run pytest tests/integration/ -v --tb=short
+	PYTHONPATH=. uv run pytest tests/integration/ -v --tb=short
 
 ## test-agent: Run tests for a specific agent (AGENT required)
 test-agent:
 	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make test-agent AGENT=echo-agent" && exit 1)
-	uv run pytest agents/$(AGENT)/tests/ -v --tb=short
+	PYTHONPATH=. uv run pytest agents/$(AGENT)/tests/ -v --tb=short
 
 ## test-all: Run unit and integration tests
 test-all: test-unit test-int
