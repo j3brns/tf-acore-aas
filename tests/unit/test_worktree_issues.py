@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import sys
 from pathlib import Path
@@ -184,3 +185,102 @@ def test_assert_issue_startable_rejects_in_progress():
     )
     with pytest.raises(worktree_issues.CliError, match="already status:in-progress"):
         worktree_issues.assert_issue_startable(issue, allow_blocked=False)
+
+
+def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(monkeypatch):
+    root = Path("/tmp/repo")
+    wt = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/worktrees/wt33"),
+        head="abc123",
+        branch="wt/infra/33-observabilitystack",
+        is_primary=False,
+    )
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "list_resume_candidates", lambda _root: [wt])
+    monkeypatch.setattr(worktree_issues, "select_worktree_interactive", lambda items: wt)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: "owner/repo")
+    monkeypatch.setattr(worktree_issues, "run_preflight", lambda **kwargs: None)
+
+    def _handoff(**kwargs):
+        called.update(kwargs)
+
+    monkeypatch.setattr(worktree_issues, "handoff_to_agent_or_shell", _handoff)
+
+    args = argparse.Namespace(
+        path=None,
+        no_preflight=False,
+        open_shell=True,
+        command=None,
+    )
+    rc = worktree_issues.cmd_worktree_resume(args)
+
+    assert rc == 0
+    assert called["path"] == wt.path
+    assert called["agent"] is None
+    assert called["agent_mode"] is None
+    assert called["handoff"] is None
+    assert called["print_only_override"] is False
+
+
+def test_cmd_worktree_next_skips_runnable_issue_with_existing_worktree(monkeypatch):
+    root = Path("/tmp/repo")
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    issue_35 = _issue(
+        number=35,
+        task_id="TASK-028",
+        seq=280,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    created: dict[str, object] = {}
+    existing = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/worktrees/wt33"),
+        head="abc123",
+        branch="wt/infra/33-observabilitystack",
+        is_primary=False,
+    )
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(worktree_issues, "fetch_repo_issues", lambda *_args, **_kwargs: [issue_33, issue_35])
+    monkeypatch.setattr(worktree_issues, "list_resume_candidates", lambda _root: [existing])
+
+    def _create(**kwargs):
+        created.update(kwargs)
+        return Path("/tmp/worktrees/wt35")
+
+    monkeypatch.setattr(worktree_issues, "create_worktree_for_issue", _create)
+
+    args = argparse.Namespace(
+        repo=None,
+        stream_label=None,
+        mode="auto",
+        choose=False,
+        allow_blocked=False,
+        base_dir=None,
+        base_ref=None,
+        scope=None,
+        slug=None,
+        name=None,
+        no_claim=False,
+        no_preflight=True,
+        dry_run=True,
+        open_shell=False,
+        agent=None,
+        agent_mode=None,
+        handoff=None,
+        print_only=False,
+    )
+    rc = worktree_issues.cmd_worktree_next(args)
+
+    assert rc == 0
+    selected_issue = created["issue"]
+    assert isinstance(selected_issue, worktree_issues.Issue)
+    assert selected_issue.number == 35
