@@ -169,7 +169,7 @@ Nothing in Phase 2 starts until written confirmation.
               Test cases: valid JWT, expired, wrong audience, wrong issuer,
               cross-tenant header injection, suspended tenant, admin route non-admin JWT
 
-[ ] TASK-017  Write src/tenant-api/handler.py
+[ ] TASK-017  Write src/tenant_api/handler.py
               CREATE: validate, conditional write, provision Memory store,
               create API key in Secrets Manager, publish EventBridge event
               READ: authorise (own tenant or Platform.Admin), enrich with usage
@@ -433,7 +433,7 @@ sees results. Admin view shows platform health metrics.
 
 ## Phase 8 — Async and Long-Running Agents
 
-[ ] TASK-046  Write src/async-runner/handler.py
+[ ] TASK-046  Write src/async_runner/handler.py
               NOT SQS-triggered — this is a background task within Runtime session
               Agent code uses app.add_async_task to start background work
               Agent code uses app.complete_async_task when done
@@ -442,7 +442,7 @@ sees results. Admin view shows platform health metrics.
               Writes JOB record updates as status progresses
               ADRs: ADR-010 | Tests: HealthyBusy ping, task completion
 
-[ ] TASK-047  Write src/webhook-delivery/handler.py
+[ ] TASK-047  Write src/webhook_delivery/handler.py
               EventBridge rule on DynamoDB Stream for JOB table status=complete
               POST to registered webhookUrl with HMAC-SHA256 signature
               Retry: 3 attempts, exponential backoff (2s, 4s, 8s)

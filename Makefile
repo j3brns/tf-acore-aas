@@ -6,6 +6,7 @@
 .PHONY: help bootstrap ensure-tools validate-local validate-local-full
 .PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
+.PHONY: docs-sync-audit docs-sync-stamp
 .PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
@@ -114,6 +115,16 @@ validate-local-full: validate-local-prereqs
 	@$(MAKE) --no-print-directory validate-cdk
 	@$(MAKE) --no-print-directory validate-secrets-full
 	@echo "==> Validation passed"
+
+## docs-sync-audit: Check docs/code semver sync and drift heuristics
+## Usage: make docs-sync-audit [JSON=1]
+docs-sync-audit:
+	uv run python scripts/docs_sync_audit.py check \
+		$(if $(JSON),--json,)
+
+## docs-sync-stamp: Refresh docs/DOCS_SYNC.json to current semver + commit
+docs-sync-stamp:
+	uv run python scripts/docs_sync_audit.py stamp
 
 ## validate-pre-push: Pre-push validation (skips cdk synth; repo should already synth clean)
 validate-pre-push: validate-local-prereqs
