@@ -305,9 +305,7 @@ def assert_issue_startable(issue: Issue, *, allow_blocked: bool) -> None:
     if status == "done":
         raise CliError(f"Issue #{issue.number} is status:done; cannot start new work")
     if status == "in-progress":
-        raise CliError(
-            f"Issue #{issue.number} is already status:in-progress. Use worktree-resume."
-        )
+        raise CliError(f"Issue #{issue.number} is already status:in-progress. Use worktree-resume.")
     if status == "blocked" and not allow_blocked:
         raise CliError(f"Issue #{issue.number} is status:blocked (use --allow-blocked to override)")
 
@@ -481,8 +479,7 @@ def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
                     severity="error",
                     issue_number=issue.number,
                     message=(
-                        "expected exactly one status:* label, "
-                        f"found {sorted(state_set) or 'none'}"
+                        f"expected exactly one status:* label, found {sorted(state_set) or 'none'}"
                     ),
                 )
             )
@@ -1337,12 +1334,8 @@ def cmd_issues_audit(args: argparse.Namespace) -> int:
         print(
             json.dumps(
                 {
-                    "errors": [
-                        {"issue": f.issue_number, "message": f.message} for f in errors
-                    ],
-                    "warnings": [
-                        {"issue": f.issue_number, "message": f.message} for f in warnings
-                    ],
+                    "errors": [{"issue": f.issue_number, "message": f.message} for f in errors],
+                    "warnings": [{"issue": f.issue_number, "message": f.message} for f in warnings],
                     "ok": len(errors) == 0,
                 },
                 indent=2,
@@ -1375,10 +1368,7 @@ def cmd_issues_reconcile(args: argparse.Namespace) -> int:
         if not add_labels and not remove_labels:
             continue
         changed += 1
-        print(
-            f"#{issue.number}: +{','.join(add_labels) or '-'} "
-            f"-{','.join(remove_labels) or '-'}"
-        )
+        print(f"#{issue.number}: +{','.join(add_labels) or '-'} -{','.join(remove_labels) or '-'}")
         if args.dry_run:
             continue
         for label in add_labels:
