@@ -43,15 +43,17 @@ new NetworkStack(app, `platform-network-${env}`, {
 });
 
 // 2. IdentityStack
-new IdentityStack(app, `platform-identity-${env}`, {
+const identityStack = new IdentityStack(app, `platform-identity-${env}`, {
   env: awsEnv,
   description: `Platform identity and KMS keys — ${env}`,
 });
 
 // 3. PlatformStack
-new PlatformStack(app, `platform-core-${env}`, {
+const platformStack = new PlatformStack(app, `platform-core-${env}`, {
   env: awsEnv,
   description: `Platform core services — ${env}`,
+  tenantDataKey: identityStack.tenantDataKey,
+  platformConfigKey: identityStack.platformConfigKey,
 });
 
 // 4. TenantStack (stub — real deployments triggered by EventBridge)
@@ -64,6 +66,22 @@ new TenantStack(app, `platform-tenant-stub-${env}`, {
 new ObservabilityStack(app, `platform-observability-${env}`, {
   env: awsEnv,
   description: `Platform observability — ${env}`,
+  api: platformStack.api,
+  apiWebAcl: platformStack.apiWebAcl,
+  spaDistribution: platformStack.spaDistribution,
+  bridgeFn: platformStack.bridgeFn,
+  bffFn: platformStack.bffFn,
+  authoriserFn: platformStack.authoriserFn,
+  requestInterceptorFn: platformStack.requestInterceptorFn,
+  responseInterceptorFn: platformStack.responseInterceptorFn,
+  tenantsTable: platformStack.tenantsTable,
+  agentsTable: platformStack.agentsTable,
+  invocationsTable: platformStack.invocationsTable,
+  jobsTable: platformStack.jobsTable,
+  sessionsTable: platformStack.sessionsTable,
+  toolsTable: platformStack.toolsTable,
+  opsLocksTable: platformStack.opsLocksTable,
+  dlqs: platformStack.dlqs,
 });
 
 // 6. AgentCoreStack (cross-region: deploys config for eu-west-1 Runtime)

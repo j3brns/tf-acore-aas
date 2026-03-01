@@ -1,16 +1,46 @@
 import * as cdk from 'aws-cdk-lib';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
 
 describe('PlatformStack (TASK-023)', () => {
   const synthTemplate = () => {
     const app = new cdk.App();
+    const env = { account: '123456789012', region: 'eu-west-2' };
+    const identityStack = new cdk.Stack(app, 'IdentityStack', { env });
+    const mockKey = new kms.Key(identityStack, 'MockKey');
     const stack = new PlatformStack(app, 'platform-core-dev', {
-      env: { region: 'eu-west-2' },
+      env,
+      tenantDataKey: mockKey,
+      platformConfigKey: mockKey,
     });
     return Template.fromStack(stack);
   };
   const template = synthTemplate();
+
+  test('creates all required DynamoDB tables with PITR and encryption', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 7);
+
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'platform-tenants',
+      ProvisionedThroughput: {
+        ReadCapacityUnits: 5,
+        WriteCapacityUnits: 5,
+      },
+      PointInTimeRecoverySpecification: {
+        PointInTimeRecoveryEnabled: true,
+      },
+    });
+
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'platform-invocations',
+      BillingMode: 'PAY_PER_REQUEST',
+      TimeToLiveSpecification: {
+        AttributeName: 'ttl',
+        Enabled: true,
+      },
+    });
+  });
 
   test('creates REST API with authorizer-backed API key source and usage plans', () => {
     template.hasResourceProperties('AWS::ApiGateway::RestApi', {

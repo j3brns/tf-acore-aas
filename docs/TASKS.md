@@ -244,7 +244,7 @@ Echo agent invocable end-to-end in local environment in all three modes.
               CDK context input: tenantId, tier, accountId
               ADRs: ADR-012 | Tests: Jest construct tests
 
-[ ] TASK-026  ObservabilityStack
+[x] TASK-026  ObservabilityStack
               Per-tenant CloudWatch dashboard (provisioned in TenantStack)
               Platform operations dashboard
               All 10 FM alarms (see ARCHITECTURE.md failure modes table)
