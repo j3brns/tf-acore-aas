@@ -30,6 +30,7 @@ SEQ_RE = re.compile(r"(?mi)^Seq:\s*(\d+)\s*$")
 DEPENDS_RE = re.compile(r"(?mi)^Depends on:\s*(.+?)\s*$")
 TASK_ID_TOKEN_RE = re.compile(r"TASK-\d+")
 TITLE_TASK_RE = re.compile(r"^(TASK-\d+):\s")
+STATUS_LABELS = {"status:not-started", "status:in-progress", "status:blocked", "status:done"}
 
 
 class CliError(RuntimeError):
@@ -89,6 +90,13 @@ class QueueSelection:
     @property
     def runnable(self) -> list[QueueItem]:
         return [item for item in self.items if item.runnable]
+
+
+@dataclass(slots=True)
+class AuditFinding:
+    severity: Literal["error", "warning"]
+    issue_number: int
+    message: str
 
 
 def run(
@@ -252,6 +260,58 @@ def lifecycle_status(issue: Issue) -> str:
     return "unknown"
 
 
+def status_labels(issue: Issue) -> list[str]:
+    return [label for label in issue.labels if label in STATUS_LABELS]
+
+
+def choose_reconciled_status(issue: Issue) -> str:
+    statuses = status_labels(issue)
+    state = issue.state
+    if state == "closed":
+        return "status:done"
+    # open state
+    if "status:in-progress" in statuses:
+        return "status:in-progress"
+    if "status:blocked" in statuses:
+        return "status:blocked"
+    if "status:not-started" in statuses:
+        return "status:not-started"
+    # open+done or missing/invalid status should return to startable backlog state
+    return "status:not-started"
+
+
+def reconcile_issue_label_changes(issue: Issue) -> tuple[list[str], list[str]]:
+    """Return (add_labels, remove_labels) to enforce lifecycle label policy."""
+    desired = choose_reconciled_status(issue)
+    labels = set(issue.labels)
+    current_status = set(status_labels(issue))
+    remove_labels = sorted(current_status - {desired})
+    add_labels: list[str] = []
+    if desired not in labels:
+        add_labels.append(desired)
+    if "ready" in labels and desired != "status:not-started":
+        remove_labels.append("ready")
+    return add_labels, sorted(set(remove_labels))
+
+
+def assert_issue_startable(issue: Issue, *, allow_blocked: bool) -> None:
+    if issue.state != "open":
+        raise CliError(f"Issue #{issue.number} is {issue.state}; must be open to start work")
+    status = lifecycle_status(issue)
+    if status == "unknown":
+        raise CliError(
+            f"Issue #{issue.number} is missing/invalid status:* label. Run `make issues-reconcile`."
+        )
+    if status == "done":
+        raise CliError(f"Issue #{issue.number} is status:done; cannot start new work")
+    if status == "in-progress":
+        raise CliError(
+            f"Issue #{issue.number} is already status:in-progress. Use worktree-resume."
+        )
+    if status == "blocked" and not allow_blocked:
+        raise CliError(f"Issue #{issue.number} is status:blocked (use --allow-blocked to override)")
+
+
 def parse_issue_meta(body: str) -> tuple[int | None, list[str]]:
     seq = int(m.group(1)) if (m := SEQ_RE.search(body or "")) else None
     depends = parse_depends(m.group(1)) if (m := DEPENDS_RE.search(body or "")) else []
@@ -408,6 +468,83 @@ def choose_next_runnable(selection: QueueSelection) -> QueueItem:
     )
 
 
+def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+    task_issues = [i for i in issues if "type:task" in i.labels]
+
+    for issue in task_issues:
+        states = status_labels(issue)
+        state_set = set(states)
+        if len(state_set) != 1:
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=issue.number,
+                    message=(
+                        "expected exactly one status:* label, "
+                        f"found {sorted(state_set) or 'none'}"
+                    ),
+                )
+            )
+            continue
+
+        status = states[0]
+        if issue.state == "open" and status == "status:done":
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=issue.number,
+                    message="open task cannot be status:done",
+                )
+            )
+        if issue.state == "closed" and status != "status:done":
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=issue.number,
+                    message=f"closed task must be status:done (found {status})",
+                )
+            )
+        if "ready" in issue.labels and status != "status:not-started":
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=issue.number,
+                    message=f"ready label requires status:not-started (found {status})",
+                )
+            )
+        if issue.state == "open" and issue.seq is None:
+            findings.append(
+                AuditFinding(
+                    severity="warning",
+                    issue_number=issue.number,
+                    message="open task is missing Seq marker",
+                )
+            )
+
+    # Objective gate: next runnable item must be a startable task, never in-progress/blocked/done.
+    selection = build_queue(issues, mode="auto")
+    try:
+        next_item = choose_next_runnable(selection)
+        next_status = lifecycle_status(next_item.issue)
+        if next_status != "not-started":
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=next_item.issue.number,
+                    message=(
+                        "next runnable queue item must be status:not-started "
+                        f"(found status:{next_status})"
+                    ),
+                )
+            )
+    except CliError:
+        # Empty/runnable-none queue is valid during full blockage or completion.
+        pass
+
+    return findings
+
+
 def slugify_text(text: str) -> str:
     text = text.lower()
     text = re.sub(r"^[a-z0-9._-]+:\s*", "", text)  # trim issue prefix like TASK-015:
@@ -506,6 +643,16 @@ def claim_issue(root: Path, repo: str, issue: Issue) -> bool:
         raise CliError(f"Unexpected response while checking issue #{issue.number}")
     labels = [x["name"] for x in data.get("labels", []) if isinstance(x, dict) and "name" in x]
     had_ready = "ready" in labels
+    states = [label for label in labels if label in STATUS_LABELS]
+    if len(set(states)) != 1:
+        raise CliError(
+            f"Issue #{issue.number} has invalid status labels {sorted(set(states)) or 'none'}; "
+            "run `make issues-reconcile`"
+        )
+    if states[0] != "status:not-started":
+        raise CliError(
+            f"Issue #{issue.number} must be status:not-started to claim (found {states[0]})"
+        )
     ensure_label_exists(root, repo, "status:in-progress")
 
     args = ["issue", "edit", str(issue.number), "-R", repo]
@@ -1080,7 +1227,7 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
             args += ["--remove-label", "review"]
         if "in-progress" in label_names:
             args += ["--remove-label", "in-progress"]
-        if "done" in label_names:
+        if "done" not in label_names:
             args += ["--add-label", "done"]
         if "status:in-progress" in label_names:
             args += ["--remove-label", "status:in-progress"]
@@ -1178,6 +1325,76 @@ def cmd_issue_queue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_issues_audit(args: argparse.Namespace) -> int:
+    root = repo_root()
+    repo = args.repo or origin_repo_slug(root)
+    issues = fetch_repo_issues(root, repo, state="all")
+    findings = audit_issues(issues)
+    errors = [f for f in findings if f.severity == "error"]
+    warnings = [f for f in findings if f.severity == "warning"]
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "errors": [
+                        {"issue": f.issue_number, "message": f.message} for f in errors
+                    ],
+                    "warnings": [
+                        {"issue": f.issue_number, "message": f.message} for f in warnings
+                    ],
+                    "ok": len(errors) == 0,
+                },
+                indent=2,
+            )
+        )
+    else:
+        if errors:
+            print("Issue audit: FAILED")
+            for finding in errors:
+                print(f"  ERROR  #{finding.issue_number}: {finding.message}")
+        else:
+            print("Issue audit: PASS")
+        if warnings:
+            for finding in warnings:
+                print(f"  WARN   #{finding.issue_number}: {finding.message}")
+        print(f"Summary: errors={len(errors)} warnings={len(warnings)}")
+
+    return 1 if errors else 0
+
+
+def cmd_issues_reconcile(args: argparse.Namespace) -> int:
+    root = repo_root()
+    repo = args.repo or origin_repo_slug(root)
+    issues = fetch_repo_issues(root, repo, state="all")
+    task_issues = [issue for issue in issues if "type:task" in issue.labels]
+
+    changed = 0
+    for issue in task_issues:
+        add_labels, remove_labels = reconcile_issue_label_changes(issue)
+        if not add_labels and not remove_labels:
+            continue
+        changed += 1
+        print(
+            f"#{issue.number}: +{','.join(add_labels) or '-'} "
+            f"-{','.join(remove_labels) or '-'}"
+        )
+        if args.dry_run:
+            continue
+        for label in add_labels:
+            if label in STATUS_LABELS:
+                ensure_label_exists(root, repo, label)
+        edit_args = ["issue", "edit", str(issue.number), "-R", repo]
+        for label in add_labels:
+            edit_args += ["--add-label", label]
+        for label in remove_labels:
+            edit_args += ["--remove-label", label]
+        gh_text(edit_args, root=root)
+
+    print(f"Issues reconciled: {changed} issue(s) {'(dry-run)' if args.dry_run else ''}".strip())
+    return 0
+
+
 def cmd_preflight(args: argparse.Namespace) -> int:
     root = repo_root()
     repo = None
@@ -1257,6 +1474,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
     repo = args.repo or origin_repo_slug(root)
     issues = fetch_repo_issues(root, repo, state="all")
     issue = issue_by_number(issues, args.issue)
+    assert_issue_startable(issue, allow_blocked=args.allow_blocked)
     selection = build_queue(issues, stream_label=args.stream_label, mode=args.mode)
     item = next((x for x in selection.items if x.issue.number == issue.number), None)
     if item and (not item.runnable) and not args.allow_blocked:
@@ -1513,6 +1731,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Also emit JSON payload after human-readable output"
     )
     q.set_defaults(func=cmd_issue_queue)
+
+    aud = sub.add_parser(
+        "issues-audit",
+        parents=[common_repo],
+        help="Audit issue lifecycle/queue invariants (objective gate)",
+    )
+    aud.add_argument("--json", action="store_true", help="Emit JSON output")
+    aud.set_defaults(func=cmd_issues_audit)
+
+    rec = sub.add_parser(
+        "issues-reconcile",
+        parents=[common_repo],
+        help="Reconcile task issue labels to lifecycle rules",
+    )
+    rec.add_argument("--dry-run", action="store_true", help="Show changes without editing issues")
+    rec.set_defaults(func=cmd_issues_reconcile)
 
     pf = sub.add_parser("preflight", parents=[common_repo], help="Run session preflight checks")
     pf.add_argument("--path", help="Path to check (default: current path)")

@@ -26,7 +26,7 @@
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
 .PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
-.PHONY: agent-handoff install-git-hooks hooks-status
+.PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status
 
 ENV ?= dev
 
@@ -609,6 +609,18 @@ issue-queue:
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(LIMIT),--limit $(LIMIT),)
+
+## issues-audit: Objective issue-state/queue invariants check (fails on drift)
+## Usage: make issues-audit [JSON=1]
+issues-audit:
+	uv run python scripts/worktree_issues.py issues-audit \
+		$(if $(JSON),--json,)
+
+## issues-reconcile: Repair task issue labels to lifecycle rules
+## Usage: make issues-reconcile [DRY_RUN=1]
+issues-reconcile:
+	uv run python scripts/worktree_issues.py issues-reconcile \
+		$(if $(DRY_RUN),--dry-run,)
 
 ## worktree: Interactive issue-driven worktree menu (Seq/Depends on aware)
 ## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a]
