@@ -738,6 +738,7 @@ def create_worktree_for_issue(
 
         run(["git", "worktree", "add", str(wt_path), "-b", branch, start_ref], cwd=root)
         print(f"Created worktree at {wt_path}")
+        ensure_uv_venv(wt_path)
     except Exception:
         if claimed:
             try:
@@ -881,11 +882,33 @@ def select_worktree_interactive(worktrees: list[WorktreeInfo]) -> WorktreeInfo:
         print("Invalid choice.")
 
 
+def ensure_uv_venv(path: Path) -> None:
+    venv_activate = path / ".venv" / "bin" / "activate"
+    if venv_activate.exists():
+        print(f"Python venv ready: {venv_activate.parent.parent}")
+        return
+    if shutil_which("uv") is None:
+        eprint("WARNING: uv not found; skipping virtual environment creation")
+        return
+    try:
+        run(["uv", "venv"], cwd=path)
+        print("Created .venv with `uv venv`")
+    except subprocess.CalledProcessError as exc:
+        eprint(f"WARNING: failed to create .venv with uv: {exc}")
+
+
 def open_shell(path: Path) -> None:
     shell = os.environ.get("SHELL") or "bash"
-    print(f"Opening shell in {path}")
-    os.chdir(path)
-    os.execvp(shell, [shell, "-l"])
+    ensure_uv_venv(path)
+    print(f"Opening shell in {path} (with .venv activation when available)")
+    path_q = shell_quote(str(path))
+    shell_q = shell_quote(shell)
+    cmd = (
+        f"cd {path_q} && "
+        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
+        f"exec {shell_q} -l"
+    )
+    os.execvp("bash", ["bash", "-lc", cmd])
 
 
 def shell_quote(value: str) -> str:
@@ -1045,6 +1068,7 @@ def handoff_to_agent_or_shell(
     handoff: str | None = None,
     print_only_override: bool = False,
 ) -> None:
+    ensure_uv_venv(path)
     agent_val = (agent or choose_agent_interactive()).lower()
     mode_val = (agent_mode or choose_agent_mode_interactive()).lower()
     handoff_val = (handoff or choose_handoff_action_interactive()).lower()
@@ -1066,8 +1090,13 @@ def handoff_to_agent_or_shell(
     sys.stdout.flush()
 
     if handoff_val == "execute-now":
-        os.chdir(path)
-        os.execvp("bash", ["bash", "-lc", command])
+        path_q = shell_quote(str(path))
+        cmd = (
+            f"cd {path_q} && "
+            "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
+            f"{command}"
+        )
+        os.execvp("bash", ["bash", "-lc", cmd])
 
     if not sys.stdin.isatty():
         return
