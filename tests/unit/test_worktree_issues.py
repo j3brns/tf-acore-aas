@@ -249,7 +249,11 @@ def test_cmd_worktree_next_skips_runnable_issue_with_existing_worktree(monkeypat
 
     monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
     monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
-    monkeypatch.setattr(worktree_issues, "fetch_repo_issues", lambda *_args, **_kwargs: [issue_33, issue_35])
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_33, issue_35],
+    )
     monkeypatch.setattr(worktree_issues, "list_resume_candidates", lambda _root: [existing])
 
     def _create(**kwargs):
