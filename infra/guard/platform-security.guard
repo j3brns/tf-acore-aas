@@ -2,16 +2,180 @@
 #
 # Enforces platform security constraints on all synthesised CloudFormation templates.
 # Run: cfn-guard validate -r infra/guard/platform-security.guard -d cdk.out/*.template.json
-#
-# Rules implemented in TASK-027:
-#   - no_wildcard_iam_action      No IAM policies with Action: "*"
-#   - no_wildcard_iam_resource    No IAM policies with Resource: "*"
-#   - no_public_s3_bucket         No S3 buckets with public access enabled
-#   - dynamodb_pitr_enabled       All DynamoDB tables have PITR enabled
-#   - dynamodb_kms_encryption     All DynamoDB tables use KMS encryption
-#   - dynamodb_deletion_protection Staging/prod tables have deletion protection
-#   - lambda_dlq_configured       All Lambda functions have a DLQ configured
-#   - lambda_xray_enabled         All Lambda functions have X-Ray tracing enabled
-#   - lambda_in_vpc               All Lambda functions are VPC-attached
-#
-# Implemented in TASK-027.
+
+let iam_roles = Resources.*[ Type == 'AWS::IAM::Role' ]
+let iam_managed_policies = Resources.*[ Type == 'AWS::IAM::ManagedPolicy' ]
+let iam_policies = Resources.*[ Type == 'AWS::IAM::Policy' ]
+let s3_buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+let dynamodb_tables = Resources.*[ Type == 'AWS::DynamoDB::Table' ]
+let lambda_functions = Resources.*[ Type == 'AWS::Lambda::Function' ]
+
+# no_wildcard_iam_action
+rule no_wildcard_iam_action {
+    when %iam_roles exists {
+        when %iam_roles.Properties.Policies exists {
+            %iam_roles.Properties.Policies[*].PolicyDocument.Statement[*] {
+                when Action is_string { Action != "*" }
+                when Action is_list {
+                    Action[*] {
+                        when this is_string { this != "*" }
+                    }
+                }
+            }
+        }
+    }
+    when %iam_managed_policies exists {
+        %iam_managed_policies.Properties.PolicyDocument.Statement[*] {
+            when Action is_string { Action != "*" }
+            when Action is_list {
+                Action[*] {
+                    when this is_string { this != "*" }
+                }
+            }
+        }
+    }
+    when %iam_policies exists {
+        %iam_policies.Properties.PolicyDocument.Statement[*] {
+            when Action is_string { Action != "*" }
+            when Action is_list {
+                Action[*] {
+                    when this is_string { this != "*" }
+                }
+            }
+        }
+    }
+}
+
+# no_wildcard_iam_resource
+rule no_wildcard_iam_resource {
+    when %iam_roles exists {
+        when %iam_roles.Properties.Policies exists {
+            %iam_roles.Properties.Policies[*].PolicyDocument.Statement[*] {
+                check_resource_wildcard(Resource, Action)
+            }
+        }
+    }
+    when %iam_managed_policies exists {
+        %iam_managed_policies.Properties.PolicyDocument.Statement[*] {
+            check_resource_wildcard(Resource, Action)
+        }
+    }
+    when %iam_policies exists {
+        %iam_policies.Properties.PolicyDocument.Statement[*] {
+            check_resource_wildcard(Resource, Action)
+        }
+    }
+}
+
+rule check_resource_wildcard(res, act) {
+    let exempted_actions = [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords",
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:RemoveClientIDFromOpenIDConnectProvider"
+    ]
+
+    when %res is_string {
+        when %res == "*" {
+            # Allow wildcard resource ONLY for exempted actions (absolute necessity)
+            when %act is_string {
+                %act in %exempted_actions
+            }
+            when %act is_list {
+                %act[*] {
+                    this in %exempted_actions
+                }
+            }
+        }
+    }
+    when %res is_list {
+        %res[*] {
+            when this is_string {
+                when this == "*" {
+                    # Allow wildcard resource ONLY for exempted actions
+                    when %act is_string {
+                        %act in %exempted_actions
+                    }
+                    when %act is_list {
+                        %act[*] {
+                            this in %exempted_actions
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# no_public_s3_bucket
+rule no_public_s3_bucket {
+    when %s3_buckets exists {
+        %s3_buckets.Properties.PublicAccessBlockConfiguration {
+            BlockPublicAcls == true
+            BlockPublicPolicy == true
+            IgnorePublicAcls == true
+            RestrictPublicBuckets == true
+        }
+    }
+}
+
+# dynamodb_pitr_enabled
+rule dynamodb_pitr_enabled {
+    when %dynamodb_tables exists {
+        %dynamodb_tables.Properties.PointInTimeRecoverySpecification {
+            PointInTimeRecoveryEnabled == true
+        }
+    }
+}
+
+# dynamodb_kms_encryption
+rule dynamodb_kms_encryption {
+    when %dynamodb_tables exists {
+        %dynamodb_tables.Properties.SSESpecification {
+            SSEEnabled == true
+        }
+    }
+}
+
+# dynamodb_deletion_protection
+rule dynamodb_deletion_protection {
+    when %dynamodb_tables exists {
+        %dynamodb_tables.Properties.DeletionProtectionEnabled == true
+    }
+}
+
+# lambda_dlq_configured
+rule lambda_dlq_configured {
+    when %lambda_functions exists {
+        # Exempt CDK internal custom resource handlers
+        when Properties.Handler != "__entrypoint__.handler" {
+            %lambda_functions.Properties.DeadLetterConfig.TargetArn exists
+        }
+    }
+}
+
+# lambda_xray_enabled
+rule lambda_xray_enabled {
+    when %lambda_functions exists {
+        # Exempt CDK internal custom resource handlers
+        when Properties.Handler != "__entrypoint__.handler" {
+            %lambda_functions.Properties.TracingConfig.Mode == 'Active'
+        }
+    }
+}
+
+# lambda_in_vpc
+rule lambda_in_vpc {
+    when %lambda_functions exists {
+        # Exempt CDK internal custom resource handlers
+        when Properties.Handler != "__entrypoint__.handler" {
+            %lambda_functions.Properties.VpcConfig {
+                SubnetIds exists
+                SecurityGroupIds exists
+            }
+        }
+    }
+}

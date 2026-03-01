@@ -42,7 +42,7 @@ const runtimeEnv: cdk.Environment = {
 };
 
 // 1. NetworkStack
-new NetworkStack(app, `platform-network-${env}`, {
+const networkStack = new NetworkStack(app, `platform-network-${env}`, {
   env: awsEnv,
   description: `Platform network infrastructure — ${env}`,
 });
@@ -57,6 +57,7 @@ new IdentityStack(app, `platform-identity-${env}`, {
 new PlatformStack(app, `platform-core-${env}`, {
   env: awsEnv,
   description: `Platform core services — ${env}`,
+  vpc: networkStack.vpc,
 });
 
 // 4. TenantStack (stub — real deployments triggered by EventBridge)

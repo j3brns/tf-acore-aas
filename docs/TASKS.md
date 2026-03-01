@@ -253,11 +253,12 @@ Echo agent invocable end-to-end in local environment in all three modes.
               Metric streams AgentCore Observability eu-west-1 → CloudWatch eu-west-2
               ADRs: none | Tests: Jest construct tests
 
-[ ] TASK-027  cfn-guard rules
-              File: infra/cdk/guard/platform-security.guard
+[x] TASK-027  cfn-guard rules
+              File: infra/guard/platform-security.guard
               Rules: no wildcard IAM, no public S3, PITR on DynamoDB, KMS encryption,
               deletion protection, VPC for Lambdas, DLQ configured, X-Ray enabled
               ADRs: none | Tests: cfn-guard validate against synthesised templates
+              Done: 2026-03-01
 
 **Phase 3 Gate**: cdk synth passes. cfn-guard passes. infra-diff reviewed by operator.
 make bootstrap-dev succeeds. Operator completes RUNBOOK-001 in dev.
