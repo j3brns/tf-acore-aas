@@ -4,7 +4,7 @@
 # =============================================================================
 
 .PHONY: help bootstrap ensure-tools validate-local validate-local-full
-.PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-synth
+.PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
 .PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
@@ -119,7 +119,7 @@ validate-local-full: validate-local-prereqs
 validate-pre-push: validate-local-prereqs
 	@echo "==> Running pre-push validation (no cdk synth)"
 	@$(MAKE) --no-print-directory validate-python
-	@$(MAKE) --no-print-directory validate-cdk-ts
+	@$(MAKE) --no-print-directory validate-cdk-ts-push
 	@$(MAKE) --no-print-directory validate-secrets-push
 	@echo "==> Pre-push validation passed"
 
@@ -144,6 +144,27 @@ validate-cdk:
 ## validate-cdk-ts: TypeScript compile only (no synth)
 validate-cdk-ts:
 	cd infra/cdk && npx --no-install tsc --noEmit
+
+## validate-cdk-ts-push: Run CDK TypeScript compile only when CDK paths changed in commits-to-push
+validate-cdk-ts-push:
+	@files="$$( \
+		upstream="$$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"; \
+		if [ -n "$$upstream" ]; then \
+			git diff --name-only --diff-filter=ACMR "$$upstream...HEAD"; \
+		elif git show-ref --verify --quiet refs/remotes/origin/main; then \
+			git diff --name-only --diff-filter=ACMR origin/main...HEAD; \
+		elif git rev-parse --verify --quiet HEAD~1 >/dev/null; then \
+			git diff --name-only --diff-filter=ACMR HEAD~1...HEAD; \
+		else \
+			git diff --name-only --diff-filter=ACMR; \
+		fi \
+	)"; \
+	if ! printf '%s\n' "$$files" | grep -Eq '^(infra/cdk/|pyrightconfig\.json$$|tsconfig\.json$$|package\.json$$|package-lock\.json$$|pnpm-lock\.yaml$$|yarn\.lock$$)'; then \
+		echo "==> validate-cdk-ts: skipped (no CDK/TS files in commits-to-push)"; \
+		exit 0; \
+	fi; \
+	echo "==> validate-cdk-ts: running (CDK/TS files changed)"; \
+	$(MAKE) --no-print-directory validate-cdk-ts
 
 ## validate-cdk-synth: CDK synth only
 validate-cdk-synth:
