@@ -315,6 +315,26 @@ export class PlatformStack extends cdk.Stack {
     const failover = platform.addResource('failover');
     const quota = platform.addResource('quota');
     const splitAccounts = quota.addResource('split-accounts');
+    const serviceHealth = platform.addResource('service-health');
+    const billing = platform.addResource('billing');
+    const billingStatus = billing.addResource('status');
+    const ops = platform.addResource('ops');
+
+    // Ops sub-resources
+    const opsTopTenants = ops.addResource('top-tenants');
+    const opsSecurityEvents = ops.addResource('security-events');
+    const opsErrorRate = ops.addResource('error-rate');
+    const opsSecurity = ops.addResource('security');
+    const opsSecurityPage = opsSecurity.addResource('page');
+
+    const opsDlq = ops.addResource('dlq');
+    const opsDlqByName = opsDlq.addResource('{proxy+}');
+
+    const opsTenants = ops.addResource('tenants');
+    const opsTenantById = opsTenants.addResource('{proxy+}');
+
+    const opsJobs = ops.addResource('jobs');
+    const opsJobById = opsJobs.addResource('{proxy+}');
 
     const securedMethodOptions: apigateway.MethodOptions = {
       authorizer: restAuthorizer,
@@ -336,6 +356,17 @@ export class PlatformStack extends cdk.Stack {
     failover.addMethod('POST', tenantApiIntegration, securedMethodOptions);
     quota.addMethod('GET', tenantApiIntegration, securedMethodOptions);
     splitAccounts.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    serviceHealth.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    billingStatus.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+
+    // Wire all ops routes
+    opsTopTenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    opsSecurityEvents.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    opsErrorRate.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    opsSecurityPage.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    opsDlqByName.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
+    opsTenantById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
+    opsJobById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
 
     invoke.addMethod(
       'POST',
