@@ -22,6 +22,8 @@ import { Construct } from 'constructs';
 import * as path from 'path';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+
 type PythonLambdaProps = {
   assetPath: string;
   handler: string;
@@ -42,6 +44,48 @@ export class PlatformStack extends cdk.Stack {
     super(scope, id, props);
     this.vpc = props.vpc;
 
+    const env = this.node.tryGetContext('env') as string;
+
+    const tenantsTable = new dynamodb.Table(this, 'TenantsTable', {
+      tableName: 'platform-tenants',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const tenantApiFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/tenant_api'),
+      handler: 'handler.lambda_handler',
+      functionNameSuffix: 'tenant-api',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'tenant-api',
+        TENANTS_TABLE_NAME: tenantsTable.tableName,
+        EVENT_BUS_NAME: 'default',
+        TENANT_API_KEY_SECRET_PREFIX: 'platform/tenants', // pragma: allowlist secret
+      },
+    });
+
+    tenantsTable.grantReadWriteData(tenantApiFn);
+    tenantApiFn.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/tenants/*`,
+        ],
+      }),
+    );
+    tenantApiFn.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+
     const bridgeFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bridge'),
       handler: 'handler.handler',
@@ -50,6 +94,9 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 1024,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'bridge',
+        AGENTS_TABLE: 'platform-agents',
+        INVOCATIONS_TABLE: 'platform-invocations',
+        JOBS_TABLE: 'platform-jobs',
       },
     });
 
@@ -75,9 +122,11 @@ export class PlatformStack extends cdk.Stack {
         ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
         ENTRA_AUDIENCE: 'platform-api',
         ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
-        TENANTS_TABLE: 'platform-tenants',
+        TENANTS_TABLE: tenantsTable.tableName,
       },
     });
+
+    tenantsTable.grantReadData(authoriserFn);
 
     const requestInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),
@@ -154,11 +203,34 @@ export class PlatformStack extends cdk.Stack {
     const tokenRefresh = bff.addResource('token-refresh');
     const sessionKeepalive = bff.addResource('session-keepalive');
 
+    const tenants = v1.addResource('tenants');
+    const tenantById = tenants.addResource('{tenantId}');
+    const auditExport = tenantById.addResource('audit-export');
+    const platform = v1.addResource('platform');
+    const failover = platform.addResource('failover');
+    const quota = platform.addResource('quota');
+    const splitAccounts = quota.addResource('split-accounts');
+
     const securedMethodOptions: apigateway.MethodOptions = {
       authorizer: restAuthorizer,
       authorizationType: apigateway.AuthorizationType.CUSTOM,
       apiKeyRequired: true,
     };
+
+    const tenantApiIntegration = new apigateway.LambdaIntegration(tenantApiFn, { proxy: true });
+
+    tenants.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    tenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+
+    tenantById.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    tenantById.addMethod('PATCH', tenantApiIntegration, securedMethodOptions);
+    tenantById.addMethod('DELETE', tenantApiIntegration, securedMethodOptions);
+
+    auditExport.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+
+    failover.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    quota.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    splitAccounts.addMethod('POST', tenantApiIntegration, securedMethodOptions);
 
     invoke.addMethod(
       'POST',

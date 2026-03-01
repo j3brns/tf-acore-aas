@@ -64,6 +64,21 @@ class FakeScopedDb:
         self.items[storage_key] = item
         return {"Attributes": dict(item)}
 
+    def scan(
+        self,
+        _table_name: str,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        results = [dict(item) for item in self.items.values()]
+        # Simple filter implementation for tests
+        status_filter = kwargs.get("ExpressionAttributeValues", {}).get(":s")
+        tier_filter = kwargs.get("ExpressionAttributeValues", {}).get(":t")
+        if status_filter:
+            results = [r for r in results if r.get("status") == status_filter]
+        if tier_filter:
+            results = [r for r in results if r.get("tier") == tier_filter]
+        return results
+
 
 class FakeSecretsManager:
     def __init__(self) -> None:
@@ -154,8 +169,14 @@ def _event(
     }
     if usage_identifier_key is not None:
         authorizer["usageIdentifierKey"] = usage_identifier_key
+
+    path = "/v1/tenants"
+    if tenant_id is not None:
+        path = f"/v1/tenants/{tenant_id}"
+
     return {
         "httpMethod": method,
+        "path": path,
         "pathParameters": path_params,
         "body": None if body is None else json.dumps(body),
         "requestContext": {"authorizer": authorizer},
@@ -335,3 +356,99 @@ def test_delete_is_soft_delete_with_30_day_retention_and_event(
     assert detail_type == "tenant.deleted"
     assert detail["retentionDays"] == 30
     assert detail["purgeAtEpochSeconds"] == expected_purge
+
+
+def test_list_tenants_admin_only(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-1", "METADATA")] = {
+        "PK": "TENANT#t-1",
+        "SK": "METADATA",
+        "tenantId": "t-1",
+        "status": "active",
+        "tier": "basic",
+    }
+    fake_state["db"].items[("TENANT#t-2", "METADATA")] = {
+        "PK": "TENANT#t-2",
+        "SK": "METADATA",
+        "tenantId": "t-2",
+        "status": "active",
+        "tier": "premium",
+    }
+
+    # 1. Admin list all
+    response = _invoke(_event(method="GET", tenant_id=None))
+    assert response["statusCode"] == 200
+    items = _body(response)["items"]
+    assert len(items) == 2
+
+    # 2. Non-admin only sees own
+    response = _invoke(
+        _event(method="GET", tenant_id=None, caller_tenant_id="t-1", roles=[], app_id="app-1")
+    )
+    assert response["statusCode"] == 200
+    items = _body(response)["items"]
+    assert len(items) == 1
+    assert items[0]["tenantId"] == "t-1"
+
+
+def test_audit_export_returns_presigned_url_stub(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-005", "METADATA")] = {
+        "PK": "TENANT#t-005",
+        "SK": "METADATA",
+        "tenantId": "t-005",
+        "status": "active",
+    }
+
+    event = _event(method="GET", tenant_id="t-005")
+    event["path"] = "/v1/tenants/t-005/audit-export"
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert "downloadUrl" in body
+    assert body["tenantId"] == "t-005"
+
+
+def test_platform_failover_requires_lock_and_admin(fake_state: dict[str, Any]) -> None:
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    assert _body(response)["status"] == "initiated"
+
+    # Non-admin forbidden
+    event_non_admin = _event(method="POST", roles=[], body={"targetRegion": "x", "lockId": "y"})
+    event_non_admin["path"] = "/v1/platform/failover"
+    response = _invoke(event_non_admin)
+    assert response["statusCode"] == 403
+
+
+def test_platform_quota_report(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET")
+    event["path"] = "/v1/platform/quota"
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    utilisation = _body(response)["utilisation"]
+    assert len(utilisation) > 0
+    assert utilisation[0]["region"] == "eu-west-1"
+
+
+def test_platform_split_accounts_requires_platform_admin(fake_state: dict[str, Any]) -> None:
+    event = _event(method="POST", body={"tier": "premium", "targetAccountId": "123456789012"})
+    event["path"] = "/v1/platform/quota/split-accounts"
+
+    # 1. Platform.Admin succeeds
+    response = _invoke(event)
+    assert response["statusCode"] == 202
+    assert "jobId" in _body(response)
+
+    # 2. Platform.Operator (regular admin role in our _event helper) fails
+    event_operator = _event(
+        method="POST",
+        roles=["Platform.Operator"],
+        body={"tier": "premium", "targetAccountId": "123456789012"},
+    )
+    event_operator["path"] = "/v1/platform/quota/split-accounts"
+    response = _invoke(event_operator)
+    assert response["statusCode"] == 403
