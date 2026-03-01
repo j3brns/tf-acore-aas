@@ -53,9 +53,9 @@ export class PlatformStack extends cdk.Stack {
   public readonly bridgeFn: lambda.Function;
   public readonly bffFn: lambda.Function;
   public readonly authoriserFn: lambda.Function;
+  public readonly tenantApiFn: lambda.Function;
   public readonly requestInterceptorFn: lambda.Function;
   public readonly responseInterceptorFn: lambda.Function;
-  public readonly tenantApiFn: lambda.Function;
 
   public readonly apiWebAcl: wafv2.CfnWebACL;
   public readonly spaDistribution: cloudfront.CfnDistribution;

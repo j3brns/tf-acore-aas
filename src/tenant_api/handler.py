@@ -1058,7 +1058,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 return _handle_ops_page_security(event, caller, deps)
 
         # Tenant management routes
-
         if path == "/v1/tenants":
             if method == "POST":
                 return _handle_create(event, caller, deps)
