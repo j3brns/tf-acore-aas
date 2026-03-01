@@ -12,7 +12,10 @@
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -20,7 +23,6 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 import * as path from 'path';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 type PythonLambdaProps = {
   assetPath: string;
@@ -32,17 +34,131 @@ type PythonLambdaProps = {
 };
 
 export interface PlatformStackProps extends cdk.StackProps {
-  vpc: ec2.IVpc;
+  readonly vpc: ec2.IVpc;
+  readonly tenantDataKey: kms.IKey;
+  readonly platformConfigKey: kms.IKey;
 }
 
 export class PlatformStack extends cdk.Stack {
-  private readonly vpc: ec2.IVpc;
+  public readonly vpc: ec2.IVpc;
+  public readonly api: apigateway.RestApi;
+  public readonly tenantsTable: dynamodb.Table;
+  public readonly agentsTable: dynamodb.Table;
+  public readonly invocationsTable: dynamodb.Table;
+  public readonly jobsTable: dynamodb.Table;
+  public readonly sessionsTable: dynamodb.Table;
+  public readonly toolsTable: dynamodb.Table;
+  public readonly opsLocksTable: dynamodb.Table;
+
+  public readonly bridgeFn: lambda.Function;
+  public readonly bffFn: lambda.Function;
+  public readonly authoriserFn: lambda.Function;
+  public readonly requestInterceptorFn: lambda.Function;
+  public readonly responseInterceptorFn: lambda.Function;
+
+  public readonly apiWebAcl: wafv2.CfnWebACL;
+  public readonly spaDistribution: cloudfront.CfnDistribution;
+
+  public readonly dlqs: Record<string, sqs.IQueue> = {};
 
   constructor(scope: Construct, id: string, props: PlatformStackProps) {
     super(scope, id, props);
     this.vpc = props.vpc;
 
-    const bridgeFn = this.createPythonLambda({
+    // --- DynamoDB Tables (ADR-012) ---
+
+    this.tenantsTable = new dynamodb.Table(this, 'TenantsTable', {
+      tableName: 'platform-tenants',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 5,
+      writeCapacity: 5,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.platformConfigKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.agentsTable = new dynamodb.Table(this, 'AgentsTable', {
+      tableName: 'platform-agents',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 5,
+      writeCapacity: 5,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.platformConfigKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.toolsTable = new dynamodb.Table(this, 'ToolsTable', {
+      tableName: 'platform-tools',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 5,
+      writeCapacity: 5,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.platformConfigKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.opsLocksTable = new dynamodb.Table(this, 'OpsLocksTable', {
+      tableName: 'platform-ops-locks',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 1,
+      writeCapacity: 1,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.platformConfigKey,
+      timeToLiveAttribute: 'ttl',
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.invocationsTable = new dynamodb.Table(this, 'InvocationsTable', {
+      tableName: 'platform-invocations',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.tenantDataKey,
+      timeToLiveAttribute: 'ttl',
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.jobsTable = new dynamodb.Table(this, 'JobsTable', {
+      tableName: 'platform-jobs',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.tenantDataKey,
+      timeToLiveAttribute: 'ttl',
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.sessionsTable = new dynamodb.Table(this, 'SessionsTable', {
+      tableName: 'platform-sessions',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.tenantDataKey,
+      timeToLiveAttribute: 'ttl',
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // --- Lambdas ---
+
+    this.bridgeFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bridge'),
       handler: 'handler.handler',
       functionNameSuffix: 'bridge',
@@ -53,7 +169,7 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
-    const bffFn = this.createPythonLambda({
+    this.bffFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bff'),
       handler: 'handler.handler',
       functionNameSuffix: 'bff',
@@ -64,7 +180,7 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
-    const authoriserFn = this.createPythonLambda({
+    this.authoriserFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/authoriser'),
       handler: 'handler.handler',
       functionNameSuffix: 'authoriser',
@@ -75,11 +191,11 @@ export class PlatformStack extends cdk.Stack {
         ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
         ENTRA_AUDIENCE: 'platform-api',
         ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
-        TENANTS_TABLE: 'platform-tenants',
+        TENANTS_TABLE: this.tenantsTable.tableName,
       },
     });
 
-    const requestInterceptorFn = this.createPythonLambda({
+    this.requestInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),
       handler: 'request_interceptor.handler',
       functionNameSuffix: 'interceptor-request',
@@ -90,7 +206,7 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
-    const responseInterceptorFn = this.createPythonLambda({
+    this.responseInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),
       handler: 'response_interceptor.handler',
       functionNameSuffix: 'interceptor-response',
@@ -103,7 +219,7 @@ export class PlatformStack extends cdk.Stack {
 
     const authoriserAlias = new lambda.Alias(this, 'AuthoriserLiveAlias', {
       aliasName: 'live',
-      version: authoriserFn.currentVersion,
+      version: this.authoriserFn.currentVersion,
       provisionedConcurrentExecutions: 10,
     });
 
@@ -113,7 +229,7 @@ export class PlatformStack extends cdk.Stack {
       resultsCacheTtl: cdk.Duration.minutes(5),
     });
 
-    const api = new apigateway.RestApi(this, 'PlatformRestApi', {
+    this.api = new apigateway.RestApi(this, 'PlatformRestApi', {
       restApiName: `${this.stackName}-rest-api`,
       description: 'Platform northbound REST API (ADR-003)',
       apiKeySourceType: apigateway.ApiKeySourceType.AUTHORIZER,
@@ -146,7 +262,7 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
-    const v1 = api.root.addResource('v1');
+    const v1 = this.api.root.addResource('v1');
     const invoke = v1.addResource('invoke');
     const jobs = v1.addResource('jobs');
     const jobById = jobs.addResource('{jobId}');
@@ -162,22 +278,22 @@ export class PlatformStack extends cdk.Stack {
 
     invoke.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bridgeFn, { proxy: true }),
+      new apigateway.LambdaIntegration(this.bridgeFn, { proxy: true }),
       securedMethodOptions,
     );
     jobById.addMethod(
       'GET',
-      new apigateway.LambdaIntegration(bridgeFn, { proxy: true }),
+      new apigateway.LambdaIntegration(this.bridgeFn, { proxy: true }),
       securedMethodOptions,
     );
     tokenRefresh.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bffFn, { proxy: true }),
+      new apigateway.LambdaIntegration(this.bffFn, { proxy: true }),
       securedMethodOptions,
     );
     sessionKeepalive.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bffFn, { proxy: true }),
+      new apigateway.LambdaIntegration(this.bffFn, { proxy: true }),
       securedMethodOptions,
     );
 
@@ -208,7 +324,7 @@ export class PlatformStack extends cdk.Stack {
 
     new ssm.StringParameter(this, 'RestApiIdParam', {
       parameterName: `/platform/core/${env}/rest-api-id`,
-      stringValue: api.restApiId,
+      stringValue: this.api.restApiId,
       description: 'REST API ID for the platform northbound API',
     });
 
@@ -228,8 +344,8 @@ export class PlatformStack extends cdk.Stack {
               },
         apiStages: [
           {
-            api,
-            stage: api.deploymentStage,
+            api: this.api,
+            stage: this.api.deploymentStage,
           },
         ],
       });
@@ -243,11 +359,12 @@ export class PlatformStack extends cdk.Stack {
 
     new ssm.StringParameter(this, 'BridgeLambdaRoleArnParam', {
       parameterName: `/platform/core/${env}/bridge-lambda-role-arn`,
-      stringValue: bridgeFn.role!.roleArn,
+      stringValue: this.bridgeFn.role!.roleArn,
       description: 'IAM role ARN for the Bridge Lambda function',
     });
 
-    const apiWebAcl = new wafv2.CfnWebACL(this, 'ApiWebAcl', {
+    this.apiWebAcl = new wafv2.CfnWebACL(this, 'ApiWebAcl', {
+      name: `${this.stackName}-api-waf`,
       defaultAction: { allow: {} },
       scope: 'REGIONAL',
       visibilityConfig: {
@@ -324,8 +441,8 @@ export class PlatformStack extends cdk.Stack {
     });
 
     new wafv2.CfnWebACLAssociation(this, 'ApiWebAclAssociation', {
-      resourceArn: api.deploymentStage.stageArn,
-      webAclArn: apiWebAcl.attrArn,
+      resourceArn: this.api.deploymentStage.stageArn,
+      webAclArn: this.apiWebAcl.attrArn,
     });
 
     const spaBucket = new s3.Bucket(this, 'SpaBucket', {
@@ -377,7 +494,7 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
-    const spaDistribution = new cloudfront.CfnDistribution(this, 'SpaDistribution', {
+    this.spaDistribution = new cloudfront.CfnDistribution(this, 'SpaDistribution', {
       distributionConfig: {
         enabled: true,
         comment: 'Platform SPA distribution',
@@ -430,7 +547,7 @@ export class PlatformStack extends cdk.Stack {
               ':cloudfront::',
               cdk.Aws.ACCOUNT_ID,
               ':distribution/',
-              spaDistribution.ref,
+              this.spaDistribution.ref,
             ]),
           },
         },
@@ -444,7 +561,7 @@ export class PlatformStack extends cdk.Stack {
     agentCoreGatewayRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['lambda:InvokeFunction'],
-        resources: [requestInterceptorFn.functionArn, responseInterceptorFn.functionArn],
+        resources: [this.requestInterceptorFn.functionArn, this.responseInterceptorFn.functionArn],
       }),
     );
 
@@ -464,7 +581,7 @@ export class PlatformStack extends cdk.Stack {
             },
             Interceptor: {
               Lambda: {
-                Arn: requestInterceptorFn.functionArn,
+                Arn: this.requestInterceptorFn.functionArn,
               },
             },
           },
@@ -475,7 +592,7 @@ export class PlatformStack extends cdk.Stack {
             },
             Interceptor: {
               Lambda: {
-                Arn: responseInterceptorFn.functionArn,
+                Arn: this.responseInterceptorFn.functionArn,
               },
             },
           },
@@ -493,6 +610,7 @@ export class PlatformStack extends cdk.Stack {
       encryption: sqs.QueueEncryption.SQS_MANAGED,
       retentionPeriod: cdk.Duration.days(14),
     });
+    this.dlqs[props.functionNameSuffix] = dlq;
 
     return new lambda.Function(this, `${props.functionNameSuffix}Lambda`, {
       functionName: `${this.stackName}-${props.functionNameSuffix}`,

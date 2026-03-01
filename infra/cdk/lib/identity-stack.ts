@@ -28,6 +28,10 @@ interface PipelineRoleDefinition {
 }
 
 export class IdentityStack extends cdk.Stack {
+  public readonly tenantDataKey: kms.IKey;
+  public readonly platformConfigKey: kms.IKey;
+  public readonly logsKey: kms.IKey;
+
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
@@ -116,17 +120,17 @@ export class IdentityStack extends cdk.Stack {
       jwksUrl: entraJwksUrl,
     });
 
-    const tenantDataKey = this.createPlatformKey({
+    this.tenantDataKey = this.createPlatformKey({
       id: 'TenantDataKey',
       aliasName: `alias/platform-tenant-data-${envName}`,
       description: `Platform tenant data KMS key (${envName})`,
     });
-    const platformConfigKey = this.createPlatformKey({
+    this.platformConfigKey = this.createPlatformKey({
       id: 'PlatformConfigKey',
       aliasName: `alias/platform-config-${envName}`,
       description: `Platform config KMS key (${envName})`,
     });
-    const logsKey = this.createPlatformKey({
+    this.logsKey = this.createPlatformKey({
       id: 'LogsKey',
       aliasName: `alias/platform-logs-${envName}`,
       description: `Platform logs KMS key (${envName})`,
@@ -161,19 +165,25 @@ export class IdentityStack extends cdk.Stack {
       value: entraJwksUrl,
     });
     new cdk.CfnOutput(this, 'TenantDataKmsKeyArn', {
-      value: tenantDataKey.keyArn,
+      value: this.tenantDataKey.keyArn,
     });
     new cdk.CfnOutput(this, 'PlatformConfigKmsKeyArn', {
-      value: platformConfigKey.keyArn,
+      value: this.platformConfigKey.keyArn,
     });
     new cdk.CfnOutput(this, 'LogsKmsKeyArn', {
-      value: logsKey.keyArn,
+      value: this.logsKey.keyArn,
     });
 
     new ssm.StringParameter(this, 'TenantDataKmsKeyArnParam', {
       parameterName: `/platform/identity/${envName}/tenant-data-kms-key-arn`,
-      stringValue: tenantDataKey.keyArn,
+      stringValue: this.tenantDataKey.keyArn,
       description: 'KMS key ARN for tenant data encryption',
+    });
+
+    new ssm.StringParameter(this, 'PlatformConfigKmsKeyArnParam', {
+      parameterName: `/platform/identity/${envName}/platform-config-kms-key-arn`,
+      stringValue: this.platformConfigKey.keyArn,
+      description: 'KMS key ARN for platform configuration encryption',
     });
   }
 

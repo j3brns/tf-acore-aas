@@ -245,7 +245,7 @@ Echo agent invocable end-to-end in local environment in all three modes.
               ADRs: ADR-012 | Tests: Jest construct tests
               Done: 2026-03-01
 
-[ ] TASK-026  ObservabilityStack
+[x] TASK-026  ObservabilityStack
               Per-tenant CloudWatch dashboard (provisioned in TenantStack)
               Platform operations dashboard
               All 10 FM alarms (see ARCHITECTURE.md failure modes table)
