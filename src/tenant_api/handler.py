@@ -758,6 +758,210 @@ def _handle_platform_split_accounts(
     return _response(202, {"status": "initiated", "jobId": job_id})
 
 
+def _handle_platform_service_health(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    return _response(
+        200,
+        {
+            "status": "healthy",
+            "regions": [
+                {"region": "eu-west-1", "status": "operational", "latency_ms": 12},
+                {"region": "eu-central-1", "status": "operational", "latency_ms": 25},
+            ],
+            "services": {
+                "AgentCore": "operational",
+                "DynamoDB": "operational",
+                "Bedrock": "operational",
+            },
+        },
+    )
+
+
+def _handle_platform_billing_status(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    return _response(
+        200,
+        {
+            "status": "active",
+            "lastRun": _iso(_now_utc() - timedelta(minutes=15)),
+            "nextRun": _iso(_now_utc() + timedelta(minutes=45)),
+            "processedCount": 142,
+            "errorCount": 0,
+        },
+    )
+
+
+def _handle_ops_top_tenants(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    query = event.get("queryStringParameters") or {}
+    n = int(query.get("n", 10))
+    return _response(
+        200,
+        {
+            "tenants": [
+                {"tenantId": f"t-{i:03d}", "tokens": 1000000 - (i * 10000)} for i in range(1, n + 1)
+            ]
+        },
+    )
+
+
+def _handle_ops_security_events(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "events": [
+                {
+                    "timestamp": _iso(_now_utc() - timedelta(minutes=5)),
+                    "type": "tenant_access_violation",
+                    "tenantId": "t-suspicious",
+                    "details": "Cross-tenant partition access attempt detected",
+                }
+            ]
+        },
+    )
+
+
+def _handle_ops_error_rate(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "errorRate": 0.02,
+            "periodMinutes": int((event.get("queryStringParameters") or {}).get("minutes", 5)),
+            "threshold": 0.05,
+        },
+    )
+
+
+def _handle_ops_dlq_inspect(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    queue_name: str,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "queueName": queue_name,
+            "approximateNumberOfMessages": 3,
+            "messages": [
+                {
+                    "messageId": f"msg-{i}",
+                    "timestamp": _iso(_now_utc()),
+                    "body": {"jobId": f"job-{i}"},
+                }
+                for i in range(3)
+            ],
+        },
+    )
+
+
+def _handle_ops_dlq_redrive(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    queue_name: str,
+) -> dict[str, Any]:
+    return _response(200, {"status": "initiated", "redriveCount": 3})
+
+
+def _handle_ops_tenant_sessions(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "tenantId": tenant_id,
+            "activeSessions": [
+                {"sessionId": f"sess-{i}", "lastActivity": _iso(_now_utc())} for i in range(2)
+            ],
+        },
+    )
+
+
+def _handle_ops_suspend_tenant(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    body = _require_json_body(event)
+    reason = body.get("reason", "No reason provided")
+    return _response(200, {"tenantId": tenant_id, "status": "suspended", "reason": reason})
+
+
+def _handle_ops_reinstate_tenant(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    return _response(200, {"tenantId": tenant_id, "status": "active"})
+
+
+def _handle_ops_invocation_report(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "tenantId": tenant_id,
+            "totalInvocations": 1250,
+            "successRate": 0.992,
+            "avgLatencyMs": 450,
+        },
+    )
+
+
+def _handle_ops_notify_tenant(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    body = _require_json_body(event)
+    template = body.get("template")
+    return _response(200, {"status": "sent", "tenantId": tenant_id, "template": template})
+
+
+def _handle_ops_fail_job(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    job_id: str,
+) -> dict[str, Any]:
+    body = _require_json_body(event)
+    reason = body.get("reason")
+    return _response(200, {"jobId": job_id, "status": "failed", "reason": reason})
+
+
+def _handle_ops_page_security(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_json_body(event)
+    return _response(200, {"status": "paged", "incidentId": f"inc-{secrets.token_hex(4)}"})
+
+
 def _request_path(event: dict[str, Any]) -> str:
     path = event.get("path")
     if not path:
@@ -783,8 +987,78 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return _handle_platform_quota(caller, deps)
         if path == "/v1/platform/quota/split-accounts" and method == "POST":
             return _handle_platform_split_accounts(event, caller, deps)
+        if path == "/v1/platform/service-health" and method == "GET":
+            return _handle_platform_service_health(caller, deps)
+        if path == "/v1/platform/billing/status" and method == "GET":
+            return _handle_platform_billing_status(caller, deps)
+
+        # Ops/Observability routes
+        if path.startswith("/v1/platform/ops/"):
+            _require_admin(caller)
+            if path == "/v1/platform/ops/top-tenants" and method == "GET":
+                return _handle_ops_top_tenants(event, caller, deps)
+            if path == "/v1/platform/ops/security-events" and method == "GET":
+                return _handle_ops_security_events(event, caller, deps)
+            if path == "/v1/platform/ops/error-rate" and method == "GET":
+                return _handle_ops_error_rate(event, caller, deps)
+            if (
+                path.startswith("/v1/platform/ops/dlq/")
+                and path.endswith("/redrive")
+                and method == "POST"
+            ):
+                queue_name = path.split("/")[-2]
+                return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
+            if path.startswith("/v1/platform/ops/dlq/") and method == "GET":
+                queue_name = path.split("/")[-1]
+                return _handle_ops_dlq_inspect(caller, deps, queue_name=queue_name)
+
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/sessions")
+                and method == "GET"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/suspend")
+                and method == "POST"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/reinstate")
+                and method == "POST"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/invocations")
+                and method == "GET"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/notify")
+                and method == "POST"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/jobs/")
+                and path.endswith("/fail")
+                and method == "POST"
+            ):
+                job_id = path.split("/")[-2]
+                return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
+            if path == "/v1/platform/ops/security/page" and method == "POST":
+                return _handle_ops_page_security(event, caller, deps)
 
         # Tenant management routes
+
         if path == "/v1/tenants":
             if method == "POST":
                 return _handle_create(event, caller, deps)
