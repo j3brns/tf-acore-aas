@@ -19,6 +19,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 import * as path from 'path';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 type PythonLambdaProps = {
   assetPath: string;
@@ -29,9 +30,16 @@ type PythonLambdaProps = {
   environment?: Record<string, string>;
 };
 
+export interface PlatformStackProps extends cdk.StackProps {
+  vpc: ec2.IVpc;
+}
+
 export class PlatformStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  private readonly vpc: ec2.IVpc;
+
+  constructor(scope: Construct, id: string, props: PlatformStackProps) {
     super(scope, id, props);
+    this.vpc = props.vpc;
 
     const bridgeFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bridge'),
@@ -461,6 +469,8 @@ export class PlatformStack extends cdk.Stack {
       deadLetterQueue: dlq,
       timeout: props.timeout,
       memorySize: props.memorySize,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       environment: {
         LOG_LEVEL: 'INFO',
         ...props.environment,
