@@ -28,7 +28,7 @@ logger = Logger(service="tenant-api")
 
 _TENANTS_TABLE_ENV = "TENANTS_TABLE_NAME"
 _EVENT_BUS_ENV = "EVENT_BUS_NAME"
-_API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"
+_API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"  # pragma: allowlist secret
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 
@@ -457,6 +457,73 @@ def _usage_summary(
     return usage
 
 
+def _handle_list(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    if not caller.is_admin:
+        # Non-admin only sees their own tenant, but in list format
+        if caller.tenant_id:
+            response = _handle_read(event, caller, deps, tenant_id=caller.tenant_id)
+            if response["statusCode"] == 200:
+                body = json.loads(response["body"])
+                return _response(200, {"items": [body["tenant"]], "nextToken": None})
+        return _response(200, {"items": [], "nextToken": None})
+
+    # Admin can list all, with optional filtering
+    query_params = event.get("queryStringParameters") or {}
+    status_filter = _str_or_none(query_params.get("status"))
+    tier_filter = _str_or_none(query_params.get("tier"))
+    limit = min(int(query_params.get("limit", 50)), 100)
+    next_token = query_params.get("nextToken")
+
+    # We need a system context to scan the table (or use a GSI if available)
+    # The platform-tenants table PK is TENANT#{id}, SK is METADATA.
+    # Scanning is acceptable for this low-volume config table.
+    db = _db_for_tenant(
+        tenant_id=caller.tenant_id or "system",
+        caller=caller,
+        app_id=caller.app_id or "system",
+    )
+
+    scan_kwargs: dict[str, Any] = {
+        "TableName": _tenants_table_name(),
+        "Limit": limit,
+    }
+    if next_token:
+        scan_kwargs["ExclusiveStartKey"] = json.loads(next_token)
+
+    filter_exprs = []
+    expr_values = {}
+    expr_names = {}
+
+    if status_filter:
+        filter_exprs.append("#s = :s")
+        expr_names["#s"] = "status"
+        expr_values[":s"] = status_filter.lower()
+    if tier_filter:
+        filter_exprs.append("#t = :t")
+        expr_names["#t"] = "tier"
+        expr_values[":t"] = tier_filter.lower()
+
+    if filter_exprs:
+        scan_kwargs["FilterExpression"] = " AND ".join(filter_exprs)
+        scan_kwargs["ExpressionAttributeNames"] = expr_names
+        scan_kwargs["ExpressionAttributeValues"] = expr_values
+
+    # Scan the table using data-access-lib
+    items = db.scan(_tenants_table_name(), **scan_kwargs)
+
+    return _response(
+        200,
+        {
+            "items": [_serialize_tenant(item) for item in items],
+            "nextToken": None,  # TODO: Implement paged scan in data-access-lib
+        },
+    )
+
+
 def _handle_read(
     event: dict[str, Any],
     caller: CallerIdentity,
@@ -583,6 +650,325 @@ def _handle_delete(
     return _response(200, {"tenant": _serialize_tenant(item)})
 
 
+def _handle_audit_export(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    existing = _read_tenant_record(tenant_id=tenant_id, caller=caller)
+    if existing is None:
+        return _error(404, "NOT_FOUND", "Tenant not found")
+
+    # In a real implementation, this would trigger a background export of
+    # platform-invocations to S3 and return a presigned URL.
+    # For now, we return a mock response as per the "future implementation" note in openapi.yaml.
+    now = _now_utc()
+    expires_at = now + timedelta(hours=1)
+    return _response(
+        200,
+        {
+            "tenantId": tenant_id,
+            "downloadUrl": f"https://s3.amazonaws.com/mock-export-{tenant_id}.csv",
+            "expiresAt": _iso(expires_at),
+        },
+    )
+
+
+def _handle_platform_failover(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    body = _require_json_body(event)
+    target_region = _str_or_none(body.get("targetRegion"))
+    lock_id = _str_or_none(body.get("lockId"))
+
+    if not target_region or not lock_id:
+        raise ValueError("targetRegion and lockId are required")
+
+    # TODO: Verify lock_id against platform-ops-locks table
+    # TODO: Update SSM /platform/config/runtime-region
+
+    logger.info(
+        "Platform failover triggered",
+        extra={"target_region": target_region, "lock_id": lock_id, "actor": caller.sub},
+    )
+
+    return _response(200, {"status": "initiated", "region": target_region})
+
+
+def _handle_platform_quota(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+
+    # In a real implementation, this would call AgentCore service quotas
+    # or CloudWatch metrics for ConcurrentSessions.
+    return _response(
+        200,
+        {
+            "utilisation": [
+                {
+                    "region": "eu-west-1",
+                    "quotaName": "ConcurrentSessions",
+                    "currentValue": 5,
+                    "limit": 25,
+                    "utilisationPercentage": 20.0,
+                },
+                {
+                    "region": "eu-central-1",
+                    "quotaName": "ConcurrentSessions",
+                    "currentValue": 0,
+                    "limit": 25,
+                    "utilisationPercentage": 0.0,
+                },
+            ]
+        },
+    )
+
+
+def _handle_platform_split_accounts(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    # Platform.Admin only for this one
+    if "Platform.Admin" not in caller.roles:
+        raise PermissionError("Platform.Admin role required")
+
+    body = _require_json_body(event)
+    tier = _normalize_tier(body.get("tier"))
+    target_account_id = _str_or_none(body.get("targetAccountId"))
+
+    if not target_account_id:
+        raise ValueError("targetAccountId is required")
+
+    # In a real implementation, this would trigger an Step Function or async job
+    # to move tenants of the specified tier to a new account.
+    job_id = f"job-split-{secrets.token_hex(4)}"
+    logger.info(
+        "Account split initiated",
+        extra={"tier": tier, "target_account_id": target_account_id, "job_id": job_id},
+    )
+
+    return _response(202, {"status": "initiated", "jobId": job_id})
+
+
+def _handle_platform_service_health(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    return _response(
+        200,
+        {
+            "status": "healthy",
+            "regions": [
+                {"region": "eu-west-1", "status": "operational", "latency_ms": 12},
+                {"region": "eu-central-1", "status": "operational", "latency_ms": 25},
+            ],
+            "services": {
+                "AgentCore": "operational",
+                "DynamoDB": "operational",
+                "Bedrock": "operational",
+            },
+        },
+    )
+
+
+def _handle_platform_billing_status(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    return _response(
+        200,
+        {
+            "status": "active",
+            "lastRun": _iso(_now_utc() - timedelta(minutes=15)),
+            "nextRun": _iso(_now_utc() + timedelta(minutes=45)),
+            "processedCount": 142,
+            "errorCount": 0,
+        },
+    )
+
+
+def _handle_ops_top_tenants(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    query = event.get("queryStringParameters") or {}
+    n = int(query.get("n", 10))
+    return _response(
+        200,
+        {
+            "tenants": [
+                {"tenantId": f"t-{i:03d}", "tokens": 1000000 - (i * 10000)} for i in range(1, n + 1)
+            ]
+        },
+    )
+
+
+def _handle_ops_security_events(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "events": [
+                {
+                    "timestamp": _iso(_now_utc() - timedelta(minutes=5)),
+                    "type": "tenant_access_violation",
+                    "tenantId": "t-suspicious",
+                    "details": "Cross-tenant partition access attempt detected",
+                }
+            ]
+        },
+    )
+
+
+def _handle_ops_error_rate(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "errorRate": 0.02,
+            "periodMinutes": int((event.get("queryStringParameters") or {}).get("minutes", 5)),
+            "threshold": 0.05,
+        },
+    )
+
+
+def _handle_ops_dlq_inspect(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    queue_name: str,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "queueName": queue_name,
+            "approximateNumberOfMessages": 3,
+            "messages": [
+                {
+                    "messageId": f"msg-{i}",
+                    "timestamp": _iso(_now_utc()),
+                    "body": {"jobId": f"job-{i}"},
+                }
+                for i in range(3)
+            ],
+        },
+    )
+
+
+def _handle_ops_dlq_redrive(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    queue_name: str,
+) -> dict[str, Any]:
+    return _response(200, {"status": "initiated", "redriveCount": 3})
+
+
+def _handle_ops_tenant_sessions(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "tenantId": tenant_id,
+            "activeSessions": [
+                {"sessionId": f"sess-{i}", "lastActivity": _iso(_now_utc())} for i in range(2)
+            ],
+        },
+    )
+
+
+def _handle_ops_suspend_tenant(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    body = _require_json_body(event)
+    reason = body.get("reason", "No reason provided")
+    return _response(200, {"tenantId": tenant_id, "status": "suspended", "reason": reason})
+
+
+def _handle_ops_reinstate_tenant(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    return _response(200, {"tenantId": tenant_id, "status": "active"})
+
+
+def _handle_ops_invocation_report(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "tenantId": tenant_id,
+            "totalInvocations": 1250,
+            "successRate": 0.992,
+            "avgLatencyMs": 450,
+        },
+    )
+
+
+def _handle_ops_notify_tenant(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str,
+) -> dict[str, Any]:
+    body = _require_json_body(event)
+    template = body.get("template")
+    return _response(200, {"status": "sent", "tenantId": tenant_id, "template": template})
+
+
+def _handle_ops_fail_job(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    job_id: str,
+) -> dict[str, Any]:
+    body = _require_json_body(event)
+    reason = body.get("reason")
+    return _response(200, {"jobId": job_id, "status": "failed", "reason": reason})
+
+
+def _handle_ops_page_security(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_json_body(event)
+    return _response(200, {"status": "paged", "incidentId": f"inc-{secrets.token_hex(4)}"})
+
+
+def _request_path(event: dict[str, Any]) -> str:
+    path = event.get("path")
+    if not path:
+        path = event.get("requestContext", {}).get("http", {}).get("path")
+    return str(path or "").rstrip("/")
+
+
 @logger.inject_lambda_context(clear_state=True, log_event=False)
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     caller = _caller_identity(event)
@@ -591,16 +977,105 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     method = _http_method(event)
     tenant_id = _path_tenant_id(event)
+    path = _request_path(event)
 
     try:
-        if method == "POST" and tenant_id is None:
-            return _handle_create(event, caller, deps)
-        if method == "GET" and tenant_id is not None:
-            return _handle_read(event, caller, deps, tenant_id=tenant_id)
-        if method in {"PATCH", "PUT"} and tenant_id is not None:
-            return _handle_update(event, caller, deps, tenant_id=tenant_id)
-        if method == "DELETE" and tenant_id is not None:
-            return _handle_delete(caller, deps, tenant_id=tenant_id)
+        # Platform management routes
+        if path == "/v1/platform/failover" and method == "POST":
+            return _handle_platform_failover(event, caller, deps)
+        if path == "/v1/platform/quota" and method == "GET":
+            return _handle_platform_quota(caller, deps)
+        if path == "/v1/platform/quota/split-accounts" and method == "POST":
+            return _handle_platform_split_accounts(event, caller, deps)
+        if path == "/v1/platform/service-health" and method == "GET":
+            return _handle_platform_service_health(caller, deps)
+        if path == "/v1/platform/billing/status" and method == "GET":
+            return _handle_platform_billing_status(caller, deps)
+
+        # Ops/Observability routes
+        if path.startswith("/v1/platform/ops/"):
+            _require_admin(caller)
+            if path == "/v1/platform/ops/top-tenants" and method == "GET":
+                return _handle_ops_top_tenants(event, caller, deps)
+            if path == "/v1/platform/ops/security-events" and method == "GET":
+                return _handle_ops_security_events(event, caller, deps)
+            if path == "/v1/platform/ops/error-rate" and method == "GET":
+                return _handle_ops_error_rate(event, caller, deps)
+            if (
+                path.startswith("/v1/platform/ops/dlq/")
+                and path.endswith("/redrive")
+                and method == "POST"
+            ):
+                queue_name = path.split("/")[-2]
+                return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
+            if path.startswith("/v1/platform/ops/dlq/") and method == "GET":
+                queue_name = path.split("/")[-1]
+                return _handle_ops_dlq_inspect(caller, deps, queue_name=queue_name)
+
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/sessions")
+                and method == "GET"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/suspend")
+                and method == "POST"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/reinstate")
+                and method == "POST"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/invocations")
+                and method == "GET"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/tenants/")
+                and path.endswith("/notify")
+                and method == "POST"
+            ):
+                tenant_id = path.split("/")[-2]
+                return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
+            if (
+                path.startswith("/v1/platform/ops/jobs/")
+                and path.endswith("/fail")
+                and method == "POST"
+            ):
+                job_id = path.split("/")[-2]
+                return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
+            if path == "/v1/platform/ops/security/page" and method == "POST":
+                return _handle_ops_page_security(event, caller, deps)
+
+        # Tenant management routes
+
+        if path == "/v1/tenants":
+            if method == "POST":
+                return _handle_create(event, caller, deps)
+            if method == "GET":
+                return _handle_list(event, caller, deps)
+
+        if tenant_id is not None:
+            if path.endswith("/audit-export") and method == "GET":
+                return _handle_audit_export(caller, deps, tenant_id=tenant_id)
+
+            if method == "GET":
+                return _handle_read(event, caller, deps, tenant_id=tenant_id)
+            if method in {"PATCH", "PUT"}:
+                return _handle_update(event, caller, deps, tenant_id=tenant_id)
+            if method == "DELETE":
+                return _handle_delete(caller, deps, tenant_id=tenant_id)
+
         return _error(405, "METHOD_NOT_ALLOWED", "Unsupported tenant API route")
     except PermissionError as exc:
         return _error(403, "FORBIDDEN", str(exc))

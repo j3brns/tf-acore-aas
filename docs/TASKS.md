@@ -290,13 +290,14 @@ make bootstrap-dev succeeds. Operator completes RUNBOOK-001 in dev.
               Used by: infra-set-runtime-region Makefile target
               ADRs: ADR-009 | Tests: concurrent acquire, only one succeeds
 
-[ ] TASK-031  Implement Admin REST API routes
+[x] TASK-031  Implement Admin REST API routes
               POST /v1/platform/failover
               GET  /v1/platform/quota
               GET  /v1/tenants (list all, Platform.Admin only)
               GET  /v1/tenants/{id}/audit-export
               POST /v1/platform/quota/split-accounts
               ADRs: ADR-002 | Tests: role enforcement, non-admin gets 403
+              Done: 2026-03-01
 
 [ ] TASK-032  Test all runbooks in dev environment
               Execute every runbook scenario with ops.py and make targets

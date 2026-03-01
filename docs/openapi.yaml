@@ -21,6 +21,8 @@ tags:
     description: Async job polling APIs
   - name: Webhooks
     description: Webhook registration and lifecycle
+  - name: Platform
+    description: Platform operations and administration APIs
   - name: BFF
     description: Thin backend-for-frontend endpoints
 servers:
@@ -472,6 +474,132 @@ paths:
           $ref: "#/components/responses/Conflict"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/failover:
+    post:
+      tags: [Platform]
+      operationId: triggerFailover
+      summary: Trigger region failover
+      description: >
+        Triggers a region failover from primary to fallback region or vice versa.
+        Requires distributed lock to be acquired before calling.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetRegion, lockId]
+              properties:
+                targetRegion:
+                  type: string
+                lockId:
+                  type: string
+      responses:
+        "200":
+          description: Failover initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  region:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/quota:
+    get:
+      tags: [Platform]
+      operationId: getPlatformQuota
+      summary: Get platform quota status
+      description: >
+        Returns the current AgentCore quota utilisation across regions.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      responses:
+        "200":
+          description: Quota status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  utilisation:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        region:
+                          type: string
+                        quotaName:
+                          type: string
+                        currentValue:
+                          type: number
+                        limit:
+                          type: number
+                        utilisationPercentage:
+                          type: number
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/quota/split-accounts:
+    post:
+      tags: [Platform]
+      operationId: splitAccounts
+      summary: Initiate account splitting for quota relief
+      description: >
+        Initiates the process of splitting premium tenants into separate AWS
+        accounts to relieve quota pressure (Option B/C topology).
+      x-required-roles:
+        - Platform.Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier, targetAccountId]
+              properties:
+                tier:
+                  $ref: "#/components/schemas/TenantTier"
+                targetAccountId:
+                  type: string
+                  pattern: "^[0-9]{12}$"
+      responses:
+        "202":
+          description: Account split initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  jobId:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
