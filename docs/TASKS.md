@@ -237,12 +237,13 @@ Echo agent invocable end-to-end in local environment in all three modes.
               Observability metric stream eu-west-1→eu-west-2
               ADRs: ADR-001, ADR-009 | Tests: Jest construct tests
 
-[ ] TASK-025  TenantStack
+[x] TASK-025  TenantStack
               Provisioned per-tenant by EventBridge trigger on platform.tenant.created
               Creates: Memory store, execution role (scoped to tenant S3/DynamoDB),
               usage plan API key, SSM parameters for tenant
               CDK context input: tenantId, tier, accountId
               ADRs: ADR-012 | Tests: Jest construct tests
+              Done: 2026-03-01
 
 [ ] TASK-026  ObservabilityStack
               Per-tenant CloudWatch dashboard (provisioned in TenantStack)
