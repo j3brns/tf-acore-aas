@@ -93,7 +93,7 @@ def detect_ops_cli_stub_drift() -> list[str]:
     findings: list[str] = []
     text = OPS_PY.read_text(encoding="utf-8")
     has_argparse = "argparse" in text
-    has_main = "if __name__ == \"__main__\"" in text
+    has_main = 'if __name__ == "__main__"' in text
     if not (has_argparse and has_main):
         findings.append(
             "scripts/ops.py appears to be a stub (missing argparse/main) "
