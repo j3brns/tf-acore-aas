@@ -352,11 +352,12 @@ No AWS console access permitted during runbook testing.
               Idempotency: Lambda Powertools keyed on Mcp-Session-Id + body.id
               ADRs: ADR-004 | Tests: tier enforcement, scoped token structure
 
-[ ] TASK-037  Write gateway/interceptors/response_interceptor.py
+[x] TASK-037  Write gateway/interceptors/response_interceptor.py
               tools/list: filter to tierMinimum <= tenant tier
               tools/call: PII scan and redact (UK NI, NHS, sort code, account, email)
               PII patterns from SSM /platform/gateway/pii-patterns/default
               ADRs: ADR-004 | Tests: PII redaction, tier filtering, passthrough for allowed
+              Done: 2026-03-02, commit 856aa75
 
 [ ] TASK-038  Write src/bff/handler.py
               POST /v1/bff/token-refresh: Entra OBO flow, returns new scoped token
