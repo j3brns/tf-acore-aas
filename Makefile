@@ -147,6 +147,11 @@ validate-python:
 	uv run ruff format --check .
 	cd infra/cdk && npx --no-install pyright --project ../../pyrightconfig.json
 
+## validate-agent-manifest: Validate agent pyproject.toml [tool.agentcore] section
+validate-agent-manifest:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make validate-agent-manifest AGENT=my-agent" && exit 1)
+	uv run python scripts/validate_agent_manifest.py $(AGENT)
+
 ## validate-cdk: TypeScript compile and CDK synth
 validate-cdk:
 	@$(MAKE) --no-print-directory validate-cdk-ts
