@@ -49,6 +49,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly sessionsTable: dynamodb.Table;
   public readonly toolsTable: dynamodb.Table;
   public readonly opsLocksTable: dynamodb.Table;
+  public readonly gatewayIdempotencyTable: dynamodb.Table;
 
   public readonly bridgeFn: lambda.Function;
   public readonly bffFn: lambda.Function;
@@ -119,6 +120,17 @@ export class PlatformStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: props.platformConfigKey,
       timeToLiveAttribute: 'ttl',
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.gatewayIdempotencyTable = new dynamodb.Table(this, 'GatewayIdempotencyTable', {
+      tableName: 'platform-gateway-idempotency',
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.platformConfigKey,
+      timeToLiveAttribute: 'expiration',
       pointInTimeRecovery: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
@@ -241,6 +253,12 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'gateway-request-interceptor',
+        TOOLS_TABLE: this.toolsTable.tableName,
+        ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
+        ENTRA_AUDIENCE: 'platform-api',
+        ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
+        SCOPED_TOKEN_ISSUER: 'platform-gateway',
+        IDEMPOTENCY_TABLE: this.gatewayIdempotencyTable.tableName,
       },
     });
 
@@ -254,6 +272,9 @@ export class PlatformStack extends cdk.Stack {
         POWERTOOLS_SERVICE_NAME: 'gateway-response-interceptor',
       },
     });
+
+    this.toolsTable.grantReadData(this.requestInterceptorFn);
+    this.gatewayIdempotencyTable.grantReadWriteData(this.requestInterceptorFn);
 
     const authoriserAlias = new lambda.Alias(this, 'AuthoriserLiveAlias', {
       aliasName: 'live',

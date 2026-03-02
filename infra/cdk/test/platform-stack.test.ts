@@ -36,7 +36,7 @@ describe('PlatformStack (TASK-023)', () => {
   const template = synthTemplate();
 
   test('creates all required DynamoDB tables with PITR and encryption', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 7);
+    template.resourceCountIs('AWS::DynamoDB::Table', 8);
 
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'platform-tenants',
