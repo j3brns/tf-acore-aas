@@ -390,18 +390,20 @@ All three invocation modes work end-to-end in dev AWS environment.
               ADRs: ADR-002 | Tests: npm run build passes
               Done: 2026-03-03
 
-[ ] TASK-041  MSAL auth layer and API client
+[x] TASK-041  MSAL auth layer and API client
               spa/src/auth/: msalConfig.ts, AuthProvider.tsx, useAuth.ts
               spa/src/api/client.ts: fetch wrapper, Bearer injection, 401 refresh
               Token refresh via acquireTokenSilent then acquireTokenPopup fallback
               Fetch + ReadableStream for streaming (not EventSource — no auth header)
               ADRs: ADR-002, ADR-003, ADR-011 | Tests: auth flow mocked
+              Done: 2026-03-03
 
-[ ] TASK-042  Agent catalogue, invoke, sessions, admin pages
+[x] TASK-042  Agent catalogue, invoke, sessions, admin pages
               AgentCataloguePage, InvokePage (all three modes), SessionsPage
               AdminPage: platform health, requires Platform.Operator role claim
               JobStatus polling component for async invocations
               ADRs: none | Tests: component tests
+              Done: 2026-03-03
 
 [ ] TASK-043  CloudFront CSP and CORS
               Response headers policy: full CSP, X-Frame-Options, HSTS
