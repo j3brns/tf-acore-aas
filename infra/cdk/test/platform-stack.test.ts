@@ -65,12 +65,36 @@ describe('PlatformStack (TASK-023)', () => {
     });
 
     template.resourceCountIs('AWS::ApiGateway::UsagePlan', 3);
+    template.resourceCountIs('AWS::Lambda::Alias', 2);
 
     template.hasResourceProperties('AWS::Lambda::Alias', {
       Name: 'live',
       ProvisionedConcurrencyConfig: {
         ProvisionedConcurrentExecutions: 10,
       },
+    });
+  });
+
+  test('creates bridge canary deployment group with error-rate auto-rollback alarm', () => {
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'error_rate_high',
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      Threshold: 5,
+    });
+
+    template.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
+      DeploymentConfigName: 'CodeDeployDefault.LambdaCanary10Percent5Minutes',
+      AutoRollbackConfiguration: {
+        Enabled: true,
+        Events: Match.arrayWith([
+          'DEPLOYMENT_FAILURE',
+          'DEPLOYMENT_STOP_ON_REQUEST',
+          'DEPLOYMENT_STOP_ON_ALARM',
+        ]),
+      },
+      AlarmConfiguration: Match.objectLike({
+        Enabled: true,
+      }),
     });
   });
 
