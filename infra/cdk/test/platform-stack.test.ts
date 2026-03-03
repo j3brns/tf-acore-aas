@@ -36,7 +36,7 @@ describe('PlatformStack (TASK-023)', () => {
   const template = synthTemplate();
 
   test('creates all required DynamoDB tables with PITR and encryption', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 7);
+    template.resourceCountIs('AWS::DynamoDB::Table', 8);
 
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'platform-tenants',
@@ -114,13 +114,20 @@ describe('PlatformStack (TASK-023)', () => {
 
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
-        CustomHeadersConfig: Match.objectLike({
-          Items: Match.arrayWith([
-            Match.objectLike({
-              Header: 'Content-Security-Policy',
-              Override: true,
-            }),
-          ]),
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: Match.objectLike({
+            Override: true,
+          }),
+          FrameOptions: Match.objectLike({
+            FrameOption: 'DENY',
+            Override: true,
+          }),
+          StrictTransportSecurity: Match.objectLike({
+            AccessControlMaxAgeSec: 31536000,
+            IncludeSubdomains: true,
+            Preload: true,
+            Override: true,
+          }),
         }),
       }),
     });
@@ -137,6 +144,31 @@ describe('PlatformStack (TASK-023)', () => {
         }),
       }),
     });
+  });
+
+  test('configures API Gateway CORS preflight to CloudFront origin only', () => {
+    const optionsMethods = template.findResources('AWS::ApiGateway::Method', {
+      Properties: {
+        HttpMethod: 'OPTIONS',
+      },
+    });
+
+    expect(Object.keys(optionsMethods).length).toBeGreaterThan(0);
+
+    for (const method of Object.values(optionsMethods) as Array<{ Properties?: unknown }>) {
+      const properties = method.Properties as {
+        Integration?: { IntegrationResponses?: Array<{ ResponseParameters?: Record<string, unknown> }> };
+      };
+      const responseParameters =
+        properties.Integration?.IntegrationResponses?.[0]?.ResponseParameters ?? {};
+      const allowOrigin = responseParameters['method.response.header.Access-Control-Allow-Origin'];
+      const allowMethods = responseParameters['method.response.header.Access-Control-Allow-Methods'];
+
+      expect(allowOrigin).toBeDefined();
+      expect(JSON.stringify(allowOrigin)).toContain('DomainName');
+      expect(JSON.stringify(allowOrigin)).not.toContain("'*'");
+      expect(JSON.stringify(allowMethods)).toContain('OPTIONS');
+    }
   });
 
   test('creates AgentCore Gateway with request and response interceptor wiring', () => {

@@ -1,101 +1,194 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { PublicClientApplication, IPublicClientApplication } from "@azure/msal-browser";
-import { msalConfig, loginRequest } from "./msalConfig";
+import {
+  EventType,
+  InteractionRequiredAuthError,
+  PublicClientApplication,
+  type AccountInfo,
+  type AuthenticationResult,
+  type IPublicClientApplication,
+  type PopupRequest,
+} from "@azure/msal-browser";
+import {
+  createContext,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
-interface AuthContextType {
-    instance: IPublicClientApplication;
-    account: any;
-    isAuthenticated: boolean;
-    login: () => Promise<void>;
-    logout: () => void;
-    getToken: () => Promise<string | null>;
+import { defaultScopes, loginRequest, msalConfig } from "./msalConfig";
+
+const msalInstance = new PublicClientApplication(msalConfig);
+
+type TokenRequestOptions = {
+  forceRefresh?: boolean;
+  scopes?: string[];
+};
+
+export type AuthContextValue = {
+  account: AccountInfo | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  login: () => Promise<void>;
+  logout: () => Promise<void>;
+  getAccessToken: (options?: TokenRequestOptions) => Promise<string>;
+};
+
+export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+type AuthProviderProps = {
+  children: ReactNode;
+  client?: IPublicClientApplication;
+};
+
+type TokenAcquisitionParams = {
+  client: IPublicClientApplication;
+  account: AccountInfo;
+  scopes: string[];
+  forceRefresh?: boolean;
+};
+
+export async function acquireTokenWithPopupFallback(
+  params: TokenAcquisitionParams,
+): Promise<AuthenticationResult> {
+  const { client, account, scopes, forceRefresh = false } = params;
+
+  try {
+    return await client.acquireTokenSilent({
+      account,
+      scopes,
+      forceRefresh,
+    });
+  } catch (error) {
+    if (error instanceof InteractionRequiredAuthError) {
+      const popupRequest: PopupRequest = {
+        account,
+        scopes,
+      };
+      return client.acquireTokenPopup(popupRequest);
+    }
+    throw error;
+  }
 }
 
-const AuthContext = createContext<AuthContextType | null>(null);
+function resolveAccount(client: IPublicClientApplication): AccountInfo | null {
+  return client.getActiveAccount() ?? client.getAllAccounts()[0] ?? null;
+}
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [pca] = useState(() => new PublicClientApplication(msalConfig));
-    const [account, setAccount] = useState<any>(null);
-    const [initialized, setInitialized] = useState(false);
+export function AuthProvider({ children, client = msalInstance }: AuthProviderProps) {
+  const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-    useEffect(() => {
-        const init = async () => {
-            try {
-                await pca.initialize();
-                const accounts = pca.getAllAccounts();
-                if (accounts.length > 0) {
-                    pca.setActiveAccount(accounts[0]);
-                    setAccount(accounts[0]);
-                }
-                setInitialized(true);
-            } catch (error) {
-                console.error("MSAL initialization failed", error);
-            }
-        };
-        init();
-    }, [pca]);
+  const syncAccount = useCallback(() => {
+    const activeAccount = resolveAccount(client);
+    if (activeAccount) {
+      client.setActiveAccount(activeAccount);
+    }
+    setAccount(activeAccount);
+    return activeAccount;
+  }, [client]);
 
-    const login = async () => {
-        try {
-            const result = await pca.loginPopup(loginRequest);
-            pca.setActiveAccount(result.account);
-            setAccount(result.account);
-        } catch (error) {
-            console.error("Login failed", error);
+  useEffect(() => {
+    let mounted = true;
+
+    const callbackId = client.addEventCallback((event) => {
+      if (
+        event.eventType === EventType.LOGIN_SUCCESS ||
+        event.eventType === EventType.ACQUIRE_TOKEN_SUCCESS
+      ) {
+        const payload = event.payload as AuthenticationResult | null;
+        if (payload?.account) {
+          client.setActiveAccount(payload.account);
+          if (mounted) {
+            setAccount(payload.account);
+          }
         }
-    };
+      }
 
-    const logout = () => {
-        pca.logoutPopup();
+      if (event.eventType === EventType.LOGOUT_SUCCESS && mounted) {
         setAccount(null);
-    };
+      }
+    });
 
-    const getToken = async (): Promise<string | null> => {
-        const activeAccount = pca.getActiveAccount();
-        if (!activeAccount) return null;
-
-        try {
-            const result = await pca.acquireTokenSilent({
-                ...loginRequest,
-                account: activeAccount,
-            });
-            return result.accessToken;
-        } catch (error) {
-            console.warn("Silent token acquisition failed, attempting popup", error);
-            try {
-                const result = await pca.acquireTokenPopup(loginRequest);
-                return result.accessToken;
-            } catch (popupError) {
-                console.error("Popup token acquisition failed", popupError);
-                return null;
-            }
+    void (async () => {
+      try {
+        await client.initialize();
+        await client.handleRedirectPromise();
+        if (mounted) {
+          syncAccount();
         }
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      if (callbackId) {
+        client.removeEventCallback(callbackId);
+      }
     };
+  }, [client, syncAccount]);
 
-    if (!initialized) {
-        return <div>Loading authentication...</div>;
+  const login = useCallback(async () => {
+    const response = await client.loginPopup(loginRequest);
+    if (response.account) {
+      client.setActiveAccount(response.account);
+      setAccount(response.account);
+      return;
     }
+    syncAccount();
+  }, [client, syncAccount]);
 
-    return (
-        <AuthContext.Provider
-            value={{
-                instance: pca,
-                account,
-                isAuthenticated: !!account,
-                login,
-                logout,
-                getToken,
-            }}
-        >
-            {children}
-        </AuthContext.Provider>
+  const logout = useCallback(async () => {
+    const activeAccount = account ?? resolveAccount(client);
+    await client.logoutPopup(
+      activeAccount
+        ? {
+            account: activeAccount,
+          }
+        : undefined,
     );
-};
+    setAccount(null);
+  }, [account, client]);
 
-export const useAuth = () => {
-    const context = useContext(AuthContext);
-    if (!context) {
-        throw new Error("useAuth must be used within an AuthProvider");
-    }
-    return context;
-};
+  const getAccessToken = useCallback(
+    async (options?: TokenRequestOptions) => {
+      let activeAccount = account ?? resolveAccount(client);
+      if (!activeAccount) {
+        await login();
+        activeAccount = resolveAccount(client);
+      }
+
+      if (!activeAccount) {
+        throw new Error("Unable to resolve active account after login");
+      }
+
+      const requestedScopes = options?.scopes?.length ? options.scopes : defaultScopes;
+      const tokenResult = await acquireTokenWithPopupFallback({
+        client,
+        account: activeAccount,
+        scopes: requestedScopes,
+        forceRefresh: options?.forceRefresh,
+      });
+      return tokenResult.accessToken;
+    },
+    [account, client, login],
+  );
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      account,
+      isAuthenticated: account !== null,
+      isLoading,
+      login,
+      logout,
+      getAccessToken,
+    }),
+    [account, getAccessToken, isLoading, login, logout],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}

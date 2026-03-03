@@ -7,7 +7,16 @@ import { AdminPage } from "./pages/AdminPage";
 import { useAuth } from "./auth/useAuth";
 
 function App() {
-  const { isAuthenticated, login } = useAuth();
+  const { isAuthenticated, login, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <p className="mt-4 text-gray-600">Checking session...</p>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return (

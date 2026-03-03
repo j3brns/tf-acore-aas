@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { apiClient } from "../api/client";
+import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { Agent } from "../types";
 import { useJobPolling } from "../hooks/useJobPolling";
@@ -8,7 +8,7 @@ import { useJobPolling } from "../hooks/useJobPolling";
 export const InvokePage: React.FC = () => {
     const { agentName } = useParams<{ agentName: string }>();
     const navigate = useNavigate();
-    const { getToken } = useAuth();
+    const { getAccessToken, isAuthenticated } = useAuth();
     
     const [agent, setAgent] = useState<Agent | null>(null);
     const [prompt, setPrompt] = useState("");
@@ -17,18 +17,15 @@ export const InvokePage: React.FC = () => {
     const [result, setResult] = useState<string | null>(null);
     const [jobId, setJobId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [token, setToken] = useState<string | null>(null);
 
-    const { status: jobStatus } = useJobPolling(jobId, token);
+    const { status: jobStatus } = useJobPolling(jobId, getAccessToken);
 
     useEffect(() => {
         const fetchAgent = async () => {
+            if (!isAuthenticated) return;
             try {
-                const t = await getToken();
-                setToken(t);
-                if (!t) return;
-                
-                const data = await apiClient.fetch(`/v1/agents/${agentName}`, { token: t });
+                const client = getApiClient(getAccessToken);
+                const data = await client.request<Agent>(`/v1/agents/${agentName}`);
                 setAgent(data);
                 setMode(data.invocation_mode);
             } catch (err: any) {
@@ -36,7 +33,7 @@ export const InvokePage: React.FC = () => {
             }
         };
         fetchAgent();
-    }, [agentName, getToken]);
+    }, [agentName, getAccessToken, isAuthenticated]);
 
     const handleInvoke = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -46,32 +43,21 @@ export const InvokePage: React.FC = () => {
         setError(null);
 
         try {
-            const t = await getToken();
-            if (!t) throw new Error("Not authenticated");
+            const client = getApiClient(getAccessToken);
 
             if (mode === "streaming") {
-                const stream = await apiClient.fetchStream(`/v1/agents/${agentName}/invoke`, {
+                const stream = client.stream(`/v1/agents/${agentName}/invoke`, {
                     method: "POST",
-                    token: t,
                     body: JSON.stringify({ prompt, mode }),
                     headers: { "Content-Type": "application/json" }
                 });
 
-                if (!stream) throw new Error("No stream returned");
-                
-                const reader = stream.getReader();
-                const decoder = new TextDecoder();
-                
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    const chunk = decoder.decode(value, { stream: true });
-                    setResult((prev) => (prev || "") + chunk);
+                for await (const chunk of stream) {
+                    setResult((prev) => (prev || "") + chunk.data);
                 }
             } else {
-                const data = await apiClient.fetch(`/v1/agents/${agentName}/invoke`, {
+                const data = await client.request<any>(`/v1/agents/${agentName}/invoke`, {
                     method: "POST",
-                    token: t,
                     body: JSON.stringify({ prompt, mode }),
                     headers: { "Content-Type": "application/json" }
                 });

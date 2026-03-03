@@ -1,25 +1,19 @@
 import { useEffect, useState, useRef } from "react";
+import { getApiClient, AccessTokenProvider } from "../api/client";
 
-export function useJobPolling(jobId: string | null, token: string | null, interval = 2000) {
+export function useJobPolling(jobId: string | null, getAccessToken: AccessTokenProvider, interval = 2000) {
     const [status, setStatus] = useState<any>(null);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [_loading, setLoading] = useState(false);
+    const [_error, setError] = useState<string | null>(null);
     const timerRef = useRef<number | null>(null);
 
     useEffect(() => {
-        if (!jobId || !token) return;
+        if (!jobId) return;
 
         const poll = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/v1/jobs/${jobId}`, {
-                    headers: {
-                        Authorization: `Bearer ${token}`
-                    }
-                });
-                
-                if (!response.ok) throw new Error("Failed to poll job status");
-                
-                const data = await response.json();
+                const client = getApiClient(getAccessToken);
+                const data = await client.request<any>(`/v1/jobs/${jobId}`);
                 setStatus(data);
 
                 if (data.status === "completed" || data.status === "failed") {
@@ -38,7 +32,7 @@ export function useJobPolling(jobId: string | null, token: string | null, interv
         return () => {
             if (timerRef.current) window.clearInterval(timerRef.current);
         };
-    }, [jobId, token, interval]);
+    }, [jobId, getAccessToken, interval]);
 
-    return { status, loading, error };
+    return { status, loading: _loading, error: _error };
 }

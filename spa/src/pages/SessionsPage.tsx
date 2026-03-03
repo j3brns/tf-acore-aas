@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { apiClient } from "../api/client";
+import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { Session } from "../types";
 
@@ -7,14 +7,14 @@ export const SessionsPage: React.FC = () => {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [loading, setLoading] = useState(true);
     const [_error, setError] = useState<string | null>(null);
-    const { getToken } = useAuth();
+    const { getAccessToken, isAuthenticated } = useAuth();
 
     useEffect(() => {
         const fetchSessions = async () => {
+            if (!isAuthenticated) return;
             try {
-                const token = await getToken();
-                if (!token) return;
-                const data = await apiClient.fetch("/v1/sessions", { token });
+                const client = getApiClient(getAccessToken);
+                const data = await client.request<{ sessions: Session[] }>("/v1/sessions");
                 setSessions(data.sessions || []);
             } catch (err: any) {
                 setError(err.message);
@@ -23,7 +23,7 @@ export const SessionsPage: React.FC = () => {
             }
         };
         fetchSessions();
-    }, [getToken]);
+    }, [getAccessToken, isAuthenticated]);
 
     if (loading) return <div>Loading sessions...</div>;
 

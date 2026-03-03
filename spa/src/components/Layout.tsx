@@ -42,7 +42,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                             </nav>
                         </div>
                         <div className="flex items-center space-x-4">
-                            {isAuthenticated ? (
+                            {isAuthenticated && account ? (
                                 <>
                                     <span className="text-sm text-gray-600">{account.name}</span>
                                     <button

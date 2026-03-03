@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { apiClient } from "../api/client";
+import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 
 export const AdminPage: React.FC = () => {
@@ -8,26 +8,25 @@ export const AdminPage: React.FC = () => {
     const [quota, setQuota] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [_error, setError] = useState<string | null>(null);
-    const { getToken, account } = useAuth();
+    const { getAccessToken, account, isAuthenticated } = useAuth();
 
     const isAdmin = account?.idTokenClaims?.roles?.some((role: string) => 
         role === "Platform.Admin" || role === "Platform.Operator"
     );
 
     useEffect(() => {
-        if (!isAdmin) {
-            setLoading(false);
+        if (!isAdmin || !isAuthenticated) {
+            if (!isAdmin) setLoading(false);
             return;
         }
         const fetchAdminData = async () => {
             try {
-                const token = await getToken();
-                if (!token) return;
+                const client = getApiClient(getAccessToken);
 
                 const [healthData, tenantsData, quotaData] = await Promise.all([
-                    apiClient.fetch("/v1/health", { token }),
-                    apiClient.fetch("/v1/tenants", { token }),
-                    apiClient.fetch("/v1/platform/quota", { token }).catch(() => ({ utilisation: [] }))
+                    client.request<any>("/v1/health"),
+                    client.request<{ items: any[] }>("/v1/tenants"),
+                    client.request<any>("/v1/platform/quota").catch(() => ({ utilisation: [] }))
                 ]);
 
                 setHealth(healthData);
@@ -41,7 +40,8 @@ export const AdminPage: React.FC = () => {
         };
 
         fetchAdminData();
-    }, [getToken]);
+    }, [getAccessToken, isAdmin, isAuthenticated]);
+
 
     if (loading) return <div>Loading admin data...</div>;
 

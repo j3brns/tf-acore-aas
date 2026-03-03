@@ -1,24 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiClient } from "../api/client";
+import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { Agent } from "../types";
 
 export const AgentCataloguePage: React.FC = () => {
     const [agents, setAgents] = useState<Agent[]>([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const { getToken } = useAuth();
+    const [_error, setError] = useState<string | null>(null);
+    const { getAccessToken, isAuthenticated } = useAuth();
 
     useEffect(() => {
         const fetchAgents = async () => {
+            if (!isAuthenticated) return;
             try {
-                const token = await getToken();
-                if (!token) {
-                    setError("Not authenticated");
-                    return;
-                }
-                const data = await apiClient.fetch("/v1/agents", { token });
+                const client = getApiClient(getAccessToken);
+                const data = await client.request<{ agents: Agent[] }>("/v1/agents");
                 setAgents(data.agents || []);
             } catch (err: any) {
                 console.error("Failed to fetch agents", err);
@@ -29,7 +26,7 @@ export const AgentCataloguePage: React.FC = () => {
         };
 
         fetchAgents();
-    }, [getToken]);
+    }, [getAccessToken, isAuthenticated]);
 
     if (loading) {
         return (
@@ -39,12 +36,12 @@ export const AgentCataloguePage: React.FC = () => {
         );
     }
 
-    if (error) {
+    if (_error) {
         return (
             <div className="bg-red-50 border-l-4 border-red-400 p-4">
                 <div className="flex">
                     <div className="ml-3">
-                        <p className="text-sm text-red-700">{error}</p>
+                        <p className="text-sm text-red-700">{_error}</p>
                     </div>
                 </div>
             </div>
