@@ -81,6 +81,7 @@ export class PlatformStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: props.platformConfigKey,
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -94,6 +95,7 @@ export class PlatformStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: props.platformConfigKey,
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -107,6 +109,7 @@ export class PlatformStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: props.platformConfigKey,
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -121,6 +124,7 @@ export class PlatformStack extends cdk.Stack {
       encryptionKey: props.platformConfigKey,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -144,6 +148,7 @@ export class PlatformStack extends cdk.Stack {
       encryptionKey: props.tenantDataKey,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -156,6 +161,7 @@ export class PlatformStack extends cdk.Stack {
       encryptionKey: props.tenantDataKey,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -168,6 +174,7 @@ export class PlatformStack extends cdk.Stack {
       encryptionKey: props.tenantDataKey,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
