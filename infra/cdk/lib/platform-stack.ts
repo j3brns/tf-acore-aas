@@ -49,6 +49,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly sessionsTable: dynamodb.Table;
   public readonly toolsTable: dynamodb.Table;
   public readonly opsLocksTable: dynamodb.Table;
+  public readonly gatewayIdempotencyTable: dynamodb.Table;
 
   public readonly bridgeFn: lambda.Function;
   public readonly bffFn: lambda.Function;
@@ -124,6 +125,17 @@ export class PlatformStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
       deletionProtection: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    this.gatewayIdempotencyTable = new dynamodb.Table(this, 'GatewayIdempotencyTable', {
+      tableName: 'platform-gateway-idempotency',
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.platformConfigKey,
+      timeToLiveAttribute: 'expiration',
+      pointInTimeRecovery: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
@@ -248,6 +260,12 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'gateway-request-interceptor',
+        TOOLS_TABLE: this.toolsTable.tableName,
+        ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
+        ENTRA_AUDIENCE: 'platform-api',
+        ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
+        SCOPED_TOKEN_ISSUER: 'platform-gateway',
+        IDEMPOTENCY_TABLE: this.gatewayIdempotencyTable.tableName,
       },
     });
 
@@ -262,6 +280,9 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
+    this.toolsTable.grantReadData(this.requestInterceptorFn);
+    this.gatewayIdempotencyTable.grantReadWriteData(this.requestInterceptorFn);
+
     const authoriserAlias = new lambda.Alias(this, 'AuthoriserLiveAlias', {
       aliasName: 'live',
       version: this.authoriserFn.currentVersion,
@@ -274,10 +295,156 @@ export class PlatformStack extends cdk.Stack {
       resultsCacheTtl: cdk.Duration.minutes(5),
     });
 
+    const spaBucket = new s3.Bucket(this, 'SpaBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+    });
+
+    const resultsBucket = new s3.Bucket(this, 'ResultsBucket', {
+      bucketName: `platform-results-${env}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    new ssm.StringParameter(this, 'ResultsBucketArnParam', {
+      parameterName: `/platform/core/${env}/results-bucket-arn`,
+      stringValue: resultsBucket.bucketArn,
+      description: 'ARN for the platform results S3 bucket',
+    });
+
+    const spaResponseHeadersPolicy = new cloudfront.CfnResponseHeadersPolicy(
+      this,
+      'SpaCspResponseHeadersPolicy',
+      {
+        responseHeadersPolicyConfig: {
+          name: `${this.stackName}-spa-security-headers`,
+          comment: 'Security headers for platform SPA',
+          securityHeadersConfig: {
+            contentSecurityPolicy: {
+              contentSecurityPolicy:
+                "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; connect-src 'self' https:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self';",
+              override: true,
+            },
+            frameOptions: {
+              frameOption: 'DENY',
+              override: true,
+            },
+            strictTransportSecurity: {
+              accessControlMaxAgeSec: 31536000,
+              includeSubdomains: true,
+              preload: true,
+              override: true,
+            },
+            contentTypeOptions: {
+              override: true,
+            },
+            referrerPolicy: {
+              referrerPolicy: 'same-origin',
+              override: true,
+            },
+            xssProtection: {
+              protection: true,
+              modeBlock: true,
+              override: true,
+            },
+          },
+        },
+      },
+    );
+
+    const spaOriginAccessControl = new cloudfront.CfnOriginAccessControl(this, 'SpaOriginAccessControl', {
+      originAccessControlConfig: {
+        name: `${this.stackName}-spa-oac`,
+        description: 'OAC for SPA bucket origin',
+        originAccessControlOriginType: 's3',
+        signingBehavior: 'always',
+        signingProtocol: 'sigv4',
+      },
+    });
+
+    this.spaDistribution = new cloudfront.CfnDistribution(this, 'SpaDistribution', {
+      distributionConfig: {
+        enabled: true,
+        comment: 'Platform SPA distribution',
+        defaultRootObject: 'index.html',
+        httpVersion: 'http2',
+        priceClass: 'PriceClass_100',
+        ipv6Enabled: true,
+        origins: [
+          {
+            id: 'SpaS3Origin',
+            domainName: spaBucket.bucketRegionalDomainName,
+            originAccessControlId: spaOriginAccessControl.attrId,
+            s3OriginConfig: {
+              originAccessIdentity: '',
+            },
+          },
+        ],
+        defaultCacheBehavior: {
+          targetOriginId: 'SpaS3Origin',
+          viewerProtocolPolicy: 'redirect-to-https',
+          compress: true,
+          allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
+          cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
+          cachePolicyId: cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId,
+          responseHeadersPolicyId: spaResponseHeadersPolicy.attrId,
+        },
+        restrictions: {
+          geoRestriction: {
+            restrictionType: 'none',
+          },
+        },
+        viewerCertificate: {
+          cloudFrontDefaultCertificate: true,
+        },
+      },
+    });
+
+    spaBucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudFrontOacRead',
+        effect: iam.Effect.ALLOW,
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        actions: ['s3:GetObject'],
+        resources: [spaBucket.arnForObjects('*')],
+        conditions: {
+          StringEquals: {
+            'AWS:SourceArn': cdk.Fn.join('', [
+              'arn:',
+              cdk.Aws.PARTITION,
+              ':cloudfront::',
+              cdk.Aws.ACCOUNT_ID,
+              ':distribution/',
+              this.spaDistribution.ref,
+            ]),
+          },
+        },
+      }),
+    );
+
+    const spaAllowedOrigin = cdk.Fn.join('', ['https://', this.spaDistribution.attrDomainName]);
+
     this.api = new apigateway.RestApi(this, 'PlatformRestApi', {
       restApiName: `${this.stackName}-rest-api`,
       description: 'Platform northbound REST API (ADR-003)',
       apiKeySourceType: apigateway.ApiKeySourceType.AUTHORIZER,
+      defaultCorsPreflightOptions: {
+        allowOrigins: [spaAllowedOrigin],
+        allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: [
+          'Authorization',
+          'Content-Type',
+          'X-Api-Key',
+          'X-Amz-Date',
+          'X-Amz-Security-Token',
+          'X-Amz-User-Agent',
+        ],
+      },
       deployOptions: {
         stageName: 'prod',
         tracingEnabled: true,
@@ -541,115 +708,6 @@ export class PlatformStack extends cdk.Stack {
       resourceArn: this.api.deploymentStage.stageArn,
       webAclArn: this.apiWebAcl.attrArn,
     });
-
-    const spaBucket = new s3.Bucket(this, 'SpaBucket', {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      versioned: true,
-    });
-
-    const resultsBucket = new s3.Bucket(this, 'ResultsBucket', {
-      bucketName: `platform-results-${env}`,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      versioned: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    new ssm.StringParameter(this, 'ResultsBucketArnParam', {
-      parameterName: `/platform/core/${env}/results-bucket-arn`,
-      stringValue: resultsBucket.bucketArn,
-      description: 'ARN for the platform results S3 bucket',
-    });
-
-    const spaCspPolicy = new cloudfront.CfnResponseHeadersPolicy(this, 'SpaCspResponseHeadersPolicy', {
-      responseHeadersPolicyConfig: {
-        name: `${this.stackName}-spa-csp`,
-        comment: 'CSP headers for platform SPA',
-        customHeadersConfig: {
-          items: [
-            {
-              header: 'Content-Security-Policy',
-              value:
-                "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; connect-src 'self' https:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self';",
-              override: true,
-            },
-          ],
-        },
-      },
-    });
-
-    const spaOriginAccessControl = new cloudfront.CfnOriginAccessControl(this, 'SpaOriginAccessControl', {
-      originAccessControlConfig: {
-        name: `${this.stackName}-spa-oac`,
-        description: 'OAC for SPA bucket origin',
-        originAccessControlOriginType: 's3',
-        signingBehavior: 'always',
-        signingProtocol: 'sigv4',
-      },
-    });
-
-    this.spaDistribution = new cloudfront.CfnDistribution(this, 'SpaDistribution', {
-      distributionConfig: {
-        enabled: true,
-        comment: 'Platform SPA distribution',
-        defaultRootObject: 'index.html',
-        httpVersion: 'http2',
-        priceClass: 'PriceClass_100',
-        ipv6Enabled: true,
-        origins: [
-          {
-            id: 'SpaS3Origin',
-            domainName: spaBucket.bucketRegionalDomainName,
-            originAccessControlId: spaOriginAccessControl.attrId,
-            s3OriginConfig: {
-              originAccessIdentity: '',
-            },
-          },
-        ],
-        defaultCacheBehavior: {
-          targetOriginId: 'SpaS3Origin',
-          viewerProtocolPolicy: 'redirect-to-https',
-          compress: true,
-          allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
-          cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
-          cachePolicyId: cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId,
-          responseHeadersPolicyId: spaCspPolicy.attrId,
-        },
-        restrictions: {
-          geoRestriction: {
-            restrictionType: 'none',
-          },
-        },
-        viewerCertificate: {
-          cloudFrontDefaultCertificate: true,
-        },
-      },
-    });
-
-    spaBucket.addToResourcePolicy(
-      new iam.PolicyStatement({
-        sid: 'AllowCloudFrontOacRead',
-        effect: iam.Effect.ALLOW,
-        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        actions: ['s3:GetObject'],
-        resources: [spaBucket.arnForObjects('*')],
-        conditions: {
-          StringEquals: {
-            'AWS:SourceArn': cdk.Fn.join('', [
-              'arn:',
-              cdk.Aws.PARTITION,
-              ':cloudfront::',
-              cdk.Aws.ACCOUNT_ID,
-              ':distribution/',
-              this.spaDistribution.ref,
-            ]),
-          },
-        },
-      }),
-    );
 
     const agentCoreGatewayRole = new iam.Role(this, 'AgentCoreGatewayExecutionRole', {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),

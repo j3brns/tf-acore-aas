@@ -49,7 +49,7 @@ help:
 ## bootstrap: First-time setup — install tools, check prerequisites
 bootstrap:
 	@echo "==> Checking prerequisites"
-	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not installed. Run: curl -Ls https://astral.sh/uv/install.sh | sh" && exit 1)
+	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not installed. Run: curl -Ls https://astral.sh/uv/install.sh | i" && exit 1)
 	@command -v docker >/dev/null 2>&1 || (echo "ERROR: docker not installed" && exit 1)
 	@command -v aws >/dev/null 2>&1 || (echo "ERROR: aws cli not installed" && exit 1)
 	@command -v node >/dev/null 2>&1 || (echo "ERROR: node not installed" && exit 1)
@@ -146,6 +146,11 @@ validate-python:
 	uv run ruff check .
 	uv run ruff format --check .
 	cd infra/cdk && npx --no-install pyright --project ../../pyrightconfig.json
+
+## validate-agent-manifest: Validate agent pyproject.toml [tool.agentcore] section
+validate-agent-manifest:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make validate-agent-manifest AGENT=my-agent" && exit 1)
+	uv run python scripts/validate_agent_manifest.py $(AGENT)
 
 ## validate-cdk: TypeScript compile, CDK synth, and cfn-guard
 validate-cdk:

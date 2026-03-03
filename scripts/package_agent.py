@@ -1,4 +1,5 @@
-"""package_agent.py — Package agent code for deployment.
+"""
+package_agent.py — Package agent code for deployment.
 
 Zips agent source code excluding: __pycache__, .venv, tests/, *.pyc, .git.
 Output: .build/{agent_name}-code.zip
@@ -10,50 +11,70 @@ Implemented in TASK-035.
 ADRs: ADR-005, ADR-008
 """
 
-import os
-import sys
+from __future__ import annotations
+
+import argparse
+import logging
 import zipfile
 from pathlib import Path
 
+logger = logging.getLogger("package_agent")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-def package_agent(agent_name: str, repo_root: Path | None = None) -> None:
-    if repo_root is None:
-        repo_root = Path(__file__).resolve().parents[1]
-    agent_dir = repo_root / "agents" / agent_name
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = REPO_ROOT / ".build"
 
-    if not agent_dir.exists() or not agent_dir.is_dir():
-        print(f"Error: Agent directory not found at {agent_dir}")
-        sys.exit(1)
+EXCLUDE_PATTERNS = {
+    "__pycache__",
+    ".venv",
+    "tests",
+    "*.pyc",
+    ".git",
+    ".build",
+}
 
-    build_dir = repo_root / ".build"
-    build_dir.mkdir(exist_ok=True)
 
-    zip_path = build_dir / f"{agent_name}-code.zip"
-    print(f"Packaging {agent_name} to {zip_path}...")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Package agent code")
+    parser.add_argument("agent_name", help="Name of the agent directory")
+    return parser.parse_args()
 
-    exclude_dirs = {"__pycache__", ".venv", "tests", ".git"}
-    exclude_files = {".pyc", ".pyo", ".ds_store"}
+
+def should_exclude(path: Path, base_dir: Path) -> bool:
+    rel_path = path.relative_to(base_dir)
+    for part in rel_path.parts:
+        if part in EXCLUDE_PATTERNS:
+            return True
+    if path.suffix == ".pyc":
+        return True
+    return False
+
+
+def package_agent(agent_name: str) -> bool:
+    agent_dir = REPO_ROOT / "agents" / agent_name
+    if not agent_dir.exists():
+        logger.error(f"Agent directory not found: {agent_dir}")
+        return False
+
+    BUILD_DIR.mkdir(exist_ok=True)
+    zip_path = BUILD_DIR / f"{agent_name}-code.zip"
+
+    logger.info(f"Packaging agent '{agent_name}' to {zip_path}")
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        # We want the agent directory contents to be at the root of the zip
-        for root, dirs, files in os.walk(agent_dir):
-            # Prune excluded directories
-            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        for path in agent_dir.rglob("*"):
+            if path.is_file() and not should_exclude(path, agent_dir):
+                arcname = path.relative_to(agent_dir)
+                zf.write(path, arcname)
+                logger.debug(f"Added {arcname}")
 
-            for file in files:
-                if any(file.lower().endswith(ext) for ext in exclude_files):
-                    continue
-
-                file_path = Path(root) / file
-                arcname = file_path.relative_to(agent_dir)
-                zf.write(file_path, arcname)
-
-    print(f"Successfully packaged {agent_name}")
+    logger.info(f"Successfully packaged '{agent_name}' ({zip_path.stat().st_size} bytes)")
+    return True
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: uv run python scripts/package_agent.py <agent_name>")
-        sys.exit(1)
+    args = parse_args()
+    if not package_agent(args.agent_name):
+        import sys
 
-    package_agent(sys.argv[1])
+        sys.exit(1)
