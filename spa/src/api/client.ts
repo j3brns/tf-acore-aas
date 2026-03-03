@@ -228,3 +228,16 @@ async function toApiError(response: Response): Promise<ApiError> {
     : await response.text();
   return new ApiError(`HTTP ${response.status}`, response, body);
 }
+
+// Global instance for convenience (populated after AuthProvider initialization or used with a mock)
+let _apiClient: ApiClient | null = null;
+
+export const getApiClient = (getAccessToken?: AccessTokenProvider): ApiClient => {
+  if (getAccessToken) {
+    _apiClient = new ApiClient({ getAccessToken });
+  }
+  if (!_apiClient) {
+    throw new Error("ApiClient not initialized. Call getApiClient(getAccessToken) first.");
+  }
+  return _apiClient;
+};
