@@ -12,6 +12,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as codedeploy from 'aws-cdk-lib/aws-codedeploy';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -283,6 +285,47 @@ export class PlatformStack extends cdk.Stack {
     this.toolsTable.grantReadData(this.requestInterceptorFn);
     this.gatewayIdempotencyTable.grantReadWriteData(this.requestInterceptorFn);
 
+    const bridgeAlias = new lambda.Alias(this, 'BridgeLiveAlias', {
+      aliasName: 'live',
+      version: this.bridgeFn.currentVersion,
+    });
+
+    const bridgeErrorRateHighAlarm = new cloudwatch.Alarm(this, 'BridgeErrorRateHighAlarm', {
+      alarmName: 'error_rate_high',
+      alarmDescription: 'Bridge live alias error rate exceeded threshold during canary deployment',
+      metric: new cloudwatch.MathExpression({
+        expression: 'IF(invocations > 0, (errors / invocations) * 100, 0)',
+        period: cdk.Duration.minutes(1),
+        usingMetrics: {
+          errors: bridgeAlias.metricErrors({
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(1),
+          }),
+          invocations: bridgeAlias.metricInvocations({
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(1),
+          }),
+        },
+        label: 'BridgeAliasErrorRatePercent',
+      }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      datapointsToAlarm: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    new codedeploy.LambdaDeploymentGroup(this, 'BridgeCanaryDeploymentGroup', {
+      alias: bridgeAlias,
+      deploymentConfig: codedeploy.LambdaDeploymentConfig.CANARY_10PERCENT_5MINUTES,
+      alarms: [bridgeErrorRateHighAlarm],
+      autoRollback: {
+        deploymentInAlarm: true,
+        failedDeployment: true,
+        stoppedDeployment: true,
+      },
+    });
+
     const authoriserAlias = new lambda.Alias(this, 'AuthoriserLiveAlias', {
       aliasName: 'live',
       version: this.authoriserFn.currentVersion,
@@ -544,12 +587,12 @@ export class PlatformStack extends cdk.Stack {
 
     invoke.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(this.bridgeFn, { proxy: true }),
+      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
       securedMethodOptions,
     );
     jobById.addMethod(
       'GET',
-      new apigateway.LambdaIntegration(this.bridgeFn, { proxy: true }),
+      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
       securedMethodOptions,
     );
     tokenRefresh.addMethod(
