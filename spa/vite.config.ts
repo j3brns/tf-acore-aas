@@ -7,16 +7,16 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      '@': path.resolve(__dirname, './src'),
     },
   },
   server: {
     port: 3000,
     proxy: {
       '/v1': {
-        target: 'http://localhost:4566', // LocalStack or mock API
+        target: 'http://localhost:4566',
         changeOrigin: true,
-      }
-    }
-  }
+      },
+    },
+  },
 })
