@@ -382,12 +382,13 @@ All three invocation modes work end-to-end in dev AWS environment.
 
 ## Phase 6 — SPA Frontend
 
-[ ] TASK-040  Scaffold SPA
+[x] TASK-040  Scaffold SPA
               Vite + React + TypeScript + Tailwind CSS + shadcn/ui
               Directory: spa/
               MSAL.js (@azure/msal-browser) configuration
               All values from VITE_ environment variables — none hardcoded
               ADRs: ADR-002 | Tests: npm run build passes
+              Done: 2026-03-03
 
 [ ] TASK-041  MSAL auth layer and API client
               spa/src/auth/: msalConfig.ts, AuthProvider.tsx, useAuth.ts
