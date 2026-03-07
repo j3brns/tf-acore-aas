@@ -542,16 +542,25 @@ def invoke_mock_runtime(
             start_time,
             response_stream,
             request_id,
+            session_id,
         )
     elif agent.invocation_mode == InvocationMode.ASYNC:
         # Handle async mode
         return handle_async_invocation(
-            url, headers, payload, agent, tenant_context, invocation_id, start_time, webhook_id
+            url,
+            headers,
+            payload,
+            agent,
+            tenant_context,
+            invocation_id,
+            start_time,
+            webhook_id,
+            session_id,
         )
     else:
         # Default to sync mode
         return handle_sync_invocation(
-            url, headers, payload, agent, tenant_context, invocation_id, start_time
+            url, headers, payload, agent, tenant_context, invocation_id, start_time, session_id
         )
 
 
@@ -563,6 +572,7 @@ def handle_sync_invocation(
     tenant_context: TenantContext,
     invocation_id: str,
     start_time: float,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Handle synchronous invocation."""
     response = requests.post(f"{url}/invocations", headers=headers, json=payload, timeout=900)
@@ -570,6 +580,8 @@ def handle_sync_invocation(
 
     # Mock runtime returns SSE, collect into full text
     full_text = ""
+    effective_session_id = session_id or "mock-session-id"
+
     for line in response.iter_lines():
         if line:
             decoded_line = line.decode("utf-8")
@@ -581,6 +593,8 @@ def handle_sync_invocation(
                     chunk = json.loads(data)
                     if chunk.get("type") == "text":
                         full_text += chunk.get("content", "")
+                    elif chunk.get("type") == "session":
+                        effective_session_id = chunk.get("sessionId", effective_session_id)
                 except json.JSONDecodeError:
                     pass
 
@@ -594,6 +608,7 @@ def handle_sync_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.SYNC,
+        session_id=effective_session_id,
     )
 
     return {
@@ -607,7 +622,7 @@ def handle_sync_invocation(
                 "mode": InvocationMode.SYNC,
                 "status": InvocationStatus.SUCCESS,
                 "output": full_text,
-                "sessionId": "mock-session-id",
+                "sessionId": effective_session_id,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "usage": {"inputTokens": 0, "outputTokens": 0, "latencyMs": latency_ms},
             }
@@ -625,6 +640,7 @@ def handle_streaming_invocation(
     start_time: float,
     response_stream: Any,
     request_id: str,
+    session_id: str | None = None,
 ) -> Any:
     """Handle streaming invocation using Lambda Response Streaming."""
     if not response_stream:
@@ -632,6 +648,8 @@ def handle_streaming_invocation(
         return error_response(
             500, "INTERNAL_ERROR", "Response streaming not enabled for this Lambda", request_id
         )
+
+    effective_session_id = session_id or "mock-session-id"
 
     with requests.post(
         f"{url}/invocations", headers=headers, json=payload, stream=True, timeout=900
@@ -651,6 +669,7 @@ def handle_streaming_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.STREAMING,
+        session_id=effective_session_id,
     )
     return None
 
@@ -664,6 +683,7 @@ def handle_async_invocation(
     invocation_id: str,
     start_time: float,
     webhook_id: str | None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Handle async invocation."""
     job_id = str(uuid.uuid4())
@@ -701,6 +721,7 @@ def handle_async_invocation(
         latency_ms,
         InvocationMode.ASYNC,
         job_id=job_id,
+        session_id=session_id or "async-session",
     )
 
     return {
@@ -726,6 +747,7 @@ def log_invocation(
     latency_ms: int,
     mode: InvocationMode,
     job_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Write invocation audit record to DynamoDB using data-access-lib."""
     try:
@@ -742,7 +764,7 @@ def log_invocation(
             app_id=tenant_context.app_id,
             agent_name=agent.agent_name,
             agent_version=agent.version,
-            session_id="mock-session",
+            session_id=session_id or "unknown-session",
             input_tokens=0,
             output_tokens=0,
             latency_ms=latency_ms,
@@ -772,10 +794,13 @@ def log_invocation(
             "invocation_mode": str(record.invocation_mode),
             "timestamp": record.timestamp,
             "ttl": record.ttl,
-            "jitter": record.jitter,
         }
+        if record.jitter:
+            item["jitter"] = record.jitter
         if record.job_id:
             item["job_id"] = record.job_id
+        if record.error_code:
+            item["error_code"] = record.error_code
 
         db.put_item(INVOCATIONS_TABLE, item)
     except Exception:
@@ -798,6 +823,14 @@ def log_job(tenant_context: TenantContext, record: JobRecord) -> None:
         }
         if record.webhook_url:
             item["webhook_url"] = record.webhook_url
+        if record.started_at:
+            item["started_at"] = record.started_at
+        if record.completed_at:
+            item["completed_at"] = record.completed_at
+        if record.result_s3_key:
+            item["result_s3_key"] = record.result_s3_key
+        if record.error_message:
+            item["error_message"] = record.error_message
 
         db.put_item(JOBS_TABLE, item)
     except Exception:
