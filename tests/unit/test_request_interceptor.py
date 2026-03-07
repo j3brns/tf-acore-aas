@@ -83,13 +83,8 @@ def _base_event() -> dict:
     }
 
 
-@patch("gateway.interceptors.request_interceptor.get_jwk_client")
-@patch("gateway.interceptors.request_interceptor.get_tool_record")
-def test_request_interceptor_enforces_tier(
-    mock_get_tool_record, mock_get_jwk_client, mock_env, lambda_context
-):
-    event = _base_event()
-    payload = {
+def _valid_payload() -> dict:
+    return {
         "tenantid": "t-basic-001",
         "appid": "platform-local",
         "tier": "basic",
@@ -97,6 +92,15 @@ def test_request_interceptor_enforces_tier(
         "iss": OS_ENV["ENTRA_ISSUER"],
         "aud": OS_ENV["ENTRA_AUDIENCE"],
     }
+
+
+@patch("gateway.interceptors.request_interceptor.get_jwk_client")
+@patch("gateway.interceptors.request_interceptor.get_tool_record")
+def test_request_interceptor_enforces_tier(
+    mock_get_tool_record, mock_get_jwk_client, mock_env, lambda_context
+):
+    event = _base_event()
+    payload = _valid_payload()
     mock_get_tool_record.return_value = {
         "tool_name": "echo",
         "tier_minimum": "premium",
@@ -121,14 +125,7 @@ def test_request_interceptor_issues_scoped_token_and_headers(
     mock_get_tool_record, mock_get_jwk_client, mock_env, lambda_context
 ):
     event = _base_event()
-    payload = {
-        "tenantid": "t-basic-001",
-        "appid": "platform-local",
-        "tier": "basic",
-        "sub": "user-123",
-        "iss": OS_ENV["ENTRA_ISSUER"],
-        "aud": OS_ENV["ENTRA_AUDIENCE"],
-    }
+    payload = _valid_payload()
     mock_get_tool_record.return_value = {
         "tool_name": "echo",
         "tier_minimum": "basic",
@@ -167,3 +164,74 @@ def test_request_interceptor_issues_scoped_token_and_headers(
     assert scoped_claims["aud"] == "tool:echo"
     assert scoped_claims["exp"] > scoped_claims["iat"]
     assert scoped_claims["exp"] - scoped_claims["iat"] <= 300
+
+
+@patch("gateway.interceptors.request_interceptor.get_jwk_client")
+def test_request_interceptor_rejects_invalid_jwt(mock_get_jwk_client, mock_env, lambda_context):
+    event = _base_event()
+    mock_get_jwk_client.return_value = MagicMock(
+        get_signing_key_from_jwt=MagicMock(return_value=MagicMock(key="pub-key"))
+    )
+
+    with patch("jwt.decode", side_effect=jwt.InvalidTokenError("bad token")):
+        result = request_interceptor.handler(event, lambda_context)
+
+    response = result["mcp"]["transformedGatewayResponse"]
+    assert response["statusCode"] == 401
+    assert response["body"]["error"]["message"] == "Bearer token validation failed"
+
+
+@patch("gateway.interceptors.request_interceptor.get_jwk_client")
+@patch("gateway.interceptors.request_interceptor.get_tool_record")
+def test_request_interceptor_enforces_tier_minimum_camel_case(
+    mock_get_tool_record, mock_get_jwk_client, mock_env, lambda_context
+):
+    event = _base_event()
+    mock_get_tool_record.return_value = {
+        "tool_name": "echo",
+        "tierMinimum": "premium",
+        "enabled": True,
+    }
+    mock_get_jwk_client.return_value = MagicMock(
+        get_signing_key_from_jwt=MagicMock(return_value=MagicMock(key="pub-key"))
+    )
+
+    with patch("jwt.decode", return_value=_valid_payload()):
+        result = request_interceptor.handler(event, lambda_context)
+
+    response = result["mcp"]["transformedGatewayResponse"]
+    assert response["statusCode"] == 403
+    assert response["body"]["error"]["message"] == "Tenant tier is insufficient for this tool"
+
+
+def test_request_interceptor_uses_idempotency_key_for_duplicates(lambda_context):
+    event = _base_event()
+    seen_keys: list[str] = []
+    cache: dict[str, dict] = {}
+
+    def fake_idempotency_handler(
+        *, idempotency_data: dict[str, str], interceptor_event: dict
+    ) -> dict:
+        key = idempotency_data["idempotency_key"]
+        seen_keys.append(key)
+        if key not in cache:
+            cache[key] = request_interceptor._process_request(interceptor_event)
+        return cache[key]
+
+    with (
+        patch(
+            "gateway.interceptors.request_interceptor._get_idempotency_handler",
+            return_value=fake_idempotency_handler,
+        ),
+        patch(
+            "gateway.interceptors.request_interceptor._process_request",
+            return_value={"result": "ok"},
+        ) as mock_process,
+    ):
+        first = request_interceptor.handler(event, lambda_context)
+        second = request_interceptor.handler(event, lambda_context)
+
+    assert first == {"result": "ok"}
+    assert second == {"result": "ok"}
+    assert seen_keys == ["mcp-session-123:rpc-1", "mcp-session-123:rpc-1"]
+    mock_process.assert_called_once_with(event)

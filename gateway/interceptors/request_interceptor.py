@@ -175,6 +175,15 @@ def _is_tier_allowed(tenant_tier: str, minimum_tier: str) -> bool:
     return tenant_rank >= minimum_rank
 
 
+def _extract_minimum_tier(tool_record: dict[str, Any]) -> str:
+    minimum = tool_record.get("tierMinimum")
+    if minimum is None:
+        minimum = tool_record.get("tier_minimum")
+    if minimum is None:
+        return "basic"
+    return str(minimum)
+
+
 def get_tool_record(tool_name: str, tenant_id: str) -> dict[str, Any] | None:
     """Fetch tenant-specific tool first, then global."""
     table = get_dynamodb().Table(TOOLS_TABLE)
@@ -403,7 +412,7 @@ def _process_request(event: dict[str, Any]) -> dict[str, Any]:
                 message="Tool is unavailable for this tenant",
             )
 
-        minimum_tier = str(tool_record.get("tier_minimum") or "basic")
+        minimum_tier = _extract_minimum_tier(tool_record)
         if not _is_tier_allowed(tier, minimum_tier):
             return _error_response(
                 gateway_request=gateway_request,
