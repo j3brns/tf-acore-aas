@@ -10,7 +10,9 @@ ADRs: ADR-002, ADR-004, ADR-013
 
 import json
 import os
-from typing import Any, Optional
+import re
+from datetime import UTC, datetime
+from typing import Any
 
 import boto3
 import jwt
@@ -30,6 +32,12 @@ TENANTS_TABLE = os.environ.get("TENANTS_TABLE")
 # Global clients — connection reuse across warm starts
 _jwk_client: PyJWKClient | None = None
 _dynamodb_resource = None
+
+SIGV4_REQUIRED_SIGNED_HEADERS = frozenset({"host", "x-amz-date", "x-tenant-id"})
+SIGV4_MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("SIGV4_MAX_CLOCK_SKEW_SECONDS", "300"))
+_SIGV4_SIGNATURE_RE = re.compile(r"^[0-9a-f]{64}$")
+_SIGV4_ACCESS_KEY_RE = re.compile(r"^[A-Z0-9]{16,128}$")
+_SIGV4_TENANT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$")
 
 
 def get_jwk_client() -> PyJWKClient | None:
@@ -92,6 +100,89 @@ def get_tenant_status(tenant_id: str) -> str | None:
     return None
 
 
+def _normalise_headers(event: dict[str, Any]) -> dict[str, str]:
+    """Return request headers as a lowercase key map."""
+    raw_headers = event.get("headers") or {}
+    if not isinstance(raw_headers, dict):
+        return {}
+    normalised: dict[str, str] = {}
+    for raw_key, raw_value in raw_headers.items():
+        key = str(raw_key).strip().lower()
+        value = str(raw_value).strip() if raw_value is not None else ""
+        if key:
+            normalised[key] = value
+    return normalised
+
+
+def _parse_sigv4_authorization(auth_header: str) -> dict[str, Any] | None:
+    """Parse AWS SigV4 Authorization header into structured fields."""
+    if not auth_header.startswith("AWS4-HMAC-SHA256 "):
+        return None
+
+    payload = auth_header.removeprefix("AWS4-HMAC-SHA256 ").strip()
+    pieces = [part.strip() for part in payload.split(",") if part.strip()]
+    parsed: dict[str, str] = {}
+    for piece in pieces:
+        if "=" not in piece:
+            continue
+        key, value = piece.split("=", 1)
+        parsed[key.strip()] = value.strip()
+
+    credential = parsed.get("Credential")
+    signed_headers = parsed.get("SignedHeaders")
+    signature = parsed.get("Signature")
+    if not credential or not signed_headers or not signature:
+        return None
+    if not _SIGV4_SIGNATURE_RE.fullmatch(signature.lower()):
+        return None
+
+    scope = credential.split("/")
+    if len(scope) != 5:
+        return None
+    access_key, date, region, service, terminator = scope
+    if not _SIGV4_ACCESS_KEY_RE.fullmatch(access_key):
+        return None
+    if terminator != "aws4_request":
+        return None
+    if not re.fullmatch(r"\d{8}", date):
+        return None
+    if not region or not service:
+        return None
+
+    signed_headers_set = {
+        header.strip().lower() for header in signed_headers.split(";") if header.strip()
+    }
+    if not SIGV4_REQUIRED_SIGNED_HEADERS.issubset(signed_headers_set):
+        return None
+
+    return {
+        "access_key": access_key,
+        "date": date,
+        "region": region,
+        "service": service,
+        "signed_headers": signed_headers_set,
+    }
+
+
+def _is_valid_sigv4_timestamp(value: str) -> bool:
+    """Validate x-amz-date value and enforce clock skew."""
+    try:
+        ts = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    skew = abs((datetime.now(UTC) - ts).total_seconds())
+    return skew <= SIGV4_MAX_CLOCK_SKEW_SECONDS
+
+
+def _normalise_tier(value: str | None) -> str:
+    if not value:
+        return "basic"
+    candidate = value.strip().lower()
+    if candidate in {"basic", "standard", "premium"}:
+        return candidate
+    return "basic"
+
+
 def is_admin_route(method_arn: str) -> bool:
     """Check if the route is an admin/operator route (ADR-013)."""
     # method_arn format:
@@ -99,9 +190,31 @@ def is_admin_route(method_arn: str) -> bool:
     parts = method_arn.split("/", 3)
     if len(parts) < 4:
         return False
-    path = parts[3]
-    # Admin routes include tenant management and platform operations
-    return path.startswith("v1/tenants") or path.startswith("v1/platform")
+
+    method = str(parts[2]).upper()
+    path = str(parts[3]).strip("/")
+
+    # All /v1/platform routes are operator/admin only.
+    if path.startswith("v1/platform"):
+        return True
+
+    # /v1/tenants collection:
+    # - POST is admin/operator only
+    # - GET is caller-scoped and allowed for non-admin
+    if path == "v1/tenants":
+        return method == "POST"
+
+    # /v1/tenants/{tenantId}/audit-export is admin/operator only.
+    if path.startswith("v1/tenants/") and path.endswith("/audit-export"):
+        return True
+
+    # /v1/tenants/{tenantId} mutations are admin/operator only.
+    if path.startswith("v1/tenants/") and method in {"PATCH", "PUT", "DELETE"}:
+        return True
+
+    # Reads (e.g. GET /v1/tenants/{tenantId}) are enforced downstream by tenant-api
+    # own-tenant checks and should not be blocked here.
+    return False
 
 
 @logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
@@ -197,9 +310,76 @@ def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
 
 
 def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> dict[str, Any]:
-    """Validate and process AWS SigV4 (ADR-004 Stub)."""
-    # TODO: Implement SigV4 validation (ADR-004)
-    # This requires signature validation logic or delegating to a trusted service.
-    # SigV4 is used for machine-to-machine authentication.
-    logger.warning("SigV4 path requested but not yet implemented", extra={"method_arn": method_arn})
-    return generate_policy("machine", "Deny", method_arn, {})
+    """Validate and process AWS SigV4 machine caller context."""
+    parsed = _parse_sigv4_authorization(auth_header)
+    if not parsed:
+        logger.warning("Malformed SigV4 Authorization header")
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    if parsed["service"] != "execute-api":
+        logger.warning("SigV4 service must be execute-api", extra={"service": parsed["service"]})
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    headers = _normalise_headers(event)
+    tenant_id = headers.get("x-tenant-id", "")
+    if not tenant_id or not _SIGV4_TENANT_ID_RE.fullmatch(tenant_id):
+        logger.warning("Missing or invalid x-tenant-id for SigV4 request")
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    amz_date = headers.get("x-amz-date", "")
+    if not _is_valid_sigv4_timestamp(amz_date):
+        logger.warning("Invalid or stale x-amz-date for SigV4 request")
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    request_context = event.get("requestContext", {})
+    identity = request_context.get("identity", {}) if isinstance(request_context, dict) else {}
+    if not isinstance(identity, dict):
+        identity = {}
+
+    identity_access_key = str(identity.get("accessKey", "")).strip()
+    if identity_access_key and identity_access_key != parsed["access_key"]:
+        mismatch = {
+            "identity_access_key": identity_access_key,
+            "credential_access_key": parsed["access_key"],
+        }
+        logger.warning(
+            "SigV4 access key mismatch between request context and Authorization header",
+            extra=mismatch,
+        )
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    # Token authoriser events can omit full request context.
+    # If API Gateway did not provide caller identity metadata, reject as unverifiable.
+    caller_arn = str(identity.get("userArn", "")).strip()
+    caller_id = str(identity.get("caller", "")).strip()
+    if not caller_arn and not caller_id:
+        logger.warning("SigV4 caller identity missing from request context")
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    status = get_tenant_status(tenant_id)
+    if status != "active":
+        logger.error(
+            "Tenant not active for SigV4 request",
+            extra={"tenant_id": tenant_id, "status": status},
+        )
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    if is_admin_route(method_arn):
+        logger.warning("SigV4 caller denied on admin route", extra={"tenant_id": tenant_id})
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    app_id = headers.get("x-app-id") or identity_access_key or parsed["access_key"]
+    tier = _normalise_tier(headers.get("x-tier"))
+    actor = caller_arn or caller_id or f"sigv4:{parsed['access_key']}"
+    auth_context = {
+        "tenantid": tenant_id,
+        "appid": app_id,
+        "tier": tier,
+        "sub": actor,
+        "roles": json.dumps(["Machine.Invoke"]),
+        "usageIdentifierKey": tenant_id,
+    }
+
+    logger.append_keys(tenant_id=tenant_id, app_id=app_id)
+    logger.info("SigV4 authentication successful", extra={"tenant_id": tenant_id, "actor": actor})
+    return generate_policy(actor, "Allow", method_arn, auth_context)

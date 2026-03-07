@@ -1,11 +1,16 @@
-# AgentCore Multi-Tenant AaaS Platform
+# SaaS-ified Cell Templates: AgentCore Agents-aaT packaged for two-pizza teams to experiment. 
 
 ## What This Is
 
-An enterprise-grade Agent as a Service platform running on Amazon Bedrock AgentCore.
-B2B tenants invoke AI agents via REST API with full isolation, billing attribution,
-and compliance controls. Internal agent developer teams push new agents independently
-via a self-service pipeline.
+A small cell enterprise-style Agent as a Template platform vended on Amazon Bedrock AgentCore.
+
+Small squads can experiment with AI agents via REST API with full isolation, billing attribution,
+and compliance controls. SPA annd OIDC included, along with a few sample Strands and 'bare' agents.
+
+Internal agent developer teams are the empowered and may push new agents independently
+via a self-service pipeline. OIDC Identity and 3LO baked in, Strands keeps things simple. Langgraph for when its not.
+
+DevX, I've heard of it.. Added a TuI inner-loop for responsive boto3 backed localstack experimentations.
 
 ## Quick Start
 
@@ -82,6 +87,9 @@ make worktree                 # interactive issue worktree menu
 make preflight-session        # worktree branch/issue policy checks
 make pre-validate-session     # fast pre-push validation (no cdk synth)
 make worktree-push-issue      # push branch with preflight + pre-validate enforced
+make issues-audit             # validate issue lifecycle/queue invariants
+make docs-sync-audit          # docs/code semver + drift heuristics audit
+make docs-sync-stamp          # refresh docs/DOCS_SYNC.json (release checkpoint)
 
 # Agent developer inner loop
 make agent-push AGENT=my-agent ENV=dev    # Push agent, fast path <30s if deps cached

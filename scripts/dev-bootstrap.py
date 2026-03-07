@@ -7,7 +7,8 @@ Seeds LocalStack with:
   - DynamoDB tables with fixture data (tables created if missing)
   - Test JWTs written to .env.test
 
-Idempotent — safe to run multiple times without creating duplicate records.
+Idempotent — safe to run multiple times.  Running twice produces the same
+set of records; no duplicates are created.
 
 Usage:
     uv run python scripts/dev-bootstrap.py

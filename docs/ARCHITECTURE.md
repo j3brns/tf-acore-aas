@@ -175,6 +175,39 @@ Layer 5 — Account topology (escalating isolation)
   Option C: per-tenant accounts (enterprise/regulated, manual trigger)
 ```
 
+Planned cross-account tenant provisioning and runtime access flow (Option B/C):
+
+```mermaid
+flowchart LR
+  subgraph P["Platform Account (home/control plane)"]
+    Admin["Platform Admin / Tenant API\nCREATE tenant"]
+    Tenants["DynamoDB: platform-tenants\n(tenant registry + accountId + resource refs)"]
+    EB["EventBridge\nplatform.tenant.created"]
+    Prov["Tenant Provisioner\n(CDK TenantStack runner)\nTASK-025 / TASK-049"]
+    Bridge["Bridge Lambda\ninvocation path"]
+    STS["AWS STS"]
+  end
+
+  subgraph T["Tenant / Runtime Account (target account)\n(Option B tier-split or Option C per-tenant)"]
+    Role["Tenant Execution Role\n(scoped IAM policy)"]
+    TenantRes["Per-tenant resources\nMemory store, SSM params,\nusage plan/API key refs"]
+    Runtime["AgentCore Runtime / tool access path"]
+  end
+
+  Admin -->|conditional write + metadata| Tenants
+  Admin -->|publish tenant.created| EB
+  EB --> Prov
+  Prov -->|deploy TenantStack with tenantId/tier/accountId| Role
+  Prov -->|provision/update| TenantRes
+  Prov -->|write resource ARNs/refs| Tenants
+
+  Bridge -->|lookup tenant + accountId/role refs| Tenants
+  Bridge -->|AssumeRole| STS
+  STS -->|temp creds| Bridge
+  Bridge -->|tenant-scoped AWS access| Runtime
+  Bridge -->|tenant-scoped AWS access| TenantRes
+```
+
 ## Failure Modes
 
 | ID    | Failure                        | Detection                          | Response           |

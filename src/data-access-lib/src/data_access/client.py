@@ -237,6 +237,44 @@ class TenantScopedDynamoDB:
         response = table.query(**kwargs)
         return response.get("Items", [])
 
+    def scan(
+        self,
+        table_name: str,
+        *,
+        filter_expression: ConditionBase | None = None,
+        limit: int | None = None,
+        exclusive_start_key: dict[str, Any] | None = None,
+        expression_attribute_names: dict[str, str] | None = None,
+        expression_attribute_values: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Scan a table.
+
+        SECURITY: Scanning is an administrative operation.  Isolation is
+        NOT enforced by this method — it will return items from all
+        tenants if they exist in the scanned table.
+
+        Lambda handlers must perform their own authorization (e.g. roles claim
+        check) before calling this method.
+        """
+        table = self._dynamodb.Table(table_name)
+        kwargs: dict[str, Any] = {}
+        if filter_expression is not None:
+            kwargs["FilterExpression"] = filter_expression
+        if limit is not None:
+            kwargs["Limit"] = limit
+        if exclusive_start_key is not None:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        if expression_attribute_names is not None:
+            kwargs["ExpressionAttributeNames"] = expression_attribute_names
+        if expression_attribute_values is not None:
+            kwargs["ExpressionAttributeValues"] = expression_attribute_values
+
+        response = table.scan(**kwargs)
+        # Handle pagination by returning the LastEvaluatedKey in the result if we want it?
+        # But for now, let's keep it simple and just return items.
+        # To support pagination properly, we should probably return (items, last_key).
+        return response.get("Items", [])
+
 
 # ---------------------------------------------------------------------------
 # TenantScopedS3

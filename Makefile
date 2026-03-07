@@ -4,8 +4,9 @@
 # =============================================================================
 
 .PHONY: help bootstrap ensure-tools validate-local validate-local-full
-.PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-synth
+.PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
+.PHONY: docs-sync-audit docs-sync-stamp
 .PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
@@ -26,7 +27,7 @@
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
 .PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
-.PHONY: agent-handoff install-git-hooks hooks-status
+.PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status
 
 ENV ?= dev
 
@@ -48,7 +49,7 @@ help:
 ## bootstrap: First-time setup — install tools, check prerequisites
 bootstrap:
 	@echo "==> Checking prerequisites"
-	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not installed. Run: curl -Ls https://astral.sh/uv/install.sh | sh" && exit 1)
+	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not installed. Run: curl -Ls https://astral.sh/uv/install.sh | i" && exit 1)
 	@command -v docker >/dev/null 2>&1 || (echo "ERROR: docker not installed" && exit 1)
 	@command -v aws >/dev/null 2>&1 || (echo "ERROR: aws cli not installed" && exit 1)
 	@command -v node >/dev/null 2>&1 || (echo "ERROR: node not installed" && exit 1)
@@ -115,11 +116,21 @@ validate-local-full: validate-local-prereqs
 	@$(MAKE) --no-print-directory validate-secrets-full
 	@echo "==> Validation passed"
 
+## docs-sync-audit: Check docs/code semver sync and drift heuristics
+## Usage: make docs-sync-audit [JSON=1]
+docs-sync-audit:
+	uv run python scripts/docs_sync_audit.py check \
+		$(if $(JSON),--json,)
+
+## docs-sync-stamp: Refresh docs/DOCS_SYNC.json to current semver + commit
+docs-sync-stamp:
+	uv run python scripts/docs_sync_audit.py stamp
+
 ## validate-pre-push: Pre-push validation (skips cdk synth; repo should already synth clean)
 validate-pre-push: validate-local-prereqs
 	@echo "==> Running pre-push validation (no cdk synth)"
 	@$(MAKE) --no-print-directory validate-python
-	@$(MAKE) --no-print-directory validate-cdk-ts
+	@$(MAKE) --no-print-directory validate-cdk-ts-push
 	@$(MAKE) --no-print-directory validate-secrets-push
 	@echo "==> Pre-push validation passed"
 
@@ -136,18 +147,57 @@ validate-python:
 	uv run ruff format --check .
 	cd infra/cdk && npx --no-install pyright --project ../../pyrightconfig.json
 
-## validate-cdk: TypeScript compile and CDK synth
+## validate-agent-manifest: Validate agent pyproject.toml [tool.agentcore] section
+validate-agent-manifest:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make validate-agent-manifest AGENT=my-agent" && exit 1)
+	uv run python scripts/validate_agent_manifest.py $(AGENT)
+
+## validate-cdk: TypeScript compile, CDK synth, and cfn-guard
 validate-cdk:
 	@$(MAKE) --no-print-directory validate-cdk-ts
 	@$(MAKE) --no-print-directory validate-cdk-synth
+	@$(MAKE) --no-print-directory validate-cfn-guard
 
 ## validate-cdk-ts: TypeScript compile only (no synth)
 validate-cdk-ts:
 	cd infra/cdk && npx --no-install tsc --noEmit
 
+## validate-cdk-ts-push: Run CDK TypeScript compile only when CDK paths changed in commits-to-push
+validate-cdk-ts-push:
+	@files="$$( \
+		upstream="$$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"; \
+		if [ -n "$$upstream" ]; then \
+			git diff --name-only --diff-filter=ACMR "$$upstream...HEAD"; \
+		elif git show-ref --verify --quiet refs/remotes/origin/main; then \
+			git diff --name-only --diff-filter=ACMR origin/main...HEAD; \
+		elif git rev-parse --verify --quiet HEAD~1 >/dev/null; then \
+			git diff --name-only --diff-filter=ACMR HEAD~1...HEAD; \
+		else \
+			git diff --name-only --diff-filter=ACMR; \
+		fi \
+	)"; \
+	if ! printf '%s\n' "$$files" | grep -Eq '^(infra/cdk/|pyrightconfig\.json$$|tsconfig\.json$$|package\.json$$|package-lock\.json$$|pnpm-lock\.yaml$$|yarn\.lock$$)'; then \
+		echo "==> validate-cdk-ts: skipped (no CDK/TS files in commits-to-push)"; \
+		exit 0; \
+	fi; \
+	echo "==> validate-cdk-ts: running (CDK/TS files changed)"; \
+	$(MAKE) --no-print-directory validate-cdk-ts
+
 ## validate-cdk-synth: CDK synth only
 validate-cdk-synth:
 	cd infra/cdk && npx --no-install cdk synth --context env=dev --quiet > /dev/null
+
+## validate-cfn-guard: Run cfn-guard against synthesised templates
+validate-cfn-guard:
+	@echo "==> cfn-guard validate"
+	@if [ ! -d infra/cdk/cdk.out ]; then \
+		echo "ERROR: infra/cdk/cdk.out not found. Run make validate-cdk-synth first."; \
+		exit 1; \
+	fi
+	cfn-guard validate \
+		--rules infra/guard/platform-security.guard \
+		--data infra/cdk/cdk.out/*.template.json
+	@echo "==> cfn-guard passed"
 
 ## validate-secrets-diff: detect-secrets on changed files only (staged, unstaged, untracked)
 validate-secrets-diff:
@@ -237,16 +287,16 @@ dev-invoke:
 
 ## test-unit: Run all unit tests against LocalStack
 test-unit:
-	uv run pytest tests/unit/ src/ -v --tb=short
+	PYTHONPATH=. uv run pytest tests/unit/ src/ -v --tb=short $(PYTEST_ARGS)
 
 ## test-int: Run integration tests (requires make dev running)
 test-int:
-	uv run pytest tests/integration/ -v --tb=short
+	PYTHONPATH=. uv run pytest tests/integration/ -v --tb=short
 
 ## test-agent: Run tests for a specific agent (AGENT required)
 test-agent:
 	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make test-agent AGENT=echo-agent" && exit 1)
-	uv run pytest agents/$(AGENT)/tests/ -v --tb=short
+	PYTHONPATH=. uv run pytest agents/$(AGENT)/tests/ -v --tb=short
 
 ## test-all: Run unit and integration tests
 test-all: test-unit test-int
@@ -609,6 +659,18 @@ issue-queue:
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(LIMIT),--limit $(LIMIT),)
+
+## issues-audit: Objective issue-state/queue invariants check (fails on drift)
+## Usage: make issues-audit [JSON=1]
+issues-audit:
+	uv run python scripts/worktree_issues.py issues-audit \
+		$(if $(JSON),--json,)
+
+## issues-reconcile: Repair task issue labels to lifecycle rules
+## Usage: make issues-reconcile [DRY_RUN=1]
+issues-reconcile:
+	uv run python scripts/worktree_issues.py issues-reconcile \
+		$(if $(DRY_RUN),--dry-run,)
 
 ## worktree: Interactive issue-driven worktree menu (Seq/Depends on aware)
 ## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a]

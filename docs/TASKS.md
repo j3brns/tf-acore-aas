@@ -148,13 +148,16 @@ Nothing in Phase 2 starts until written confirmation.
               ADRs: none | Tests: make dev must start cleanly
               Done: 2026-02-25, commit 38a6dd5
 
-[ ] TASK-015  Write scripts/dev-bootstrap.py
+[x] TASK-015  Write scripts/dev-bootstrap.py
               Seeds two test tenants (basic-tier, premium-tier)
               Seeds all SSM parameters pointing to LocalStack
               Seeds DynamoDB tables with fixtures
               Writes test JWTs to .env.test
               Idempotent — safe to run multiple times
               ADRs: none | Tests: run twice, verify no duplicate records
+              Done: 2026-02-25, commit dab02ba
+              18 tests passing. validate-local passes.
+              Note: createdAt preservation test added (senior engineer review finding)
 
 [ ] TASK-016  Write src/authoriser/handler.py
               Entra JWT path: JWKS fetch+cache, sig validate, expiry, audience, issuer
@@ -166,7 +169,7 @@ Nothing in Phase 2 starts until written confirmation.
               Test cases: valid JWT, expired, wrong audience, wrong issuer,
               cross-tenant header injection, suspended tenant, admin route non-admin JWT
 
-[ ] TASK-017  Write src/tenant-api/handler.py
+[ ] TASK-017  Write src/tenant_api/handler.py
               CREATE: validate, conditional write, provision Memory store,
               create API key in Secrets Manager, publish EventBridge event
               READ: authorise (own tenant or Platform.Admin), enrich with usage
@@ -184,7 +187,7 @@ Nothing in Phase 2 starts until written confirmation.
               Assumes tenant execution role via STS
               ADRs: ADR-005, ADR-009, ADR-010 | Tests: all three modes mocked
 
-[ ] TASK-019  Implement full Makefile
+[x] TASK-019  Implement full Makefile
               All targets from Makefile skeleton now actually work
               make dev, make dev-stop, make test-unit, make test-int
               make validate-local, make bootstrap, make worktree-*
@@ -234,14 +237,15 @@ Echo agent invocable end-to-end in local environment in all three modes.
               Observability metric stream eu-west-1→eu-west-2
               ADRs: ADR-001, ADR-009 | Tests: Jest construct tests
 
-[ ] TASK-025  TenantStack
+[x] TASK-025  TenantStack
               Provisioned per-tenant by EventBridge trigger on platform.tenant.created
               Creates: Memory store, execution role (scoped to tenant S3/DynamoDB),
               usage plan API key, SSM parameters for tenant
               CDK context input: tenantId, tier, accountId
               ADRs: ADR-012 | Tests: Jest construct tests
+              Done: 2026-03-01
 
-[ ] TASK-026  ObservabilityStack
+[x] TASK-026  ObservabilityStack
               Per-tenant CloudWatch dashboard (provisioned in TenantStack)
               Platform operations dashboard
               All 10 FM alarms (see ARCHITECTURE.md failure modes table)
@@ -249,11 +253,12 @@ Echo agent invocable end-to-end in local environment in all three modes.
               Metric streams AgentCore Observability eu-west-1 → CloudWatch eu-west-2
               ADRs: none | Tests: Jest construct tests
 
-[ ] TASK-027  cfn-guard rules
-              File: infra/cdk/guard/platform-security.guard
+[x] TASK-027  cfn-guard rules
+              File: infra/guard/platform-security.guard
               Rules: no wildcard IAM, no public S3, PITR on DynamoDB, KMS encryption,
               deletion protection, VPC for Lambdas, DLQ configured, X-Ray enabled
               ADRs: none | Tests: cfn-guard validate against synthesised templates
+              Done: 2026-03-01
 
 **Phase 3 Gate**: cdk synth passes. cfn-guard passes. infra-diff reviewed by operator.
 make bootstrap-dev succeeds. Operator completes RUNBOOK-001 in dev.
@@ -285,13 +290,14 @@ make bootstrap-dev succeeds. Operator completes RUNBOOK-001 in dev.
               Used by: infra-set-runtime-region Makefile target
               ADRs: ADR-009 | Tests: concurrent acquire, only one succeeds
 
-[ ] TASK-031  Implement Admin REST API routes
+[x] TASK-031  Implement Admin REST API routes
               POST /v1/platform/failover
               GET  /v1/platform/quota
               GET  /v1/tenants (list all, Platform.Admin only)
               GET  /v1/tenants/{id}/audit-export
               POST /v1/platform/quota/split-accounts
               ADRs: ADR-002 | Tests: role enforcement, non-admin gets 403
+              Done: 2026-03-01
 
 [ ] TASK-032  Test all runbooks in dev environment
               Execute every runbook scenario with ops.py and make targets
@@ -346,11 +352,12 @@ No AWS console access permitted during runbook testing.
               Idempotency: Lambda Powertools keyed on Mcp-Session-Id + body.id
               ADRs: ADR-004 | Tests: tier enforcement, scoped token structure
 
-[ ] TASK-037  Write gateway/interceptors/response_interceptor.py
+[x] TASK-037  Write gateway/interceptors/response_interceptor.py
               tools/list: filter to tierMinimum <= tenant tier
               tools/call: PII scan and redact (UK NI, NHS, sort code, account, email)
               PII patterns from SSM /platform/gateway/pii-patterns/default
               ADRs: ADR-004 | Tests: PII redaction, tier filtering, passthrough for allowed
+              Done: 2026-03-02, commit 856aa75
 
 [ ] TASK-038  Write src/bff/handler.py
               POST /v1/bff/token-refresh: Entra OBO flow, returns new scoped token
@@ -375,25 +382,28 @@ All three invocation modes work end-to-end in dev AWS environment.
 
 ## Phase 6 — SPA Frontend
 
-[ ] TASK-040  Scaffold SPA
+[x] TASK-040  Scaffold SPA
               Vite + React + TypeScript + Tailwind CSS + shadcn/ui
               Directory: spa/
               MSAL.js (@azure/msal-browser) configuration
               All values from VITE_ environment variables — none hardcoded
               ADRs: ADR-002 | Tests: npm run build passes
+              Done: 2026-03-03
 
-[ ] TASK-041  MSAL auth layer and API client
+[x] TASK-041  MSAL auth layer and API client
               spa/src/auth/: msalConfig.ts, AuthProvider.tsx, useAuth.ts
               spa/src/api/client.ts: fetch wrapper, Bearer injection, 401 refresh
               Token refresh via acquireTokenSilent then acquireTokenPopup fallback
               Fetch + ReadableStream for streaming (not EventSource — no auth header)
               ADRs: ADR-002, ADR-003, ADR-011 | Tests: auth flow mocked
+              Done: 2026-03-03
 
-[ ] TASK-042  Agent catalogue, invoke, sessions, admin pages
+[x] TASK-042  Agent catalogue, invoke, sessions, admin pages
               AgentCataloguePage, InvokePage (all three modes), SessionsPage
               AdminPage: platform health, requires Platform.Operator role claim
               JobStatus polling component for async invocations
               ADRs: none | Tests: component tests
+              Done: 2026-03-03
 
 [ ] TASK-043  CloudFront CSP and CORS
               Response headers policy: full CSP, X-Frame-Options, HSTS
@@ -430,7 +440,7 @@ sees results. Admin view shows platform health metrics.
 
 ## Phase 8 — Async and Long-Running Agents
 
-[ ] TASK-046  Write src/async-runner/handler.py
+[ ] TASK-046  Write src/async_runner/handler.py
               NOT SQS-triggered — this is a background task within Runtime session
               Agent code uses app.add_async_task to start background work
               Agent code uses app.complete_async_task when done
@@ -439,7 +449,7 @@ sees results. Admin view shows platform health metrics.
               Writes JOB record updates as status progresses
               ADRs: ADR-010 | Tests: HealthyBusy ping, task completion
 
-[ ] TASK-047  Write src/webhook-delivery/handler.py
+[ ] TASK-047  Write src/webhook_delivery/handler.py
               EventBridge rule on DynamoDB Stream for JOB table status=complete
               POST to registered webhookUrl with HMAC-SHA256 signature
               Retry: 3 attempts, exponential backoff (2s, 4s, 8s)

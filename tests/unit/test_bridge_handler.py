@@ -334,6 +334,8 @@ def test_handler_session_id_propagation(setup_data):
         # Verify it was logged with the provided session ID
         ddb = boto3.resource("dynamodb", region_name="eu-west-2")
         inv_table = ddb.Table("platform-invocations")
+        from boto3.dynamodb.conditions import Key
+
         # Find the record - SK starts with INV#
         items = inv_table.query(KeyConditionExpression=Key("PK").eq("TENANT#t-001"))["Items"]
         assert any(item["session_id"] == "provided-session-123" for item in items)
@@ -372,5 +374,7 @@ def test_handler_session_id_from_runtime(setup_data):
         # Verify it was logged with the runtime session ID
         ddb = boto3.resource("dynamodb", region_name="eu-west-2")
         inv_table = ddb.Table("platform-invocations")
+        from boto3.dynamodb.conditions import Key
+
         items = inv_table.query(KeyConditionExpression=Key("PK").eq("TENANT#t-001"))["Items"]
         assert any(item["session_id"] == "runtime-session-456" for item in items)

@@ -1,0 +1,128 @@
+# agents/.gitlab-ci-agent.yml
+#
+# Agent-specific pipeline for packaging, testing, and deploying Bedrock AgentCore agents.
+# This file is intended to be triggered as a child pipeline from the root .gitlab-ci.yml.
+#
+# ADRs: ADR-005 (Declared Invocation Mode), ADR-008 (ZIP Deployment)
+# Task: TASK-039
+
+workflow:
+  rules:
+    - if: $AGENT_NAME == null
+      when: never
+    - when: always
+
+stages:
+  - validate
+  - test
+  - push-dev
+  - promote-staging
+  - promote-prod
+
+variables:
+  AGENT_PATH: "agents/$AGENT_NAME"
+  AWS_DEFAULT_REGION: "eu-west-2"
+  AWS_REGION: "eu-west-2"
+  # These role ARNs should be set as GitLab CI/CD variables (from IdentityStack outputs)
+  # PLATFORM_PIPELINE_VALIDATE_ROLE_ARN
+  # PLATFORM_PIPELINE_DEPLOY_DEV_ROLE_ARN
+  # PLATFORM_PIPELINE_DEPLOY_STAGING_ROLE_ARN
+  # PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN
+
+.agent-base:
+  image: python:3.12-slim
+  interruptible: true
+  before_script:
+    - apt-get update && apt-get install -y curl make git libmagic1
+    - curl -Ls https://astral.sh/uv/install.sh | sh
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv sync
+    - pip install awscli --quiet
+    - |
+      if [ -n "$ROLE_ARN" ] && [ -n "$GITLAB_OIDC_TOKEN" ]; then
+        echo "Assuming role $ROLE_ARN"
+        export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" 
+          $(aws sts assume-role-with-web-identity 
+            --role-arn ${ROLE_ARN} 
+            --role-session-name "GitLabAgentPipeline-${AGENT_NAME}" 
+            --web-identity-token ${GITLAB_OIDC_TOKEN} 
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' 
+            --output text))
+      fi
+
+# ---------------------------------------------------------------------------
+# Stage: validate
+# ---------------------------------------------------------------------------
+validate:
+  extends: .agent-base
+  stage: validate
+  variables:
+    ROLE_ARN: $PLATFORM_PIPELINE_VALIDATE_ROLE_ARN
+  id_token:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+  script:
+    - uv run ruff check $AGENT_PATH
+    - make validate-agent-manifest AGENT=$AGENT_NAME
+    - uv run detect-secrets --baseline .secrets.baseline
+
+# ---------------------------------------------------------------------------
+# Stage: test
+# ---------------------------------------------------------------------------
+test:
+  extends: .agent-base
+  stage: test
+  script:
+    - make test-agent AGENT=$AGENT_NAME
+
+# ---------------------------------------------------------------------------
+# Stage: push-dev
+# ---------------------------------------------------------------------------
+push-dev:
+  extends: .agent-base
+  stage: push-dev
+  variables:
+    ROLE_ARN: $PLATFORM_PIPELINE_DEPLOY_DEV_ROLE_ARN
+  id_token:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+  script:
+    - make agent-push AGENT=$AGENT_NAME ENV=dev
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "push"
+
+# ---------------------------------------------------------------------------
+# Stage: promote-staging
+# ---------------------------------------------------------------------------
+promote-staging:
+  extends: .agent-base
+  stage: promote-staging
+  variables:
+    ROLE_ARN: $PLATFORM_PIPELINE_DEPLOY_STAGING_ROLE_ARN
+  id_token:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+  script:
+    - make agent-push AGENT=$AGENT_NAME ENV=staging
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# ---------------------------------------------------------------------------
+# Stage: promote-prod
+# ---------------------------------------------------------------------------
+promote-prod:
+  extends: .agent-base
+  stage: promote-prod
+  variables:
+    ROLE_ARN: $PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN
+  id_token:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+  script:
+    - make agent-push AGENT=$AGENT_NAME ENV=prod
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+      allow_failure: false
