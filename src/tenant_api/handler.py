@@ -99,6 +99,13 @@ def _parse_roles(value: Any) -> frozenset[str]:
     if isinstance(value, list):
         return frozenset(str(v).strip() for v in value if str(v).strip())
     if isinstance(value, str):
+        # Authoriser may pass roles as a JSON-encoded list in API Gateway context.
+        try:
+            decoded = json.loads(value)
+            if isinstance(decoded, list):
+                return frozenset(str(v).strip() for v in decoded if str(v).strip())
+        except json.JSONDecodeError:
+            pass
         normalized = value.replace(",", " ").split()
         return frozenset(part.strip() for part in normalized if part.strip())
     return frozenset()
