@@ -449,7 +449,7 @@ sees results. Admin view shows platform health metrics.
               Writes JOB record updates as status progresses
               ADRs: ADR-010 | Tests: HealthyBusy ping, task completion
 
-[ ] TASK-047  Write src/webhook_delivery/handler.py
+[x] TASK-047  Write src/webhook_delivery/handler.py (2026-03-07)
               EventBridge rule on DynamoDB Stream for JOB table status=complete
               POST to registered webhookUrl with HMAC-SHA256 signature
               Retry: 3 attempts, exponential backoff (2s, 4s, 8s)

@@ -138,6 +138,7 @@ export class PlatformStack extends cdk.Stack {
       encryptionKey: props.platformConfigKey,
       timeToLiveAttribute: 'expiration',
       pointInTimeRecovery: true,
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
