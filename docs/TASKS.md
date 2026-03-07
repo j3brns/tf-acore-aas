@@ -178,7 +178,7 @@ Nothing in Phase 2 starts until written confirmation.
               Uses data-access-lib exclusively — no raw DynamoDB calls
               ADRs: ADR-012 | Tests: CRUD + isolation + soft delete + event emission
 
-[ ] TASK-018  Write src/bridge/handler.py
+[x] TASK-018  Write src/bridge/handler.py
               Reads invocation_mode from agent registry
               sync: invoke Runtime, wait up to 15min, write INVOCATION record
               streaming: SSE relay via Lambda response streaming
@@ -186,6 +186,7 @@ Nothing in Phase 2 starts until written confirmation.
               Region failover via SSM (cached 60s) with DynamoDB distributed lock
               Assumes tenant execution role via STS
               ADRs: ADR-005, ADR-009, ADR-010 | Tests: all three modes mocked
+              Done: 2026-03-07, commit 5f7c527
 
 [x] TASK-019  Implement full Makefile
               All targets from Makefile skeleton now actually work
