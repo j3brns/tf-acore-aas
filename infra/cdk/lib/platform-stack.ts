@@ -291,7 +291,7 @@ export class PlatformStack extends cdk.Stack {
     });
 
     const bridgeErrorRateHighAlarm = new cloudwatch.Alarm(this, 'BridgeErrorRateHighAlarm', {
-      alarmName: 'error_rate_high',
+      alarmName: `${this.stackName}-error_rate_high`,
       alarmDescription: 'Bridge live alias error rate exceeded threshold during canary deployment',
       metric: new cloudwatch.MathExpression({
         expression: 'IF(invocations > 0, (errors / invocations) * 100, 0)',

@@ -73,7 +73,7 @@ describe('ObservabilityStack (TASK-026)', () => {
   test('creates FM-1 Runtime Region Unavailable alarm', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'FM-1-RuntimeRegionUnavailable',
+      AlarmName: 'ObservabilityStack-FM-1-RuntimeRegionUnavailable',
       ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       Threshold: 5,
     });
@@ -82,7 +82,7 @@ describe('ObservabilityStack (TASK-026)', () => {
   test('creates FM-2 Authoriser Cold Start alarm', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'FM-2-AuthoriserColdStartSpike',
+      AlarmName: 'ObservabilityStack-FM-2-AuthoriserColdStartSpike',
       Threshold: 500,
     });
   });
@@ -90,7 +90,7 @@ describe('ObservabilityStack (TASK-026)', () => {
   test('creates FM-4 DynamoDB Hot Partition alarm', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'FM-4-DynamoDbHotPartition',
+      AlarmName: 'ObservabilityStack-FM-4-DynamoDbHotPartition',
       MetricName: 'ThrottledRequests',
     });
   });
@@ -106,10 +106,10 @@ describe('ObservabilityStack (TASK-026)', () => {
   test('creates WAF and CloudFront alarms', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'Platform-API-5xx-Errors',
+      AlarmName: 'ObservabilityStack-Platform-API-5xx-Errors',
     });
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'Platform-WAF-Blocked-Requests',
+      AlarmName: 'ObservabilityStack-Platform-WAF-Blocked-Requests',
     });
   });
 });

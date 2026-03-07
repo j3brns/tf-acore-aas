@@ -77,7 +77,7 @@ describe('PlatformStack (TASK-023)', () => {
 
   test('creates bridge canary deployment group with error-rate auto-rollback alarm', () => {
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'error_rate_high',
+      AlarmName: 'platform-core-dev-error_rate_high',
       ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       Threshold: 5,
     });
