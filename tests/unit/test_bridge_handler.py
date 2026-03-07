@@ -300,3 +300,81 @@ def test_handler_streaming(setup_data):
 
         assert response is None
         mock_stream.write.assert_called()
+
+
+def test_handler_session_id_propagation(setup_data):
+    event = {
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"input": "Hello", "sessionId": "provided-session-123"}),
+    }
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = [
+            b'data: {"type": "text", "content": "Echo"}',
+            b"data: [DONE]",
+        ]
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        response = handler(event, FakeLambdaContext())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["sessionId"] == "provided-session-123"
+
+        # Verify it was logged with the provided session ID
+        ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+        inv_table = ddb.Table("platform-invocations")
+        from boto3.dynamodb.conditions import Key
+
+        # Find the record - SK starts with INV#
+        items = inv_table.query(KeyConditionExpression=Key("PK").eq("TENANT#t-001"))["Items"]
+        assert any(item["session_id"] == "provided-session-123" for item in items)
+
+
+def test_handler_session_id_from_runtime(setup_data):
+    event = {
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"input": "Hello"}),
+    }
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = [
+            b'data: {"type": "session", "sessionId": "runtime-session-456"}',
+            b'data: {"type": "text", "content": "Echo"}',
+            b"data: [DONE]",
+        ]
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        response = handler(event, FakeLambdaContext())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["sessionId"] == "runtime-session-456"
+
+        # Verify it was logged with the runtime session ID
+        ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+        inv_table = ddb.Table("platform-invocations")
+        from boto3.dynamodb.conditions import Key
+
+        items = inv_table.query(KeyConditionExpression=Key("PK").eq("TENANT#t-001"))["Items"]
+        assert any(item["session_id"] == "runtime-session-456" for item in items)

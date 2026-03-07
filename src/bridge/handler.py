@@ -9,9 +9,10 @@ ADRs: ADR-003, ADR-005, ADR-009, ADR-010
 
 import json
 import os
+import secrets
 import time
 import uuid
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -38,9 +39,12 @@ tracer = Tracer()
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "platform-tenants")
 AGENTS_TABLE = os.environ.get("AGENTS_TABLE", "platform-agents")
 INVOCATIONS_TABLE = os.environ.get("INVOCATIONS_TABLE", "platform-invocations")
 JOBS_TABLE = os.environ.get("JOBS_TABLE", "platform-jobs")
+OPS_LOCKS_TABLE = os.environ.get("OPS_LOCKS_TABLE", "platform-ops-locks")
+
 RUNTIME_REGION_PARAM = os.environ.get("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
 MOCK_RUNTIME_URL_PARAM = os.environ.get(
     "MOCK_RUNTIME_URL_PARAM", "/platform/config/mock-runtime-url"
@@ -86,11 +90,15 @@ def get_dynamodb():
     return _dynamodb_resource
 
 
-def get_config() -> dict[str, Any]:
-    """Fetch and cache configuration from SSM."""
+def get_config(force_refresh: bool = False) -> dict[str, Any]:
+    """Fetch and cache configuration from SSM.
+
+    Args:
+        force_refresh: If True, bypass cache and fetch fresh from SSM.
+    """
     global _config_cache, _config_cache_expiry
     now = time.time()
-    if now < _config_cache_expiry:
+    if not force_refresh and now < _config_cache_expiry:
         return _config_cache
 
     try:
@@ -114,7 +122,120 @@ def get_config() -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to fetch config from SSM")
         # Return stale cache if available, else defaults
-        return _config_cache or {"runtime_region": "eu-west-1", "mock_runtime_url": None}
+        if _config_cache:
+            return _config_cache
+        return {"runtime_region": "eu-west-1", "mock_runtime_url": None}
+
+
+def acquire_lock(lock_name: str, identity: str, ttl_seconds: int = 300) -> str | None:
+    """Acquire a distributed lock in DynamoDB.
+
+    Returns lock_id (UUID) on success, None on failure.
+    """
+    lock_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    ttl = int(now.timestamp()) + ttl_seconds
+
+    try:
+        ddb = get_dynamodb()
+        table = ddb.Table(OPS_LOCKS_TABLE)
+
+        table.put_item(
+            Item={
+                "PK": f"LOCK#{lock_name}",
+                "SK": "METADATA",
+                "lock_id": lock_id,
+                "acquired_by": identity,
+                "acquired_at": now.isoformat(),
+                "ttl": ttl,
+            },
+            ConditionExpression="attribute_not_exists(PK) OR #ttl < :now",
+            ExpressionAttributeNames={"#ttl": "ttl"},
+            ExpressionAttributeValues={":now": int(time.time())},
+        )
+        return lock_id
+    except Exception:
+        # ConditionalCheckFailedException or any other error
+        return None
+
+
+def release_lock(lock_name: str, lock_id: str) -> bool:
+    """Release a distributed lock if lock_id matches."""
+    try:
+        ddb = get_dynamodb()
+        table = ddb.Table(OPS_LOCKS_TABLE)
+
+        table.delete_item(
+            Key={"PK": f"LOCK#{lock_name}", "SK": "METADATA"},
+            ConditionExpression="lock_id = :lock_id",
+            ExpressionAttributeValues={":lock_id": lock_id},
+        )
+        return True
+    except Exception:
+        return False
+
+
+def trigger_failover(current_region: str) -> str:
+    """Failover from eu-west-1 to eu-central-1 (or vice versa).
+
+    Uses distributed lock to ensure only one Lambda instance performs the update.
+    Returns the new active region.
+    """
+    new_region = "eu-central-1" if current_region == "eu-west-1" else "eu-west-1"
+    lock_name = "runtime-region-failover"
+    identity = f"bridge-lambda-{os.environ.get('AWS_LAMBDA_LOG_STREAM_NAME', 'local')}"
+
+    lock_id = acquire_lock(lock_name, identity)
+    if not lock_id:
+        logger.info("Failover in progress by another instance, skipping update")
+        # Wait a bit and re-fetch config
+        time.sleep(2)
+        config = get_config(force_refresh=True)
+        return config["runtime_region"]
+
+    try:
+        # Re-fetch config to ensure we still need to failover
+        ssm = get_ssm()
+        param_response = ssm.get_parameter(Name=RUNTIME_REGION_PARAM)
+        param = param_response.get("Parameter", {})
+        current_ssm_region = str(param.get("Value", current_region))
+
+        if current_ssm_region != current_region:
+            logger.info(
+                "Region already changed by another instance",
+                extra={"ssm_region": current_ssm_region},
+            )
+            return current_ssm_region
+
+        logger.warning(
+            "Triggering region failover", extra={"from": current_region, "to": new_region}
+        )
+        ssm.put_parameter(
+            Name=RUNTIME_REGION_PARAM, Value=new_region, Type="String", Overwrite=True
+        )
+
+        # Clear local cache
+        global _config_cache_expiry
+        _config_cache_expiry = 0
+
+        return new_region
+    except Exception:
+        logger.exception("Failed to trigger failover")
+        return current_region
+    finally:
+        release_lock(lock_name, lock_id)
+
+
+def get_tenant_record(tenant_context: TenantContext) -> dict[str, Any] | None:
+    """Fetch tenant metadata from the registry."""
+    try:
+        db = TenantScopedDynamoDB(tenant_context)
+        return db.get_item(
+            TENANTS_TABLE, {"PK": f"TENANT#{tenant_context.tenant_id}", "SK": "METADATA"}
+        )
+    except Exception:
+        logger.exception("Failed to fetch tenant record")
+        return None
 
 
 def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord | None:
@@ -193,6 +314,11 @@ def assume_tenant_role(tenant_id: str, account_id: str) -> dict[str, Any] | None
         raise
 
 
+def get_jitter() -> str:
+    """Generate a 2-character random hex suffix for hot-partition mitigation."""
+    return secrets.token_hex(1)
+
+
 @logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
 @tracer.capture_lambda_handler
 def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any = None) -> Any:
@@ -251,27 +377,125 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
             403, "FORBIDDEN", "Tenant tier insufficient for this agent", request_id
         )
 
-    # 6. Get Config (Region / Mock URL)
-    config = get_config()
+    # 6. Invoke Agent (with failover/retry logic)
+    return invoke_agent(
+        agent, tenant_context, prompt, session_id, webhook_id, request_id, response_stream
+    )
 
-    # 7. Invoke Agent
-    if config.get("mock_runtime_url"):
-        return invoke_mock_runtime(
-            config["mock_runtime_url"],
-            agent,
-            tenant_context,
-            prompt,
-            session_id,
-            webhook_id,
-            request_id,
-            response_stream,
-        )
-    else:
-        # Real AgentCore Runtime invocation
-        # TODO: Implement in Phase 3
+
+def invoke_agent(
+    agent: AgentRecord,
+    tenant_context: TenantContext,
+    prompt: str,
+    session_id: str | None,
+    webhook_id: str | None,
+    request_id: str,
+    response_stream: Any,
+) -> Any:
+    """Invoke the agent with failover and retry logic."""
+    config = get_config()
+    mock_url = config.get("mock_runtime_url")
+
+    try:
+        if mock_url:
+            return invoke_mock_runtime(
+                mock_url,
+                agent,
+                tenant_context,
+                prompt,
+                session_id,
+                webhook_id,
+                request_id,
+                response_stream,
+            )
+        else:
+            return invoke_real_runtime(
+                config["runtime_region"],
+                agent,
+                tenant_context,
+                prompt,
+                session_id,
+                webhook_id,
+                request_id,
+                response_stream,
+            )
+    except Exception as e:
+        # Check if it's a 503 or ServiceUnavailableException
+        is_unavailable = False
+        if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 503:
+            is_unavailable = True
+        # Add real AWS exception check here in Phase 3
+
+        if is_unavailable:
+            logger.warning("Runtime unavailable, attempting failover")
+            new_region = trigger_failover(config["runtime_region"])
+            # Update config for retry
+            config = get_config(force_refresh=True)
+            mock_url = config.get("mock_runtime_url")
+
+            # Retry once
+            if mock_url:
+                return invoke_mock_runtime(
+                    mock_url,
+                    agent,
+                    tenant_context,
+                    prompt,
+                    session_id,
+                    webhook_id,
+                    request_id,
+                    response_stream,
+                )
+            else:
+                return invoke_real_runtime(
+                    new_region,
+                    agent,
+                    tenant_context,
+                    prompt,
+                    session_id,
+                    webhook_id,
+                    request_id,
+                    response_stream,
+                )
+
+        logger.exception("Invocation failed")
         return error_response(
-            501, "NOT_IMPLEMENTED", "Real Runtime invocation not yet implemented", request_id
+            502, "BAD_GATEWAY", "Failed to communicate with agent runtime", request_id
         )
+
+
+def invoke_real_runtime(
+    region: str,
+    agent: AgentRecord,
+    tenant_context: TenantContext,
+    prompt: str,
+    session_id: str | None,
+    webhook_id: str | None,
+    request_id: str,
+    response_stream: Any,
+) -> Any:
+    """Invoke the real AgentCore Runtime (Phase 3)."""
+    # 1. Get tenant record to find account_id
+    tenant = get_tenant_record(tenant_context)
+    if not tenant:
+        return error_response(500, "INTERNAL_ERROR", "Tenant record not found", request_id)
+
+    account_id = tenant.get("account_id")
+    if not account_id:
+        return error_response(500, "INTERNAL_ERROR", "Tenant account_id not configured", request_id)
+
+    # 2. Assume tenant role
+    try:
+        # returns credentials; will be used in Phase 3 to initialize SDK client
+        assume_tenant_role(tenant_context.tenant_id, account_id)
+        logger.info("Assumed tenant role", extra={"account_id": account_id, "region": region})
+    except Exception:
+        return error_response(500, "INTERNAL_ERROR", "Failed to assume tenant role", request_id)
+
+    # 3. Invoke with SDK (Phase 3)
+    # TODO: Implement with bedrock-agentcore SDK
+    return error_response(
+        501, "NOT_IMPLEMENTED", "Real Runtime invocation not yet implemented", request_id
+    )
 
 
 def invoke_mock_runtime(
@@ -306,34 +530,37 @@ def invoke_mock_runtime(
         "agentVersion": agent.version,
     }
 
-    try:
-        if agent.invocation_mode == InvocationMode.STREAMING:
-            # Handle streaming mode
-            return handle_streaming_invocation(
-                url,
-                headers,
-                payload,
-                agent,
-                tenant_context,
-                invocation_id,
-                start_time,
-                response_stream,
-                request_id,
-            )
-        elif agent.invocation_mode == InvocationMode.ASYNC:
-            # Handle async mode
-            return handle_async_invocation(
-                url, headers, payload, agent, tenant_context, invocation_id, start_time, webhook_id
-            )
-        else:
-            # Default to sync mode
-            return handle_sync_invocation(
-                url, headers, payload, agent, tenant_context, invocation_id, start_time
-            )
-    except Exception:
-        logger.exception("Failed to invoke mock runtime")
-        return error_response(
-            502, "BAD_GATEWAY", "Failed to communicate with agent runtime", request_id
+    if agent.invocation_mode == InvocationMode.STREAMING:
+        # Handle streaming mode
+        return handle_streaming_invocation(
+            url,
+            headers,
+            payload,
+            agent,
+            tenant_context,
+            invocation_id,
+            start_time,
+            response_stream,
+            request_id,
+            session_id,
+        )
+    elif agent.invocation_mode == InvocationMode.ASYNC:
+        # Handle async mode
+        return handle_async_invocation(
+            url,
+            headers,
+            payload,
+            agent,
+            tenant_context,
+            invocation_id,
+            start_time,
+            webhook_id,
+            session_id,
+        )
+    else:
+        # Default to sync mode
+        return handle_sync_invocation(
+            url, headers, payload, agent, tenant_context, invocation_id, start_time, session_id
         )
 
 
@@ -345,6 +572,7 @@ def handle_sync_invocation(
     tenant_context: TenantContext,
     invocation_id: str,
     start_time: float,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Handle synchronous invocation."""
     response = requests.post(f"{url}/invocations", headers=headers, json=payload, timeout=900)
@@ -352,6 +580,8 @@ def handle_sync_invocation(
 
     # Mock runtime returns SSE, collect into full text
     full_text = ""
+    effective_session_id = session_id or "mock-session-id"
+
     for line in response.iter_lines():
         if line:
             decoded_line = line.decode("utf-8")
@@ -363,6 +593,8 @@ def handle_sync_invocation(
                     chunk = json.loads(data)
                     if chunk.get("type") == "text":
                         full_text += chunk.get("content", "")
+                    elif chunk.get("type") == "session":
+                        effective_session_id = chunk.get("sessionId", effective_session_id)
                 except json.JSONDecodeError:
                     pass
 
@@ -376,6 +608,7 @@ def handle_sync_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.SYNC,
+        session_id=effective_session_id,
     )
 
     return {
@@ -389,7 +622,7 @@ def handle_sync_invocation(
                 "mode": InvocationMode.SYNC,
                 "status": InvocationStatus.SUCCESS,
                 "output": full_text,
-                "sessionId": "mock-session-id",
+                "sessionId": effective_session_id,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "usage": {"inputTokens": 0, "outputTokens": 0, "latencyMs": latency_ms},
             }
@@ -407,6 +640,7 @@ def handle_streaming_invocation(
     start_time: float,
     response_stream: Any,
     request_id: str,
+    session_id: str | None = None,
 ) -> Any:
     """Handle streaming invocation using Lambda Response Streaming."""
     if not response_stream:
@@ -414,6 +648,8 @@ def handle_streaming_invocation(
         return error_response(
             500, "INTERNAL_ERROR", "Response streaming not enabled for this Lambda", request_id
         )
+
+    effective_session_id = session_id or "mock-session-id"
 
     with requests.post(
         f"{url}/invocations", headers=headers, json=payload, stream=True, timeout=900
@@ -433,6 +669,7 @@ def handle_streaming_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.STREAMING,
+        session_id=effective_session_id,
     )
     return None
 
@@ -446,6 +683,7 @@ def handle_async_invocation(
     invocation_id: str,
     start_time: float,
     webhook_id: str | None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Handle async invocation."""
     job_id = str(uuid.uuid4())
@@ -466,8 +704,10 @@ def handle_async_invocation(
 
     # 2. Trigger Runtime
     try:
-        requests.post(f"{url}/invocations", headers=headers, json=payload, timeout=2)
+        response = requests.post(f"{url}/invocations", headers=headers, json=payload, timeout=2)
+        response.raise_for_status()
     except requests.exceptions.ReadTimeout:
+        # Expected for async trigger if it's fire-and-forget
         pass
 
     latency_ms = int((time.time() - start_time) * 1000)
@@ -481,6 +721,7 @@ def handle_async_invocation(
         latency_ms,
         InvocationMode.ASYNC,
         job_id=job_id,
+        session_id=session_id or "async-session",
     )
 
     return {
@@ -506,6 +747,7 @@ def log_invocation(
     latency_ms: int,
     mode: InvocationMode,
     job_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Write invocation audit record to DynamoDB using data-access-lib."""
     try:
@@ -513,21 +755,25 @@ def log_invocation(
         now_iso = datetime.now(UTC).isoformat()
         now_ts = int(time.time())
 
+        # Hot-partition mitigation (ADR-012)
+        jitter = get_jitter()
+
         record = InvocationRecord(
             invocation_id=invocation_id,
             tenant_id=tenant_context.tenant_id,
             app_id=tenant_context.app_id,
             agent_name=agent.agent_name,
             agent_version=agent.version,
-            session_id="mock-session",
+            session_id=session_id or "unknown-session",
             input_tokens=0,
             output_tokens=0,
             latency_ms=latency_ms,
             status=status,
-            runtime_region="eu-west-1",
+            runtime_region=get_config()["runtime_region"],
             invocation_mode=mode,
             timestamp=now_iso,
             ttl=now_ts + INVOCATION_TTL_SECONDS,
+            jitter=jitter,
             job_id=job_id,
         )
 
@@ -549,8 +795,12 @@ def log_invocation(
             "timestamp": record.timestamp,
             "ttl": record.ttl,
         }
+        if record.jitter:
+            item["jitter"] = record.jitter
         if record.job_id:
             item["job_id"] = record.job_id
+        if record.error_code:
+            item["error_code"] = record.error_code
 
         db.put_item(INVOCATIONS_TABLE, item)
     except Exception:
@@ -573,6 +823,14 @@ def log_job(tenant_context: TenantContext, record: JobRecord) -> None:
         }
         if record.webhook_url:
             item["webhook_url"] = record.webhook_url
+        if record.started_at:
+            item["started_at"] = record.started_at
+        if record.completed_at:
+            item["completed_at"] = record.completed_at
+        if record.result_s3_key:
+            item["result_s3_key"] = record.result_s3_key
+        if record.error_message:
+            item["error_message"] = record.error_message
 
         db.put_item(JOBS_TABLE, item)
     except Exception:
