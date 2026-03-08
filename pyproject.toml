@@ -45,7 +45,7 @@ explicit_package_bases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]
-addopts = "--tb=short"
+addopts = "--tb=short --import-mode=importlib"
 
 [tool.uv.workspace]
 members = [

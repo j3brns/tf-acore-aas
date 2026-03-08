@@ -1,0 +1,7 @@
+{
+  "output": "Contact [REDACTED] and transfer to [REDACTED] / [REDACTED] for settlement.",
+  "metadata": {
+    "source": "tool-call",
+    "safe": true
+  }
+}

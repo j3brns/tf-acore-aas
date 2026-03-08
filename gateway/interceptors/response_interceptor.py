@@ -31,24 +31,58 @@ tracer = Tracer()
 # ---------------------------------------------------------------------------
 TOOLS_TABLE = os.environ.get("TOOLS_TABLE", "platform-tools")
 PII_PATTERNS_PARAM = os.environ.get("PII_PATTERNS_PARAM", "/platform/gateway/pii-patterns/default")
+PII_CACHE_TTL_SECONDS = 60
+PII_REDACTION_TOKEN = "[REDACTED]"
+
+DEFAULT_PII_PATTERN_STRINGS: tuple[str, ...] = (
+    r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",  # email
+    r"[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z]\s*\d{2}\s*\d{2}\s*\d{2}\s*[A-D]",  # UK NI
+    r"\d{3}\s*\d{3}\s*\d{4}",  # NHS
+    r"\d{2}-\d{2}-\d{2}",  # sort code
+    r"\b\d{8}\b",  # account number
+)
 
 # ---------------------------------------------------------------------------
 # Global clients and cache
 # ---------------------------------------------------------------------------
 _ssm_client = None
-_pii_patterns: list[re.Pattern] = []
+_pii_patterns: list[re.Pattern[str]] = []
 _pii_cache_expiry: float = 0
 
 
-def get_ssm():
+def get_ssm() -> Any:
     global _ssm_client
     if _ssm_client is None:
-        region = os.environ.get("AWS_REGION", "eu-west-2")
+        region = os.environ["AWS_REGION"]
         _ssm_client = boto3.client("ssm", region_name=region)
     return _ssm_client
 
 
-def load_pii_patterns() -> list[re.Pattern]:
+def _compile_patterns(patterns: list[str]) -> list[re.Pattern[str]]:
+    compiled: list[re.Pattern[str]] = []
+    for pattern_str in patterns:
+        try:
+            compiled.append(re.compile(pattern_str, re.IGNORECASE))
+        except re.error:
+            logger.warning("Invalid PII regex pattern from SSM", pattern=pattern_str)
+    return compiled
+
+
+def _parse_patterns(raw_patterns: str | None) -> list[str]:
+    if not raw_patterns:
+        return []
+
+    decoded = json.loads(raw_patterns)
+    if isinstance(decoded, dict):
+        return [value for value in decoded.values() if isinstance(value, str)]
+    if isinstance(decoded, list):
+        return [value for value in decoded if isinstance(value, str)]
+
+    logger.warning("Unexpected PII patterns format in SSM parameter", type=type(decoded).__name__)
+    return []
+
+
+def load_pii_patterns() -> list[re.Pattern[str]]:
     """Fetch and compile PII redaction patterns from SSM with cache."""
     global _pii_patterns, _pii_cache_expiry
     now = time.time()
@@ -57,39 +91,18 @@ def load_pii_patterns() -> list[re.Pattern]:
 
     try:
         ssm = get_ssm()
-        response = ssm.get_parameter(Name=PII_PATTERNS_PARAM)
-        parameter = response.get("Parameter", {})
-        patterns_json = parameter.get("Value")
-
-        if not patterns_json:
-            logger.warning("PII patterns SSM parameter is empty or missing Value")
-            patterns_dict = {}
-        else:
-            patterns_dict = json.loads(patterns_json)
-
-        new_patterns = []
-        for name, pattern_str in patterns_dict.items():
-            try:
-                new_patterns.append(re.compile(pattern_str, re.IGNORECASE))
-            except re.error:
-                logger.error(
-                    "Invalid regex pattern in SSM", extra={"name": name, "pattern": pattern_str}
-                )
-
-        _pii_patterns = new_patterns
-        _pii_cache_expiry = now + 60  # 60s cache TTL
+        response = ssm.get_parameter(Name=PII_PATTERNS_PARAM, WithDecryption=False)
+        raw_patterns = response.get("Parameter", {}).get("Value")
+        compiled = _compile_patterns(_parse_patterns(raw_patterns))
+        if not compiled:
+            logger.warning("PII pattern set empty, using built-in defaults")
+            compiled = _compile_patterns(list(DEFAULT_PII_PATTERN_STRINGS))
+        _pii_patterns = compiled
+        _pii_cache_expiry = now + PII_CACHE_TTL_SECONDS
     except Exception:
         logger.exception("Failed to load PII patterns from SSM, using defaults")
-        # Default patterns if SSM fails or is not configured
-        defaults = {
-            "email": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-            "uk_ni": r"[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z]\s*\d{2}\s*\d{2}\s*\d{2}\s*[A-D]",
-            "uk_nhs": r"\d{3}\s*\d{3}\s*\d{4}",
-            "sort_code": r"\d{2}-\d{2}-\d{2}",
-            "account_number": r"\d{8}",
-        }
-        _pii_patterns = [re.compile(p, re.IGNORECASE) for p in defaults.values()]
-        _pii_cache_expiry = now + 60
+        _pii_patterns = _compile_patterns(list(DEFAULT_PII_PATTERN_STRINGS))
+        _pii_cache_expiry = now + PII_CACHE_TTL_SECONDS
 
     return _pii_patterns
 
@@ -101,14 +114,13 @@ def redact_pii(data: Any) -> Any:
     if isinstance(data, str):
         redacted = data
         for pattern in patterns:
-            redacted = pattern.sub("[REDACTED]", redacted)
+            redacted = pattern.sub(PII_REDACTION_TOKEN, redacted)
         return redacted
-    elif isinstance(data, dict):
+    if isinstance(data, dict):
         return {k: redact_pii(v) for k, v in data.items()}
-    elif isinstance(data, list):
+    if isinstance(data, list):
         return [redact_pii(v) for v in data]
-    else:
-        return data
+    return data
 
 
 def is_tier_sufficient(current_tier: TenantTier, required_tier: TenantTier) -> bool:
@@ -117,53 +129,102 @@ def is_tier_sufficient(current_tier: TenantTier, required_tier: TenantTier) -> b
     return order.get(current_tier, 0) >= order.get(required_tier, 0)
 
 
+def _parse_tier(value: Any) -> TenantTier:
+    if isinstance(value, TenantTier):
+        return value
+    try:
+        return TenantTier(str(value).lower())
+    except ValueError:
+        return TenantTier.BASIC
+
+
+def _resolve_tool_minimum_tier(
+    *,
+    tool: dict[str, Any],
+    context: TenantContext,
+    db: TenantScopedDynamoDB | None,
+) -> TenantTier:
+    payload_tier = tool.get("tierMinimum") or tool.get("tier_minimum")
+    if payload_tier is not None:
+        return _parse_tier(payload_tier)
+
+    tool_name = tool.get("name")
+    if not tool_name or db is None:
+        return TenantTier.BASIC
+
+    try:
+        tool_record = db.get_item(TOOLS_TABLE, {"PK": f"TOOL#{tool_name}", "SK": "GLOBAL"})
+        if not tool_record:
+            tool_record = db.get_item(
+                TOOLS_TABLE, {"PK": f"TOOL#{tool_name}", "SK": f"TENANT#{context.tenant_id}"}
+            )
+    except Exception:
+        logger.exception("Unable to resolve tool tier from registry", tool_name=tool_name)
+        return TenantTier.BASIC
+
+    if not tool_record:
+        return TenantTier.BASIC
+    return _parse_tier(tool_record.get("tier_minimum"))
+
+
 def filter_tools(body: dict[str, Any], context: TenantContext) -> dict[str, Any]:
     """Filter tools/list response to only include tools permitted for the tenant's tier."""
     tools = body.get("tools", [])
-    if not tools or not isinstance(tools, list):
+    if not isinstance(tools, list):
         return body
 
-    db = TenantScopedDynamoDB(context)
-    filtered_tools = []
+    db: TenantScopedDynamoDB | None = None
+    try:
+        db = TenantScopedDynamoDB(context)
+    except Exception:
+        logger.exception(
+            "Failed to initialize tool registry client; using payload tier values only"
+        )
+
+    filtered_tools: list[Any] = []
 
     for tool in tools:
-        tool_name = tool.get("name")
-        if not tool_name:
+        if not isinstance(tool, dict):
+            filtered_tools.append(tool)
             continue
 
-        # Check GLOBAL registry first, then tenant-specific registry
-        tool_record_item = db.get_item(TOOLS_TABLE, {"PK": f"TOOL#{tool_name}", "SK": "GLOBAL"})
-        if not tool_record_item:
-            tool_record_item = db.get_item(
-                TOOLS_TABLE, {"PK": f"TOOL#{tool_name}", "SK": f"TENANT#{context.tenant_id}"}
-            )
-
-        if tool_record_item:
-            min_tier_str = tool_record_item.get("tier_minimum", "basic")
-            try:
-                min_tier = TenantTier(min_tier_str)
-            except ValueError:
-                logger.warning(
-                    "Invalid tier_minimum in tool record",
-                    extra={"tool": tool_name, "tier": min_tier_str},
-                )
-                min_tier = TenantTier.BASIC
-
-            if is_tier_sufficient(context.tier, min_tier):
-                filtered_tools.append(tool)
-            else:
-                logger.debug(
-                    "Filtering tool due to insufficient tier",
-                    extra={"tool": tool_name, "tier": context.tier, "min_tier": min_tier},
-                )
-        else:
-            # If not in registry, allow it by default (log as warning for operator)
-            logger.warning(
-                "Tool not found in registry, allowing by default", extra={"tool_name": tool_name}
-            )
+        required_tier = _resolve_tool_minimum_tier(tool=tool, context=context, db=db)
+        if is_tier_sufficient(context.tier, required_tier):
             filtered_tools.append(tool)
 
     return {**body, "tools": filtered_tools}
+
+
+def _header_value(headers: dict[str, Any], key: str, default: Any = None) -> Any:
+    direct = headers.get(key)
+    if direct is not None:
+        return direct
+    lowered = key.lower()
+    for header_key, header_value in headers.items():
+        if isinstance(header_key, str) and header_key.lower() == lowered:
+            return header_value
+    return default
+
+
+def _transform_gateway_body(body: Any, context: TenantContext) -> Any:
+    parsed_body = body
+    body_was_json_string = False
+
+    if isinstance(body, str):
+        try:
+            parsed_body = json.loads(body)
+            body_was_json_string = True
+        except json.JSONDecodeError:
+            parsed_body = body
+
+    if isinstance(parsed_body, dict) and isinstance(parsed_body.get("tools"), list):
+        transformed_body = filter_tools(parsed_body, context)
+    else:
+        transformed_body = redact_pii(parsed_body)
+
+    if body_was_json_string:
+        return json.dumps(transformed_body)
+    return transformed_body
 
 
 @logger.inject_lambda_context
@@ -173,15 +234,21 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     logger.info("Response interceptor triggered")
 
     mcp = event.get("mcp", {})
+    if not isinstance(mcp, dict):
+        mcp = {}
     gateway_response = mcp.get("gatewayResponse", {})
+    if not isinstance(gateway_response, dict):
+        gateway_response = {}
     body = gateway_response.get("body", {})
     headers = gateway_response.get("headers", {})
+    if not isinstance(headers, dict):
+        headers = {}
 
     # Extract tenant context from headers (injected by authoriser/bridge)
-    tenant_id = headers.get("x-tenant-id")
-    app_id = headers.get("x-app-id")
-    tier_str = headers.get("x-tier", "basic")
-    sub = headers.get("x-acting-sub", "unknown")
+    tenant_id = _header_value(headers, "x-tenant-id")
+    app_id = _header_value(headers, "x-app-id")
+    tier_str = _header_value(headers, "x-tier", "basic")
+    sub = _header_value(headers, "x-acting-sub", "unknown")
 
     if not tenant_id or not app_id:
         logger.warning("Missing tenant context headers in response interceptor")
@@ -191,20 +258,11 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
             "mcp": {"transformedGatewayResponse": gateway_response},
         }
 
-    try:
-        tenant_tier = TenantTier(tier_str)
-    except ValueError:
-        tenant_tier = TenantTier.BASIC
+    tenant_tier = _parse_tier(tier_str)
 
     tenant_context = TenantContext(tenant_id=tenant_id, app_id=app_id, tier=tenant_tier, sub=sub)
 
-    # Detect method based on body structure (MCP standard)
-    if "tools" in body and isinstance(body["tools"], list):
-        # This is a tools/list response
-        transformed_body = filter_tools(body, tenant_context)
-    else:
-        # This is a tools/call result (or other response), redact PII
-        transformed_body = redact_pii(body)
+    transformed_body = _transform_gateway_body(body, tenant_context)
 
     return {
         "interceptorOutputVersion": "1.0",
