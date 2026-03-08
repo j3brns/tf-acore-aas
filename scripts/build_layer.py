@@ -228,17 +228,17 @@ def upload_layer_zip(zip_path: Path, *, bucket: str, key: str, aws_region: str) 
     s3.upload_file(str(zip_path), bucket, key)
 
 
-def put_layer_metadata(agent_name: str, dep_hash: str, key: str, aws_region: str) -> None:
+def put_layer_metadata(agent_name: str, env: str, dep_hash: str, key: str, aws_region: str) -> None:
     """Write hash and S3 key metadata to SSM."""
     ssm = boto3.client("ssm", region_name=aws_region)
     ssm.put_parameter(
-        Name=f"/platform/layers/{agent_name}/hash",
+        Name=f"/platform/layers/{env}/{agent_name}/hash",
         Value=dep_hash,
         Type="String",
         Overwrite=True,
     )
     ssm.put_parameter(
-        Name=f"/platform/layers/{agent_name}/s3-key",
+        Name=f"/platform/layers/{env}/{agent_name}/s3-key",
         Value=key,
         Type="String",
         Overwrite=True,
@@ -261,7 +261,7 @@ def run(agent_name: str, env: str) -> int:
     bucket = resolve_layer_bucket(env, aws_region)
     key = f"layers/{zip_path.name}"
     upload_layer_zip(zip_path, bucket=bucket, key=key, aws_region=aws_region)
-    put_layer_metadata(agent_name, dep_hash, key, aws_region)
+    put_layer_metadata(agent_name, env, dep_hash, key, aws_region)
 
     logger.info("Layer published for %s: s3://%s/%s", agent_name, bucket, key)
     print(f"LAYER_BUILT agent={agent_name} hash={dep_hash} s3=s3://{bucket}/{key}")
