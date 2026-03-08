@@ -49,7 +49,7 @@ help:
 ## bootstrap: First-time setup — install tools, check prerequisites
 bootstrap:
 	@echo "==> Checking prerequisites"
-	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not installed. Run: curl -Ls https://astral.sh/uv/install.sh | sh" && exit 1)
+	@command -v uv >/dev/null 2>&1 || (echo "ERROR: uv not installed. Run: curl -Ls https://astral.sh/uv/install.sh | i" && exit 1)
 	@command -v docker >/dev/null 2>&1 || (echo "ERROR: docker not installed" && exit 1)
 	@command -v aws >/dev/null 2>&1 || (echo "ERROR: aws cli not installed" && exit 1)
 	@command -v node >/dev/null 2>&1 || (echo "ERROR: node not installed" && exit 1)
@@ -147,10 +147,16 @@ validate-python:
 	uv run ruff format --check .
 	cd infra/cdk && npx --no-install pyright --project ../../pyrightconfig.json
 
-## validate-cdk: TypeScript compile and CDK synth
+## validate-agent-manifest: Validate agent pyproject.toml [tool.agentcore] section
+validate-agent-manifest:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make validate-agent-manifest AGENT=my-agent" && exit 1)
+	uv run python scripts/validate_agent_manifest.py $(AGENT)
+
+## validate-cdk: TypeScript compile, CDK synth, and cfn-guard
 validate-cdk:
 	@$(MAKE) --no-print-directory validate-cdk-ts
 	@$(MAKE) --no-print-directory validate-cdk-synth
+	@$(MAKE) --no-print-directory validate-cfn-guard
 
 ## validate-cdk-ts: TypeScript compile only (no synth)
 validate-cdk-ts:
@@ -180,6 +186,18 @@ validate-cdk-ts-push:
 ## validate-cdk-synth: CDK synth only
 validate-cdk-synth:
 	cd infra/cdk && npx --no-install cdk synth --context env=dev --quiet > /dev/null
+
+## validate-cfn-guard: Run cfn-guard against synthesised templates
+validate-cfn-guard:
+	@echo "==> cfn-guard validate"
+	@if [ ! -d infra/cdk/cdk.out ]; then \
+		echo "ERROR: infra/cdk/cdk.out not found. Run make validate-cdk-synth first."; \
+		exit 1; \
+	fi
+	cfn-guard validate \
+		--rules infra/guard/platform-security.guard \
+		--data infra/cdk/cdk.out/*.template.json
+	@echo "==> cfn-guard passed"
 
 ## validate-secrets-diff: detect-secrets on changed files only (staged, unstaged, untracked)
 validate-secrets-diff:
@@ -269,7 +287,7 @@ dev-invoke:
 
 ## test-unit: Run all unit tests against LocalStack
 test-unit:
-	PYTHONPATH=. uv run pytest tests/unit/ src/ -v --tb=short
+	PYTHONPATH=. uv run pytest tests/unit/ src/ -v --tb=short $(PYTEST_ARGS)
 
 ## test-int: Run integration tests (requires make dev running)
 test-int:

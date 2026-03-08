@@ -31,6 +31,7 @@ export interface ObservabilityStackProps extends cdk.StackProps {
 export class ObservabilityStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ObservabilityStackProps) {
     super(scope, id, props);
+    const alarmNamePrefix = this.stackName;
 
     // --- 1. Platform Operations Dashboard ---
 
@@ -215,7 +216,7 @@ export class ObservabilityStack extends cdk.Stack {
     // FM-1: Runtime region unavailable (ServiceUnavailableException)
     // Detected via Bridge Lambda 5xx errors or AgentCore direct metrics
     new cloudwatch.Alarm(this, 'Fm1RuntimeRegionUnavailableAlarm', {
-      alarmName: 'FM-1-RuntimeRegionUnavailable',
+      alarmName: `${alarmNamePrefix}-FM-1-RuntimeRegionUnavailable`,
       alarmDescription: 'AgentCore Runtime region is unavailable (ServiceUnavailableException)',
       metric: props.bridgeFn.metricErrors({
         period: cdk.Duration.minutes(1),
@@ -229,7 +230,7 @@ export class ObservabilityStack extends cdk.Stack {
 
     // FM-2: Authoriser cold start spike (P99 > 500ms)
     new cloudwatch.Alarm(this, 'Fm2AuthoriserColdStartAlarm', {
-      alarmName: 'FM-2-AuthoriserColdStartSpike',
+      alarmName: `${alarmNamePrefix}-FM-2-AuthoriserColdStartSpike`,
       alarmDescription: 'Authoriser Lambda latency is high (likely cold starts)',
       metric: props.authoriserFn.metricDuration({
         period: cdk.Duration.minutes(1),
@@ -242,7 +243,7 @@ export class ObservabilityStack extends cdk.Stack {
 
     // FM-4: DynamoDB hot partition (Throttle events)
     new cloudwatch.Alarm(this, 'Fm4DynamoDbHotPartitionAlarm', {
-      alarmName: 'FM-4-DynamoDbHotPartition',
+      alarmName: `${alarmNamePrefix}-FM-4-DynamoDbHotPartition`,
       alarmDescription: 'DynamoDB throttling detected on invocations table',
       metric: props.invocationsTable.metric('ThrottledRequests', {
         period: cdk.Duration.minutes(1),
@@ -255,7 +256,7 @@ export class ObservabilityStack extends cdk.Stack {
 
     // FM-5: Bridge Lambda timeout (15-min limit reached)
     new cloudwatch.Alarm(this, 'Fm5BridgeTimeoutAlarm', {
-      alarmName: 'FM-5-BridgeTimeout',
+      alarmName: `${alarmNamePrefix}-FM-5-BridgeTimeout`,
       alarmDescription: 'Bridge Lambda reached 15-minute timeout',
       metric: props.bridgeFn.metricDuration({
         period: cdk.Duration.minutes(5),
@@ -269,7 +270,7 @@ export class ObservabilityStack extends cdk.Stack {
     // FM-9: DLQ message arrival (General DLQ alarm)
     for (const [name, queue] of Object.entries(props.dlqs)) {
       new cloudwatch.Alarm(this, `Fm9DlqArrivalAlarm-${name}`, {
-        alarmName: `FM-9-DLQ-Arrival-${name}`,
+        alarmName: `${alarmNamePrefix}-FM-9-DLQ-Arrival-${name}`,
         alarmDescription: `Messages arriving in DLQ for ${name}`,
         metric: queue.metricApproximateNumberOfMessagesVisible({
           period: cdk.Duration.minutes(1),
@@ -284,7 +285,7 @@ export class ObservabilityStack extends cdk.Stack {
     // FM-7: AgentCore Memory unavailable (Degraded mode metric)
     // Note: AgentCore metrics are custom metrics from the SDK
     new cloudwatch.Alarm(this, 'Fm7AgentCoreMemoryDegradedAlarm', {
-      alarmName: 'FM-7-AgentCoreMemoryDegraded',
+      alarmName: `${alarmNamePrefix}-FM-7-AgentCoreMemoryDegraded`,
       alarmDescription: 'AgentCore Memory is in degraded mode',
       metric: new cloudwatch.Metric({
         namespace: 'AgentCore',
@@ -300,7 +301,7 @@ export class ObservabilityStack extends cdk.Stack {
 
     // FM-8: Usage plan quota exhausted (429 from API Gateway)
     new cloudwatch.Alarm(this, 'Fm8UsagePlanQuotaExhaustedAlarm', {
-      alarmName: 'FM-8-UsagePlanQuotaExhausted',
+      alarmName: `${alarmNamePrefix}-FM-8-UsagePlanQuotaExhausted`,
       alarmDescription: 'API Gateway returning 429 Too Many Requests (Usage Plan)',
       metric: props.api.metricClientError({
         period: cdk.Duration.minutes(5),
@@ -313,7 +314,7 @@ export class ObservabilityStack extends cdk.Stack {
 
     // API 5xx Errors Alarm
     new cloudwatch.Alarm(this, 'Api5xxErrorsAlarm', {
-      alarmName: 'Platform-API-5xx-Errors',
+      alarmName: `${alarmNamePrefix}-Platform-API-5xx-Errors`,
       alarmDescription: 'API Gateway returning 5xx Internal Server Errors',
       metric: props.api.metricServerError({
         period: cdk.Duration.minutes(1),
@@ -326,7 +327,7 @@ export class ObservabilityStack extends cdk.Stack {
 
     // WAF Blocked Requests Alarm
     new cloudwatch.Alarm(this, 'WafBlockedRequestsAlarm', {
-      alarmName: 'Platform-WAF-Blocked-Requests',
+      alarmName: `${alarmNamePrefix}-Platform-WAF-Blocked-Requests`,
       alarmDescription: 'High number of requests blocked by WAF',
       metric: new cloudwatch.Metric({
         namespace: 'AWS/WAFV2',

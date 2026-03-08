@@ -62,13 +62,17 @@ const platformStack = new PlatformStack(app, `platform-core-${env}`, {
   platformConfigKey: identityStack.platformConfigKey,
 });
 
-// 4. TenantStack (stub — real deployments triggered by EventBridge)
-const tenantIdStub = app.node.tryGetContext('tenantId') || 'stub';
-const tierStub = app.node.tryGetContext('tier') || 'basic';
+// 4. TenantStack (real deployments triggered by EventBridge per-tenant)
+const tenantId = app.node.tryGetContext('tenantId');
+const stackId = tenantId
+  ? `platform-tenant-${tenantId}-${env}`
+  : `platform-tenant-stub-${env}`;
 
-new TenantStack(app, `platform-tenant-stub-${env}`, {
+new TenantStack(app, stackId, {
   env: awsEnv,
-  description: `Platform per-tenant resources stub — ${env}`,
+  description: tenantId
+    ? `Platform resources for tenant ${tenantId} — ${env}`
+    : `Platform per-tenant resources stub — ${env}`,
 });
 
 // 5. ObservabilityStack

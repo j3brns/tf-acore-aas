@@ -452,3 +452,29 @@ def test_platform_split_accounts_requires_platform_admin(fake_state: dict[str, A
     event_operator["path"] = "/v1/platform/quota/split-accounts"
     response = _invoke(event_operator)
     assert response["statusCode"] == 403
+
+
+def test_parse_roles_accepts_json_encoded_array() -> None:
+    parsed = tenant_api_handler._parse_roles('["Platform.Admin","Platform.Operator"]')
+    assert parsed == frozenset({"Platform.Admin", "Platform.Operator"})
+
+
+def test_create_tenant_allows_json_encoded_admin_roles(fake_state: dict[str, Any]) -> None:
+    response = _invoke(
+        _event(
+            method="POST",
+            tenant_id=None,
+            roles='["Platform.Admin"]',
+            body={
+                "tenantId": "t-json-001",
+                "appId": "app-json-001",
+                "displayName": "Json Role Tenant",
+                "tier": "basic",
+                "ownerEmail": "json@example.com",
+                "ownerTeam": "team-json",
+                "accountId": "123456789012",
+            },
+        )
+    )
+
+    assert response["statusCode"] == 201

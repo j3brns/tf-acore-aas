@@ -1,10 +1,11 @@
 import os
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import jwt
 import pytest
 
-from src.authoriser.handler import generate_policy, handler
+from src.authoriser.handler import generate_policy, handler, is_admin_route
 
 # Mock environment variables
 OS_ENV = {
@@ -58,6 +59,48 @@ def lambda_context():
     return MockContext()
 
 
+def _sigv4_authorization(
+    access_key: str = "AKIAIOSFODNN7EXAMPLE",
+    signature: str | None = None,
+) -> str:
+    sig = signature or ("a" * 64)
+    return (
+        "AWS4-HMAC-SHA256 "
+        f"Credential={access_key}/20260307/eu-west-2/execute-api/aws4_request, "
+        "SignedHeaders=host;x-amz-date;x-tenant-id, "
+        f"Signature={sig}"
+    )
+
+
+def _sigv4_event(
+    *,
+    method_arn: str = "arn:aws:execute-api:eu-west-2:123456789012:api/dev/POST/v1/invoke",
+    tenant_id: str = "t-test-001",
+    authorization: str | None = None,
+    include_identity: bool = True,
+    access_key: str = "AKIAIOSFODNN7EXAMPLE",
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "methodArn": method_arn,
+        "authorizationToken": authorization or _sigv4_authorization(access_key=access_key),
+        "headers": {
+            "Authorization": authorization or _sigv4_authorization(access_key=access_key),
+            "x-tenant-id": tenant_id,
+            "x-amz-date": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+            "host": "api.example.com",
+        },
+    }
+    if include_identity:
+        event["requestContext"] = {
+            "identity": {
+                "accessKey": access_key,
+                "userArn": f"arn:aws:iam::123456789012:user/{access_key}",
+                "caller": "AIDAIEXAMPLE",
+            }
+        }
+    return event
+
+
 def test_generate_policy():
     context = {"foo": "bar"}
     method_arn = "arn:aws:execute-api:region:account:api/stage/GET/path"
@@ -66,6 +109,25 @@ def test_generate_policy():
     assert policy["principalId"] == "user123"
     assert policy["policyDocument"]["Statement"][0]["Effect"] == "Allow"
     assert policy["context"] == context
+
+
+@pytest.mark.parametrize(
+    ("method_arn", "expected"),
+    [
+        ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/tenants/t-001", False),
+        ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/tenants", False),
+        ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/POST/v1/tenants", True),
+        ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/PATCH/v1/tenants/t-001", True),
+        ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/DELETE/v1/tenants/t-001", True),
+        (
+            "arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/tenants/t-001/audit-export",
+            True,
+        ),
+        ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/platform/quota", True),
+    ],
+)
+def test_is_admin_route(method_arn: str, expected: bool):
+    assert is_admin_route(method_arn) is expected
 
 
 def test_handler_missing_auth(mock_env, lambda_context):
@@ -204,6 +266,34 @@ def test_handler_admin_route_authorised(
 
 
 @patch("src.authoriser.handler.get_jwk_client")
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_non_admin_can_read_own_tenant_route(
+    mock_get_status, mock_get_jwk_client, mock_env, lambda_context
+):
+    token = "valid.token.here"
+    method_arn = "arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/tenants/t-test-001"
+    event = {"methodArn": method_arn, "authorizationToken": f"Bearer {token}"}
+
+    payload = {
+        "tenantid": "t-test-001",
+        "appid": "app-001",
+        "tier": "basic",
+        "sub": "user-001",
+        "roles": ["Agent.Invoke"],
+    }
+
+    mock_get_status.return_value = "active"
+    mock_jwk_client = MagicMock()
+    mock_get_jwk_client.return_value = mock_jwk_client
+    mock_jwk_client.get_signing_key_from_jwt.return_value = MagicMock(key="public-key")
+
+    with patch("jwt.decode", return_value=payload):
+        result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+
+
+@patch("src.authoriser.handler.get_jwk_client")
 def test_handler_jwk_client_missing(mock_get_jwk_client, mock_env, lambda_context):
     mock_get_jwk_client.return_value = None
     event = {
@@ -215,10 +305,67 @@ def test_handler_jwk_client_missing(mock_get_jwk_client, mock_env, lambda_contex
 
 
 def test_handler_sigv4_stub(mock_env, lambda_context):
-    event = {
-        "methodArn": "arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/health",
-        "authorizationToken": "AWS4-HMAC-SHA256 Credential=...",
-    }
+    event = _sigv4_event(include_identity=False)
+    result = handler(event, lambda_context)
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_valid_allows_and_returns_context(mock_get_status, mock_env, lambda_context):
+    mock_get_status.return_value = "active"
+    event = _sigv4_event()
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tenantid"] == "t-test-001"
+    assert result["context"]["usageIdentifierKey"] == "t-test-001"
+    assert result["context"]["appid"] == "AKIAIOSFODNN7EXAMPLE"
+    assert result["context"]["tier"] == "basic"
+
+
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_machine_happy_path_uses_request_identity(
+    mock_get_status, mock_env, lambda_context
+):
+    mock_get_status.return_value = "active"
+    event = _sigv4_event()
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["principalId"].startswith("arn:aws:iam::123456789012:user/")
+    assert result["context"]["sub"].startswith("arn:aws:iam::123456789012:user/")
+
+
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_invalid_signature_denied(mock_get_status, mock_env, lambda_context):
+    mock_get_status.return_value = "active"
+    bad_sig = "z" * 64
+    auth = _sigv4_authorization(signature=bad_sig)
+    event = _sigv4_event(authorization=auth)
+
+    result = handler(event, lambda_context)
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_missing_tenant_header_denied(mock_get_status, mock_env, lambda_context):
+    mock_get_status.return_value = "active"
+    event = _sigv4_event()
+    headers = dict(event["headers"])  # type: ignore[index]
+    headers.pop("x-tenant-id", None)
+    event["headers"] = headers
+
+    result = handler(event, lambda_context)
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_suspended_tenant_denied(mock_get_status, mock_env, lambda_context):
+    mock_get_status.return_value = "suspended"
+    event = _sigv4_event()
+
     result = handler(event, lambda_context)
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
