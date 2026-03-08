@@ -389,6 +389,72 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /v1/tenants/{tenantId}/api-key/rotate:
+    post:
+      tags: [Tenants]
+      operationId: rotateTenantApiKey
+      summary: Rotate tenant API key
+      description: >
+        Rotates the tenant API key secret value for the specified tenant.
+        Allowed for own-tenant callers and platform admin/operator roles.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: API key rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantApiKeyRotateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/tenants/{tenantId}/users/invite:
+    post:
+      tags: [Tenants]
+      operationId: inviteTenantUser
+      summary: Invite tenant user
+      description: >
+        Creates a tenant user invitation request. Allowed for own-tenant callers
+        and platform admin/operator roles.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantUserInviteRequest"
+      responses:
+        "202":
+          description: Invite accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantUserInviteAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /v1/jobs/{jobId}:
     get:
       tags: [Jobs]
@@ -1151,6 +1217,58 @@ components:
           format: uri
         expiresAt:
           $ref: "#/components/schemas/UtcTimestamp"
+
+    TenantApiKeyRotateResponse:
+      type: object
+      required: [tenantId, apiKeySecretArn, rotatedAt]
+      properties:
+        tenantId:
+          type: string
+        apiKeySecretArn:
+          type: string
+        rotatedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        versionId:
+          type: [string, "null"]
+
+    TenantUserInviteRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          default: Agent.Invoke
+        displayName:
+          type: string
+      additionalProperties: false
+
+    TenantUserInviteAccepted:
+      type: object
+      required: [invite]
+      properties:
+        invite:
+          type: object
+          required: [inviteId, tenantId, email, role, status, expiresAt]
+          properties:
+            inviteId:
+              type: string
+            tenantId:
+              type: string
+            email:
+              type: string
+              format: email
+            role:
+              type: string
+            displayName:
+              type: [string, "null"]
+            status:
+              type: string
+              enum: [pending]
+            expiresAt:
+              $ref: "#/components/schemas/UtcTimestamp"
 
     JobStatusResponse:
       type: object
