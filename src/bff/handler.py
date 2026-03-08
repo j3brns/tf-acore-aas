@@ -186,6 +186,13 @@ def _handle_session_keepalive(
         )
     except ValueError as exc:
         return _error_response(503, "SERVICE_UNAVAILABLE", str(exc), request_id)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return _error_response(404, "NOT_FOUND", "Session not found", request_id)
+        logger.exception("Runtime keepalive ping failed with HTTP error")
+        return _error_response(
+            500, "INTERNAL_ERROR", f"Runtime ping failed: {exc.code}", request_id
+        )
     except urllib.error.URLError:
         logger.exception("Runtime keepalive ping failed")
         return _error_response(
