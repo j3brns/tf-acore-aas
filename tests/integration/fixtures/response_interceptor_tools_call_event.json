@@ -1,0 +1,19 @@
+{
+  "mcp": {
+    "gatewayResponse": {
+      "body": {
+        "output": "Contact analyst@example.com and transfer to 12-34-56 / 12345678 for settlement.",
+        "metadata": {
+          "source": "tool-call",
+          "safe": true
+        }
+      },
+      "headers": {
+        "x-tenant-id": "t-001",
+        "x-app-id": "app-001",
+        "x-tier": "standard",
+        "x-acting-sub": "user-001"
+      }
+    }
+  }
+}
