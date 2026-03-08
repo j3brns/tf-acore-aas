@@ -138,7 +138,7 @@ deploy-prod:
     AWS_ROLE_ARN: ${AWS_ROLE_ARN_DEPLOY_PROD}
     ENV: prod
   script:
-    - make infra-deploy ENV=prod
+    - make infra-deploy-prod-ci
     - make spa-deploy ENV=prod
   environment:
     name: prod
