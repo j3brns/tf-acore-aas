@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import time
+import urllib.parse
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -21,7 +22,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
-from data_access import TenantScopedDynamoDB
+from data_access import TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AgentRecord,
     InvocationMode,
@@ -44,15 +45,20 @@ AGENTS_TABLE = os.environ.get("AGENTS_TABLE", "platform-agents")
 INVOCATIONS_TABLE = os.environ.get("INVOCATIONS_TABLE", "platform-invocations")
 JOBS_TABLE = os.environ.get("JOBS_TABLE", "platform-jobs")
 OPS_LOCKS_TABLE = os.environ.get("OPS_LOCKS_TABLE", "platform-ops-locks")
+JOB_RESULTS_BUCKET = os.environ.get("JOB_RESULTS_BUCKET")
 
 RUNTIME_REGION_PARAM = os.environ.get("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
 MOCK_RUNTIME_URL_PARAM = os.environ.get(
     "MOCK_RUNTIME_URL_PARAM", "/platform/config/mock-runtime-url"
 )
+JOB_RESULT_URL_EXPIRY_SECONDS = int(os.environ.get("JOB_RESULT_URL_EXPIRY_SECONDS", "3600"))
 
 # TTL constants from models
 INVOCATION_TTL_SECONDS = 90 * 24 * 60 * 60
 JOB_TTL_SECONDS = 7 * 24 * 60 * 60
+WEBHOOK_SIGNATURE_HEADER = "X-Platform-Signature"
+WEBHOOK_SIGNATURE_ALGORITHM = "HMAC-SHA256"
+VALID_WEBHOOK_EVENTS = {"job.completed", "job.failed"}
 
 # ---------------------------------------------------------------------------
 # Global clients/cache
@@ -326,47 +332,74 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
     request_id = context.aws_request_id
 
     # 1. Parse Authorizer Context
-    auth_context = event.get("requestContext", {}).get("authorizer", {})
-    tenant_id = auth_context.get("tenantid")
-    app_id = auth_context.get("appid")
-    tier_str = auth_context.get("tier", "basic")
+    raw_authorizer = event.get("requestContext", {}).get("authorizer", {})
+    if isinstance(raw_authorizer, dict) and isinstance(raw_authorizer.get("lambda"), dict):
+        auth_context = raw_authorizer["lambda"]
+    else:
+        auth_context = raw_authorizer if isinstance(raw_authorizer, dict) else {}
+
+    tenant_id = auth_context.get("tenantid") or auth_context.get("tenantId")
+    app_id = auth_context.get("appid") or auth_context.get("appId")
+    tier_str = str(auth_context.get("tier", "basic")).lower()
     sub = auth_context.get("sub", "unknown")
 
     if not tenant_id or not app_id:
         logger.error("Missing tenant context in authorizer")
         return error_response(401, "UNAUTHENTICATED", "Missing tenant context", request_id)
 
-    tenant_tier = TenantTier(tier_str)
+    try:
+        tenant_tier = TenantTier(tier_str)
+    except ValueError:
+        tenant_tier = TenantTier.BASIC
+
     tenant_context = TenantContext(tenant_id=tenant_id, app_id=app_id, tier=tenant_tier, sub=sub)
 
     # Inject context into logs
     logger.append_keys(tenant_id=tenant_id, app_id=app_id)
 
-    # 2. Parse Path Parameters
+    method = _http_method(event)
+    path = _request_path(event)
     path_params = event.get("pathParameters", {})
-    agent_name = path_params.get("agentName")
+    if not isinstance(path_params, dict):
+        path_params = {}
+
+    # 2. Route non-invocation APIs implemented in TASK-048.
+    if method == "GET" and _coerce_optional_string(path_params.get("jobId")):
+        return get_job_status(tenant_context, path_params, request_id)
+    if method == "POST" and path.endswith("/v1/webhooks"):
+        return register_webhook(event, tenant_context, request_id)
+    if method == "DELETE" and _coerce_optional_string(path_params.get("webhookId")):
+        return delete_webhook(tenant_context, path_params, request_id)
+
+    # 3. Default to invoke route for backward compatibility.
+    if method != "POST":
+        return error_response(404, "NOT_FOUND", "Route not found", request_id)
+
+    # 4. Parse Request Body
+    try:
+        body = _parse_body(event)
+    except ValueError:
+        return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
+
+    agent_name = _coerce_optional_string(path_params.get("agentName")) or _coerce_optional_string(
+        body.get("agentName")
+    )
     if not agent_name:
         return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
 
-    # 3. Parse Request Body
-    try:
-        body = json.loads(event.get("body", "{}"))
-        prompt = body.get("input")
-        session_id = body.get("sessionId")
-        webhook_id = body.get("webhookId")
-        if not prompt:
-            return error_response(
-                400, "INVALID_REQUEST", "Missing 'input' in request body", request_id
-            )
-    except json.JSONDecodeError:
-        return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
+    prompt = _coerce_optional_string(body.get("input"))
+    if not prompt:
+        return error_response(400, "INVALID_REQUEST", "Missing 'input' in request body", request_id)
 
-    # 4. Lookup Agent
+    session_id = _coerce_optional_string(body.get("sessionId"))
+    webhook_id = _coerce_optional_string(body.get("webhookId"))
+
+    # 5. Lookup Agent
     agent = get_agent_record(agent_name)
     if not agent:
         return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
 
-    # 5. Validate Tier
+    # 6. Validate Tier
     tier_order = {TenantTier.BASIC: 0, TenantTier.STANDARD: 1, TenantTier.PREMIUM: 2}
     if tier_order[tenant_tier] < tier_order[agent.tier_minimum]:
         logger.warning(
@@ -377,10 +410,264 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
             403, "FORBIDDEN", "Tenant tier insufficient for this agent", request_id
         )
 
-    # 6. Invoke Agent (with failover/retry logic)
+    # 7. Invoke Agent (with failover/retry logic)
     return invoke_agent(
         agent, tenant_context, prompt, session_id, webhook_id, request_id, response_stream
     )
+
+
+def _http_method(event: dict[str, Any]) -> str:
+    method = event.get("httpMethod")
+    if not method:
+        method = event.get("requestContext", {}).get("http", {}).get("method")
+    if not method:
+        return "POST"
+    return str(method).upper()
+
+
+def _request_path(event: dict[str, Any]) -> str:
+    path = event.get("path")
+    if not path:
+        path = event.get("rawPath")
+    if not path:
+        path = event.get("requestContext", {}).get("http", {}).get("path")
+    if not path:
+        return ""
+    return str(path)
+
+
+def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
+    raw_body = event.get("body")
+    if raw_body in (None, ""):
+        return {}
+    if not isinstance(raw_body, str):
+        raise ValueError("Request body must be a JSON string")
+
+    body = json.loads(raw_body)
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    return body
+
+
+def _coerce_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text
+
+
+def _job_key(job_id: str) -> dict[str, str]:
+    return {"PK": f"JOB#{job_id}", "SK": "METADATA"}
+
+
+def _webhook_key(webhook_id: str) -> dict[str, str]:
+    return {"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"}
+
+
+def get_job_status(
+    tenant_context: TenantContext, path_params: dict[str, Any], request_id: str
+) -> dict[str, Any]:
+    job_id = _coerce_optional_string(path_params.get("jobId"))
+    if not job_id:
+        return error_response(400, "INVALID_REQUEST", "Missing jobId in path", request_id)
+
+    db = TenantScopedDynamoDB(tenant_context)
+    record = db.get_item(JOBS_TABLE, _job_key(job_id))
+
+    if record is None or str(record.get("tenant_id", "")) != tenant_context.tenant_id:
+        return error_response(404, "NOT_FOUND", f"Job '{job_id}' not found", request_id)
+
+    result_url: str | None = None
+    status = str(record.get("status", JobStatus.PENDING))
+    result_key = _coerce_optional_string(record.get("result_s3_key"))
+    if status == str(JobStatus.COMPLETED) and result_key:
+        try:
+            result_url = _presigned_result_url(tenant_context, result_key)
+        except ValueError as exc:
+            return error_response(500, "INTERNAL_ERROR", str(exc), request_id)
+        except Exception:
+            logger.exception(
+                "Failed to generate job result presigned URL",
+                extra={"job_id": job_id},
+            )
+            return error_response(
+                500, "INTERNAL_ERROR", "Failed to generate result URL", request_id
+            )
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(
+            {
+                "jobId": str(record.get("job_id", job_id)),
+                "tenantId": str(record.get("tenant_id", tenant_context.tenant_id)),
+                "agentName": str(record.get("agent_name", "")),
+                "status": status,
+                "createdAt": str(record.get("created_at", "")),
+                "startedAt": _coerce_optional_string(record.get("started_at")),
+                "completedAt": _coerce_optional_string(record.get("completed_at")),
+                "resultUrl": result_url,
+                "errorMessage": _coerce_optional_string(record.get("error_message")),
+                "webhookDelivered": bool(record.get("webhook_delivered", False)),
+                "webhookUrl": _coerce_optional_string(record.get("webhook_url")),
+            }
+        ),
+    }
+
+
+def _presigned_result_url(tenant_context: TenantContext, result_s3_key: str) -> str:
+    bucket = _coerce_optional_string(JOB_RESULTS_BUCKET)
+    if bucket is None:
+        raise ValueError("JOB_RESULTS_BUCKET is not configured")
+
+    expires_in = max(1, JOB_RESULT_URL_EXPIRY_SECONDS)
+    tenant_s3 = TenantScopedS3(tenant_context)
+    return tenant_s3.generate_presigned_url(
+        bucket,
+        result_s3_key,
+        expires_in=expires_in,
+    )
+
+
+def register_webhook(
+    event: dict[str, Any], tenant_context: TenantContext, request_id: str
+) -> dict[str, Any]:
+    try:
+        body = _parse_body(event)
+    except ValueError:
+        return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
+
+    callback_url = _coerce_optional_string(body.get("callbackUrl"))
+    if callback_url is None:
+        return error_response(400, "INVALID_REQUEST", "callbackUrl is required", request_id)
+
+    parsed_url = urllib.parse.urlparse(callback_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return error_response(
+            422,
+            "UNPROCESSABLE_ENTITY",
+            "callbackUrl must be a valid URL",
+            request_id,
+        )
+
+    events_raw = body.get("events")
+    if not isinstance(events_raw, list) or not events_raw:
+        return error_response(
+            400,
+            "INVALID_REQUEST",
+            "events must be a non-empty array",
+            request_id,
+        )
+
+    normalized_events: list[str] = []
+    seen_events: set[str] = set()
+    for raw_event in events_raw:
+        event_name = _coerce_optional_string(raw_event)
+        if event_name is None:
+            return error_response(
+                422,
+                "UNPROCESSABLE_ENTITY",
+                "events must contain non-empty values",
+                request_id,
+            )
+        if event_name not in VALID_WEBHOOK_EVENTS:
+            return error_response(
+                422,
+                "UNPROCESSABLE_ENTITY",
+                f"Unsupported webhook event '{event_name}'",
+                request_id,
+            )
+        if event_name in seen_events:
+            return error_response(
+                400,
+                "INVALID_REQUEST",
+                "events must not contain duplicate values",
+                request_id,
+            )
+        seen_events.add(event_name)
+        normalized_events.append(event_name)
+
+    description = _coerce_optional_string(body.get("description"))
+    if description and len(description) > 256:
+        return error_response(
+            422,
+            "UNPROCESSABLE_ENTITY",
+            "description must be 256 characters or fewer",
+            request_id,
+        )
+
+    webhook_id = str(uuid.uuid4())
+    created_at = datetime.now(UTC).isoformat()
+    webhook_secret = secrets.token_urlsafe(32)
+
+    item: dict[str, Any] = {
+        "PK": _webhook_key(webhook_id)["PK"],
+        "SK": "METADATA",
+        "webhook_id": webhook_id,
+        "tenant_id": tenant_context.tenant_id,
+        "app_id": tenant_context.app_id,
+        "callback_url": callback_url,
+        "events": normalized_events,
+        "created_at": created_at,
+        "signature_secret": webhook_secret,
+        "signature_header": WEBHOOK_SIGNATURE_HEADER,
+        "signature_algorithm": WEBHOOK_SIGNATURE_ALGORITHM,
+        "record_type": "webhook_registration",
+    }
+    if description:
+        item["description"] = description
+
+    db = TenantScopedDynamoDB(tenant_context)
+    db.put_item(JOBS_TABLE, item)
+
+    return {
+        "statusCode": 201,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(
+            {
+                "webhookId": webhook_id,
+                "callbackUrl": callback_url,
+                "events": normalized_events,
+                "createdAt": created_at,
+                "signatureHeader": WEBHOOK_SIGNATURE_HEADER,
+                "signatureAlgorithm": WEBHOOK_SIGNATURE_ALGORITHM,
+            }
+        ),
+    }
+
+
+def delete_webhook(
+    tenant_context: TenantContext, path_params: dict[str, Any], request_id: str
+) -> dict[str, Any]:
+    webhook_id = _coerce_optional_string(path_params.get("webhookId"))
+    if not webhook_id:
+        return error_response(400, "INVALID_REQUEST", "Missing webhookId in path", request_id)
+
+    key = _webhook_key(webhook_id)
+    db = TenantScopedDynamoDB(tenant_context)
+    existing = db.get_item(JOBS_TABLE, key)
+    if existing is None or str(existing.get("tenant_id", "")) != tenant_context.tenant_id:
+        return error_response(404, "NOT_FOUND", f"Webhook '{webhook_id}' not found", request_id)
+
+    db.delete_item(JOBS_TABLE, key)
+    return {"statusCode": 204, "headers": {}, "body": ""}
+
+
+def get_webhook_registration(
+    tenant_context: TenantContext, webhook_id: str
+) -> dict[str, Any] | None:
+    key = _webhook_key(webhook_id)
+    db = TenantScopedDynamoDB(tenant_context)
+    record = db.get_item(JOBS_TABLE, key)
+    if record is None:
+        return None
+    if str(record.get("tenant_id", "")) != tenant_context.tenant_id:
+        return None
+    if _coerce_optional_string(record.get("callback_url")) is None:
+        return None
+    return record
 
 
 def invoke_agent(
@@ -555,6 +842,7 @@ def invoke_mock_runtime(
             invocation_id,
             start_time,
             webhook_id,
+            request_id,
             session_id,
         )
     else:
@@ -683,12 +971,24 @@ def handle_async_invocation(
     invocation_id: str,
     start_time: float,
     webhook_id: str | None,
+    request_id: str,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Handle async invocation."""
     job_id = str(uuid.uuid4())
     now_iso = datetime.now(UTC).isoformat()
     now_ts = int(time.time())
+    webhook_url: str | None = None
+
+    if webhook_id:
+        registration = get_webhook_registration(tenant_context, webhook_id)
+        if registration is None:
+            return error_response(404, "NOT_FOUND", f"Webhook '{webhook_id}' not found", request_id)
+        webhook_url = _coerce_optional_string(registration.get("callback_url"))
+        if webhook_url is None:
+            return error_response(
+                500, "INTERNAL_ERROR", "Webhook registration missing callback URL", request_id
+            )
 
     # 1. Create JOB record in DynamoDB (platform-jobs)
     job_record = JobRecord(
@@ -698,7 +998,7 @@ def handle_async_invocation(
         status=JobStatus.PENDING,
         created_at=now_iso,
         ttl=now_ts + JOB_TTL_SECONDS,
-        webhook_url=webhook_id,
+        webhook_url=webhook_url,
     )
     log_job(tenant_context, job_record)
 
@@ -733,7 +1033,7 @@ def handle_async_invocation(
                 "status": "accepted",
                 "mode": "async",
                 "pollUrl": f"/v1/jobs/{job_id}",
-                "webhookDelivery": "registered" if webhook_id else "not_registered",
+                "webhookDelivery": "registered" if webhook_url else "not_registered",
             }
         ),
     }
@@ -823,6 +1123,7 @@ def log_job(tenant_context: TenantContext, record: JobRecord) -> None:
         }
         if record.webhook_url:
             item["webhook_url"] = record.webhook_url
+        item["webhook_delivered"] = bool(record.webhook_delivered)
         if record.started_at:
             item["started_at"] = record.started_at
         if record.completed_at:
