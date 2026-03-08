@@ -69,13 +69,13 @@ def read_agent_deps(agent_name: str) -> list[str]:
     return [str(d) for d in deps]
 
 
-def get_ssm_hash(agent_name: str, aws_region: str) -> str | None:
-    """Read stored hash from SSM /platform/layers/{agent_name}/hash.
+def get_ssm_hash(agent_name: str, env: str, aws_region: str) -> str | None:
+    """Read stored hash from SSM /platform/layers/{env}/{agent_name}/hash.
 
     Returns None when the parameter does not exist yet (first build).
     """
     ssm = boto3.client("ssm", region_name=aws_region)
-    param_name = f"/platform/layers/{agent_name}/hash"
+    param_name = f"/platform/layers/{env}/{agent_name}/hash"
     try:
         response = ssm.get_parameter(Name=param_name)
         value = response["Parameter"].get("Value")
@@ -114,7 +114,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run(agent_name: str) -> int:
+def run(agent_name: str, env: str) -> int:
     """Run hash check.
 
     Returns:
@@ -132,7 +132,7 @@ def run(agent_name: str) -> int:
         len(deps),
     )
 
-    stored = get_ssm_hash(agent_name, aws_region)
+    stored = get_ssm_hash(agent_name, env, aws_region)
     if stored is None:
         logger.info("No stored hash — rebuild required")
         print(f"HASH_MISMATCH computed={computed} stored=none")
@@ -156,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = parse_args(argv)
     try:
-        return run(agent_name=args.agent_name)
+        return run(agent_name=args.agent_name, env=args.env)
     except Exception as exc:
         logger.error("hash_layer failed: %s", exc)
         return 1

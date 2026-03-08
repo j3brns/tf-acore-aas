@@ -62,22 +62,25 @@ def register_agent(agent_name: str, env: str) -> bool:
     manifest = data.get("tool", {}).get("agentcore", {})
 
     ssm = boto3.client("ssm", region_name=aws_region)
-    layer_hash = get_ssm_param(ssm, f"/platform/layers/{agent_name}/hash")
-    layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{agent_name}/s3-key")
+    layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
+    layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
 
     if not layer_hash or not layer_s3_key:
-        logger.error(f"Layer metadata not found for agent '{agent_name}'. Run build_layer first.")
+        logger.error(
+            f"Layer metadata not found for agent '{agent_name}' in env '{env}'. "
+            "Run build_layer first."
+        )
         return False
 
     script_s3_key = f"agents/{agent_name}/code.zip"
     deployed_at = datetime.datetime.now(datetime.UTC).isoformat()
 
     # Get Runtime ARN from SSM if it exists (set by infra or previous deployment)
-    runtime_arn = get_ssm_param(ssm, f"/platform/agents/{agent_name}/runtime-arn")
+    runtime_arn = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/runtime-arn")
 
     item = {
-        "pk": f"AGENT#{agent_name}",
-        "sk": f"VERSION#{version}",
+        "PK": f"AGENT#{agent_name}",
+        "SK": f"VERSION#{version}",
         "agent_name": agent_name,
         "version": version,
         "owner_team": manifest.get("owner_team", "unknown"),
@@ -99,8 +102,15 @@ def register_agent(agent_name: str, env: str) -> bool:
     logger.info(f"Registering agent '{agent_name}' v{version} in DynamoDB table '{table_name}'")
     try:
         table.put_item(Item=item)
+        # Update latest-version in SSM
+        ssm.put_parameter(
+            Name=f"/platform/agents/{env}/{agent_name}/latest-version",
+            Value=version,
+            Type="String",
+            Overwrite=True,
+        )
     except ClientError as e:
-        logger.error(f"Failed to write to DynamoDB: {e}")
+        logger.error(f"Failed to write to DynamoDB or SSM: {e}")
         if not os.environ.get("CI"):
             return False
         logger.info("Continuing anyway because CI is set (might be using mock)")

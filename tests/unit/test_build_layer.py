@@ -140,8 +140,10 @@ def test_run_uploads_zip_and_updates_ssm(tmp_path: Path, monkeypatch: pytest.Mon
     expected_key = f"layers/echo-agent-deps-{expected_hash}.zip"
 
     ssm = boto3.client("ssm", region_name=_REGION)
-    hash_value = ssm.get_parameter(Name="/platform/layers/echo-agent/hash")["Parameter"]["Value"]
-    key_value = ssm.get_parameter(Name="/platform/layers/echo-agent/s3-key")["Parameter"]["Value"]
+    hash_param = ssm.get_parameter(Name="/platform/layers/dev/echo-agent/hash")
+    hash_value = hash_param["Parameter"]["Value"]
+    key_param = ssm.get_parameter(Name="/platform/layers/dev/echo-agent/s3-key")
+    key_value = key_param["Parameter"]["Value"]
     assert hash_value == expected_hash
     assert key_value == expected_key
 
