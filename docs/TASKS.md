@@ -360,11 +360,12 @@ No AWS console access permitted during runbook testing.
               ADRs: ADR-004 | Tests: PII redaction, tier filtering, passthrough for allowed
               Done: 2026-03-02, commit 856aa75
 
-[ ] TASK-038  Write src/bff/handler.py
+[x] TASK-038  Write src/bff/handler.py
               POST /v1/bff/token-refresh: Entra OBO flow, returns new scoped token
               POST /v1/bff/session-keepalive: fire-and-forget ping to Runtime session
               Prevents 15-minute idle timeout destroying active streaming sessions
               ADRs: ADR-011 | Tests: keepalive ping verified against mock Runtime
+              Done: 2026-03-08, commit fcf72b2
 
 [ ] TASK-039  Write .gitlab-ci-agent.yml
               Triggered on changes to agents/**

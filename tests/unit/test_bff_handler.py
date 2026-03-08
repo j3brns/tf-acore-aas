@@ -99,6 +99,66 @@ def test_token_refresh_success() -> None:
     )
 
 
+def test_token_refresh_with_audience_success() -> None:
+    event = _event(
+        path="/v1/bff/token-refresh",
+        body={
+            "scopes": ["api://platform-dev/Agent.Invoke"],
+            "audience": "https://api.example.com",
+        },
+        headers={"Authorization": "Bearer incoming-user-token"},
+    )
+
+    with patch.object(
+        bff_handler,
+        "_exchange_obo_token",
+        return_value={
+            "access_token": "new-token-with-aud",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        },
+    ) as exchange:
+        response = bff_handler.handler(event, FakeContext())
+
+    assert response["statusCode"] == 200
+    payload = _body(response)
+    assert payload["accessToken"] == "new-token-with-aud"
+
+    exchange.assert_called_once_with(
+        assertion_token="incoming-user-token",
+        scopes=["api://platform-dev/Agent.Invoke"],
+        audience="https://api.example.com",
+    )
+
+
+def test_exchange_obo_token_adds_default_scope_for_audience() -> None:
+    with patch.object(bff_handler, "_http_post_form") as http_post:
+        bff_handler._exchange_obo_token(
+            assertion_token="some-token",
+            scopes=["user.read"],
+            audience="api://another-app",
+        )
+
+    http_post.assert_called_once()
+    _, params = http_post.call_args[0]
+    # Should include both user.read and api://another-app/.default
+    assert params["scope"] == "user.read api://another-app/.default"
+
+
+def test_exchange_obo_token_skips_default_if_already_scoped() -> None:
+    with patch.object(bff_handler, "_http_post_form") as http_post:
+        bff_handler._exchange_obo_token(
+            assertion_token="some-token",
+            scopes=["api://another-app/User.Read"],
+            audience="api://another-app",
+        )
+
+    http_post.assert_called_once()
+    _, params = http_post.call_args[0]
+    # Should NOT add /.default since a scope starting with audience is already there
+    assert params["scope"] == "api://another-app/User.Read"
+
+
 def test_token_refresh_requires_authorization_header() -> None:
     event = _event(path="/v1/bff/token-refresh", body={"scopes": ["s"]}, headers={})
 
@@ -171,6 +231,34 @@ def test_keepalive_runtime_unreachable_returns_500() -> None:
     assert response["statusCode"] == 500
     error = _body(response)["error"]
     assert error["code"] == "INTERNAL_ERROR"
+
+
+def test_keepalive_session_not_found_returns_404() -> None:
+    event = _event(
+        path="/v1/bff/session-keepalive",
+        body={"sessionId": "sess-404", "agentName": "echo-agent"},
+    )
+
+    # urllib.error.HTTPError is a subclass of URLError
+    # Arguments: url, code, msg, hdrs, fp
+    mock_http_error = bff_handler.urllib.error.HTTPError(
+        "http://localhost:8765/ping",
+        404,
+        "Not Found",
+        {},
+        None,
+    )
+
+    with patch.object(
+        bff_handler,
+        "_ping_runtime_session",
+        side_effect=mock_http_error,
+    ):
+        response = bff_handler.handler(event, FakeContext())
+
+    assert response["statusCode"] == 404
+    error = _body(response)["error"]
+    assert error["code"] == "NOT_FOUND"
 
 
 def test_keepalive_ping_targets_mock_runtime_contract() -> None:
