@@ -522,6 +522,8 @@ export class PlatformStack extends cdk.Stack {
     const invoke = v1.addResource('invoke');
     const jobs = v1.addResource('jobs');
     const jobById = jobs.addResource('{jobId}');
+    const webhooks = v1.addResource('webhooks');
+    const webhookById = webhooks.addResource('{webhookId}');
     const bff = v1.addResource('bff');
     const tokenRefresh = bff.addResource('token-refresh');
     const sessionKeepalive = bff.addResource('session-keepalive');
@@ -593,6 +595,16 @@ export class PlatformStack extends cdk.Stack {
     );
     jobById.addMethod(
       'GET',
+      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      securedMethodOptions,
+    );
+    webhooks.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      securedMethodOptions,
+    );
+    webhookById.addMethod(
+      'DELETE',
       new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
       securedMethodOptions,
     );
