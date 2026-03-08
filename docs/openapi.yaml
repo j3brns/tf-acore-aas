@@ -15,6 +15,8 @@ tags:
     description: Health and readiness endpoints
   - name: Agents
     description: Agent discovery and invocation routes
+  - name: Sessions
+    description: Active session discovery routes
   - name: Tenants
     description: Tenant management APIs
   - name: Jobs
@@ -167,6 +169,35 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+
+  /v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List active sessions
+      description: >
+        Returns active sessions for the caller's tenant.
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/tenants:
     post:
@@ -839,6 +870,9 @@ components:
     JobStatus:
       type: string
       enum: [pending, running, completed, failed]
+    SessionState:
+      type: string
+      enum: [active, completed, expired]
     UtcTimestamp:
       type: string
       format: date-time
@@ -1027,6 +1061,21 @@ components:
         webhookDelivery:
           type: string
           enum: [registered, not_registered]
+
+    SessionSummary:
+      type: object
+      required: [sessionId, agentName, startedAt, lastActivityAt, status]
+      properties:
+        sessionId:
+          type: string
+        agentName:
+          type: string
+        startedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        lastActivityAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        status:
+          $ref: "#/components/schemas/SessionState"
 
     Tenant:
       type: object

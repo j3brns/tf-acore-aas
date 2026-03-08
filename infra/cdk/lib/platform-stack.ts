@@ -499,6 +499,11 @@ export class PlatformStack extends cdk.Stack {
             throttlingBurstLimit: 100,
             metricsEnabled: true,
           },
+          '/v1/agents/{agentName}/invoke/POST': {
+            throttlingRateLimit: 50,
+            throttlingBurstLimit: 100,
+            metricsEnabled: true,
+          },
           '/v1/jobs/{jobId}/GET': {
             throttlingRateLimit: 100,
             throttlingBurstLimit: 200,
@@ -519,6 +524,11 @@ export class PlatformStack extends cdk.Stack {
     });
 
     const v1 = this.api.root.addResource('v1');
+    const health = v1.addResource('health');
+    const sessions = v1.addResource('sessions');
+    const agents = v1.addResource('agents');
+    const agentByName = agents.addResource('{agentName}');
+    const agentInvoke = agentByName.addResource('invoke');
     const invoke = v1.addResource('invoke');
     const jobs = v1.addResource('jobs');
     const jobById = jobs.addResource('{jobId}');
@@ -563,7 +573,10 @@ export class PlatformStack extends cdk.Stack {
     };
 
     const tenantApiIntegration = new apigateway.LambdaIntegration(this.tenantApiFn, { proxy: true });
+    const bridgeIntegration = new apigateway.LambdaIntegration(bridgeAlias, { proxy: true });
 
+    health.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    sessions.addMethod('GET', tenantApiIntegration, securedMethodOptions);
     tenants.addMethod('POST', tenantApiIntegration, securedMethodOptions);
     tenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
 
@@ -588,24 +601,27 @@ export class PlatformStack extends cdk.Stack {
     opsTenantById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
     opsJobById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
 
+    agents.addMethod('GET', bridgeIntegration, securedMethodOptions);
+    agentByName.addMethod('GET', bridgeIntegration, securedMethodOptions);
+    agentInvoke.addMethod('POST', bridgeIntegration, securedMethodOptions);
     invoke.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     jobById.addMethod(
       'GET',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     webhooks.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     webhookById.addMethod(
       'DELETE',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     tokenRefresh.addMethod(
