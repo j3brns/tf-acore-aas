@@ -200,7 +200,11 @@ export class PlatformStack extends cdk.Stack {
     this.tenantsTable.grantReadWriteData(this.tenantApiFn);
     this.tenantApiFn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
+        actions: [
+          'secretsmanager:CreateSecret',
+          'secretsmanager:TagResource',
+          'secretsmanager:PutSecretValue',
+        ],
         resources: [
           `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/tenants/*`,
         ],
@@ -531,6 +535,10 @@ export class PlatformStack extends cdk.Stack {
     const tenants = v1.addResource('tenants');
     const tenantById = tenants.addResource('{tenantId}');
     const auditExport = tenantById.addResource('audit-export');
+    const tenantApiKey = tenantById.addResource('api-key');
+    const tenantApiKeyRotate = tenantApiKey.addResource('rotate');
+    const tenantUsers = tenantById.addResource('users');
+    const tenantUsersInvite = tenantUsers.addResource('invite');
     const platform = v1.addResource('platform');
     const failover = platform.addResource('failover');
     const quota = platform.addResource('quota');
@@ -572,6 +580,8 @@ export class PlatformStack extends cdk.Stack {
     tenantById.addMethod('DELETE', tenantApiIntegration, securedMethodOptions);
 
     auditExport.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    tenantApiKeyRotate.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    tenantUsersInvite.addMethod('POST', tenantApiIntegration, securedMethodOptions);
 
     failover.addMethod('POST', tenantApiIntegration, securedMethodOptions);
     quota.addMethod('GET', tenantApiIntegration, securedMethodOptions);

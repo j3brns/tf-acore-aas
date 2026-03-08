@@ -8,6 +8,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
     const navItems = [
         { name: "Catalogue", path: "/" },
+        { name: "Tenant Portal", path: "/tenant" },
         { name: "Sessions", path: "/sessions" },
         { name: "Admin", path: "/admin", adminOnly: true },
     ];
