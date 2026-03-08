@@ -838,6 +838,34 @@ def _handle_platform_failover(
     return _response(200, {"status": "initiated", "region": target_region})
 
 
+def _handle_health() -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "status": "ok",
+            "version": os.environ.get("SERVICE_VERSION", "0.1.0"),
+            "timestamp": _iso(_now_utc()),
+            "checks": {"tenantApi": {"status": "ok"}},
+        },
+    )
+
+
+def _handle_sessions(event: dict[str, Any], caller: CallerIdentity) -> dict[str, Any]:
+    if caller.tenant_id is None:
+        return _error(400, "BAD_REQUEST", "tenant context missing")
+
+    query = event.get("queryStringParameters") or {}
+    limit_raw = query.get("limit", 50)
+    try:
+        limit = max(1, min(int(limit_raw), 100))
+    except (TypeError, ValueError):
+        return _error(400, "BAD_REQUEST", "limit must be an integer between 1 and 100")
+
+    # Session tracking table wiring is pending. Keep schema-compatible list shape for SPA consumers.
+    _ = limit
+    return _response(200, {"items": []})
+
+
 def _handle_platform_quota(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
@@ -1135,6 +1163,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     path = _request_path(event)
 
     try:
+        if path == "/v1/health" and method == "GET":
+            return _handle_health()
+        if path == "/v1/sessions" and method == "GET":
+            return _handle_sessions(event, caller)
+
         # Platform management routes
         if path == "/v1/platform/failover" and method == "POST":
             return _handle_platform_failover(event, caller, deps)

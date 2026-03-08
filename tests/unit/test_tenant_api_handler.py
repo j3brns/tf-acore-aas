@@ -428,6 +428,40 @@ def test_platform_failover_requires_lock_and_admin(fake_state: dict[str, Any]) -
     assert response["statusCode"] == 403
 
 
+def test_health_route_returns_openapi_shape(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET")
+    event["path"] = "/v1/health"
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body["status"] == "ok"
+    assert "version" in body
+    assert "timestamp" in body
+
+
+def test_sessions_route_returns_items_list(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET", roles=[], caller_tenant_id="t-001", app_id="app-001")
+    event["path"] = "/v1/sessions"
+    event["queryStringParameters"] = {"limit": "5"}
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body == {"items": []}
+
+
+def test_sessions_route_rejects_invalid_limit(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET", roles=[], caller_tenant_id="t-001", app_id="app-001")
+    event["path"] = "/v1/sessions"
+    event["queryStringParameters"] = {"limit": "abc"}
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+
+
 def test_platform_quota_report(fake_state: dict[str, Any]) -> None:
     event = _event(method="GET")
     event["path"] = "/v1/platform/quota"

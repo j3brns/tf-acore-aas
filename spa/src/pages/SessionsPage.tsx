@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
+import { SessionRow, SessionsListResponseDto, toSessionRow } from "../api/contracts";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
-import { Session } from "../types";
 
 export const SessionsPage: React.FC = () => {
-    const [sessions, setSessions] = useState<Session[]>([]);
+    const [sessions, setSessions] = useState<SessionRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [_error, setError] = useState<string | null>(null);
     const { getAccessToken, isAuthenticated } = useAuth();
@@ -14,8 +14,8 @@ export const SessionsPage: React.FC = () => {
             if (!isAuthenticated) return;
             try {
                 const client = getApiClient(getAccessToken);
-                const data = await client.request<{ sessions: Session[] }>("/v1/sessions");
-                setSessions(data.sessions || []);
+                const data = await client.request<SessionsListResponseDto>("/v1/sessions");
+                setSessions((data.items || []).map(toSessionRow));
             } catch (err: any) {
                 setError(err.message);
             } finally {
@@ -26,6 +26,13 @@ export const SessionsPage: React.FC = () => {
     }, [getAccessToken, isAuthenticated]);
 
     if (loading) return <div>Loading sessions...</div>;
+    if (_error) {
+        return (
+            <div className="bg-red-50 border-l-4 border-red-400 p-4">
+                <p className="text-sm text-red-700">{_error}</p>
+            </div>
+        );
+    }
 
     return (
         <div>
@@ -47,11 +54,11 @@ export const SessionsPage: React.FC = () => {
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                         {sessions.map((session) => (
-                            <tr key={session.session_id}>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 font-mono">{session.session_id.substring(0, 8)}...</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{session.agent_name}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(session.started_at).toLocaleString()}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(session.last_activity_at).toLocaleString()}</td>
+                            <tr key={session.sessionId}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 font-mono">{session.sessionId.substring(0, 8)}...</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{session.agentName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(session.startedAt).toLocaleString()}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(session.lastActivityAt).toLocaleString()}</td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                                         session.status === "active" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
