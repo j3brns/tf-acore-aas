@@ -20,6 +20,7 @@ from typing import Any
 
 import boto3
 from aws_lambda_powertools import Logger
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from data_access import TenantContext, TenantScopedDynamoDB
 from data_access.models import TenantStatus, TenantTier
@@ -53,6 +54,7 @@ class CallerIdentity:
 class TenantApiDependencies:
     secretsmanager: Any
     events: Any
+    dynamodb: Any
     usage_client: Any
     memory_provisioner: Any
 
@@ -189,6 +191,7 @@ def _dependencies() -> TenantApiDependencies:
     return TenantApiDependencies(
         secretsmanager=session.client("secretsmanager"),
         events=session.client("events"),
+        dynamodb=session.resource("dynamodb"),
         usage_client=_NoopUsageClient(),
         memory_provisioner=_NoopMemoryProvisioner(),
     )
@@ -920,14 +923,31 @@ def _handle_platform_billing_status(
     deps: TenantApiDependencies,
 ) -> dict[str, Any]:
     _require_admin(caller)
+
+    # We aggregate global status across all tenants for the current month
+    year_month = datetime.now(UTC).strftime("%Y-%m")
+
+    table = deps.dynamodb.Table(_tenants_table_name())
+    # This is an admin scan for metrics
+    response = table.scan(FilterExpression=Key("SK").eq(f"BILLING#{year_month}"))
+    summaries = response.get("Items", [])
+
+    total_cost = sum(float(s.get("total_cost_usd", 0.0)) for s in summaries)
+    total_input = sum(int(s.get("total_input_tokens", 0)) for s in summaries)
+    total_output = sum(int(s.get("total_output_tokens", 0)) for s in summaries)
+
+    # Get some info about the billing Lambda last run from CloudWatch if we want,
+    # but for now let's just return aggregated month-to-date.
+
     return _response(
         200,
         {
             "status": "active",
-            "lastRun": _iso(_now_utc() - timedelta(minutes=15)),
-            "nextRun": _iso(_now_utc() + timedelta(minutes=45)),
-            "processedCount": 142,
-            "errorCount": 0,
+            "yearMonth": year_month,
+            "tenantCount": len(summaries),
+            "totalCostUsd": round(total_cost, 2),
+            "totalTokens": total_input + total_output,
+            "lastUpdated": _iso(_now_utc()),
         },
     )
 
