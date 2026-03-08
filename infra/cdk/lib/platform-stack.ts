@@ -16,6 +16,8 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as codedeploy from 'aws-cdk-lib/aws-codedeploy';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -59,6 +61,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly tenantApiFn: lambda.Function;
   public readonly requestInterceptorFn: lambda.Function;
   public readonly responseInterceptorFn: lambda.Function;
+  public readonly billingFn: lambda.Function;
 
   public readonly apiWebAcl: wafv2.CfnWebACL;
   public readonly spaDistribution: cloudfront.CfnDistribution;
@@ -281,6 +284,43 @@ export class PlatformStack extends cdk.Stack {
       environment: {
         POWERTOOLS_SERVICE_NAME: 'gateway-response-interceptor',
       },
+    });
+
+    this.billingFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/billing'),
+      handler: 'handler.lambda_handler',
+      functionNameSuffix: 'billing',
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'billing',
+        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        INVOCATIONS_TABLE_NAME: this.invocationsTable.tableName,
+        EVENT_BUS_NAME: 'default',
+      },
+    });
+
+    this.tenantsTable.grantReadWriteData(this.billingFn);
+    this.invocationsTable.grantReadData(this.billingFn);
+    this.billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/platform/billing/pricing/*`,
+        ],
+      }),
+    );
+    this.billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+
+    // Daily billing schedule (midnight UTC)
+    new events.Rule(this, 'DailyBillingRule', {
+      schedule: events.Schedule.cron({ hour: '0', minute: '0' }),
+      targets: [new targets.LambdaFunction(this.billingFn)],
     });
 
     this.toolsTable.grantReadData(this.requestInterceptorFn);

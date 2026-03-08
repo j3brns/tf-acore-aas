@@ -228,6 +228,9 @@ def _ssm_parameters(*, mock_jwks_url: str, localstack_endpoint: str) -> list[tup
         ("/platform/config/mock-runtime-url", "http://localhost:8765"),
         ("/platform/config/localstack-endpoint", localstack_endpoint),
         ("/platform/gateway/pii-patterns/default", pii_patterns),
+        ("/platform/billing/pricing/basic", json.dumps({"input_1k": 0.01, "output_1k": 0.03})),
+        ("/platform/billing/pricing/standard", json.dumps({"input_1k": 0.005, "output_1k": 0.015})),
+        ("/platform/billing/pricing/premium", json.dumps({"input_1k": 0.002, "output_1k": 0.006})),
     ]
 
 
