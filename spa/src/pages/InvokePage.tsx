@@ -2,8 +2,14 @@ import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
-import { Agent } from "../types";
+import { Agent, AgentInvokeResponse } from "../types";
 import { useJobPolling } from "../hooks/useJobPolling";
+import {
+    createInvokePayload,
+    extractJobIdFromPollUrl,
+    formatApiErrorMessage,
+    isAsyncInvokeAccepted,
+} from "./invokeContract";
 
 export const InvokePage: React.FC = () => {
     const { agentName } = useParams<{ agentName: string }>();
@@ -12,13 +18,13 @@ export const InvokePage: React.FC = () => {
     
     const [agent, setAgent] = useState<Agent | null>(null);
     const [prompt, setPrompt] = useState("");
-    const [mode, setMode] = useState<"sync" | "streaming" | "async">("sync");
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<string | null>(null);
     const [jobId, setJobId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const { status: jobStatus } = useJobPolling(jobId, getAccessToken);
+    const { status: jobStatus, error: pollingError } = useJobPolling(jobId, getAccessToken);
+    const invocationMode = agent?.invocation_mode ?? "sync";
 
     useEffect(() => {
         const fetchAgent = async () => {
@@ -27,28 +33,29 @@ export const InvokePage: React.FC = () => {
                 const client = getApiClient(getAccessToken);
                 const data = await client.request<Agent>(`/v1/agents/${agentName}`);
                 setAgent(data);
-                setMode(data.invocation_mode);
-            } catch (err: any) {
-                setError(err.message);
+            } catch (err: unknown) {
+                setError(formatApiErrorMessage(err));
             }
         };
-        fetchAgent();
+        void fetchAgent();
     }, [agentName, getAccessToken, isAuthenticated]);
 
     const handleInvoke = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        setResult("");
+        setResult(null);
         setJobId(null);
         setError(null);
 
         try {
             const client = getApiClient(getAccessToken);
+            const body = JSON.stringify(createInvokePayload(prompt));
 
-            if (mode === "streaming") {
+            if (invocationMode === "streaming") {
+                setResult("");
                 const stream = client.stream(`/v1/agents/${agentName}/invoke`, {
                     method: "POST",
-                    body: JSON.stringify({ prompt, mode }),
+                    body,
                     headers: { "Content-Type": "application/json" }
                 });
 
@@ -56,20 +63,24 @@ export const InvokePage: React.FC = () => {
                     setResult((prev) => (prev || "") + chunk.data);
                 }
             } else {
-                const data = await client.request<any>(`/v1/agents/${agentName}/invoke`, {
+                const data = await client.request<AgentInvokeResponse>(`/v1/agents/${agentName}/invoke`, {
                     method: "POST",
-                    body: JSON.stringify({ prompt, mode }),
+                    body,
                     headers: { "Content-Type": "application/json" }
                 });
 
-                if (mode === "async") {
-                    setJobId(data.jobId);
+                if (isAsyncInvokeAccepted(data)) {
+                    const acceptedJobId = data.jobId || extractJobIdFromPollUrl(data.pollUrl);
+                    if (!acceptedJobId) {
+                        throw new Error("Async invoke response missing jobId");
+                    }
+                    setJobId(acceptedJobId);
                 } else {
                     setResult(data.output);
                 }
             }
-        } catch (err: any) {
-            setError(err.message);
+        } catch (err: unknown) {
+            setError(formatApiErrorMessage(err));
         } finally {
             setLoading(false);
         }
@@ -109,26 +120,10 @@ export const InvokePage: React.FC = () => {
                             />
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Invocation Mode
-                            </label>
-                            <div className="flex space-x-4">
-                                {["sync", "streaming", "async"].map((m) => (
-                                    <label key={m} className="flex items-center">
-                                        <input
-                                            type="radio"
-                                            name="mode"
-                                            value={m}
-                                            checked={mode === m}
-                                            onChange={(e) => setMode(e.target.value as any)}
-                                            className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300"
-                                        />
-                                        <span className="ml-2 text-sm text-gray-700 capitalize">{m}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
+                        <p className="text-sm text-gray-600">
+                            Invocation mode is configured by the agent:{" "}
+                            <span className="font-semibold capitalize">{invocationMode}</span>.
+                        </p>
 
                         <button
                             type="submit"
@@ -157,7 +152,7 @@ export const InvokePage: React.FC = () => {
                     {jobStatus?.status === "completed" && (
                         <div className="mt-2">
                             <a 
-                                href={jobStatus.result_url} 
+                                href={jobStatus.resultUrl || undefined} 
                                 target="_blank" 
                                 rel="noreferrer"
                                 className="text-sm font-medium text-blue-600 hover:underline"
@@ -166,6 +161,7 @@ export const InvokePage: React.FC = () => {
                             </a>
                         </div>
                     )}
+                    {pollingError && <p className="text-sm text-red-700 mt-2">{pollingError}</p>}
                 </div>
             )}
 

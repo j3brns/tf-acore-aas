@@ -1,38 +1,82 @@
 import { useEffect, useState, useRef } from "react";
 import { getApiClient, AccessTokenProvider } from "../api/client";
+import { Job } from "../types";
+import { formatApiErrorMessage, isTerminalJob } from "../pages/invokeContract";
 
 export function useJobPolling(jobId: string | null, getAccessToken: AccessTokenProvider, interval = 2000) {
-    const [status, setStatus] = useState<any>(null);
-    const [_loading, setLoading] = useState(false);
-    const [_error, setError] = useState<string | null>(null);
-    const timerRef = useRef<number | null>(null);
+    const [status, setStatus] = useState<Job | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const inFlightRef = useRef(false);
 
     useEffect(() => {
-        if (!jobId) return;
+        if (timerRef.current !== null) {
+            globalThis.clearInterval(timerRef.current);
+            timerRef.current = null;
+        }
+
+        setStatus(null);
+        setError(null);
+
+        if (!jobId) {
+            setLoading(false);
+            inFlightRef.current = false;
+            return;
+        }
+
+        let active = true;
 
         const poll = async () => {
+            if (!active || inFlightRef.current) {
+                return;
+            }
+            inFlightRef.current = true;
             try {
                 const client = getApiClient(getAccessToken);
-                const data = await client.request<any>(`/v1/jobs/${jobId}`);
+                const data = await client.request<Job>(`/v1/jobs/${jobId}`);
+                if (!active) {
+                    return;
+                }
                 setStatus(data);
 
-                if (data.status === "completed" || data.status === "failed") {
-                    if (timerRef.current) window.clearInterval(timerRef.current);
+                if (isTerminalJob(data)) {
+                    if (timerRef.current !== null) {
+                        globalThis.clearInterval(timerRef.current);
+                        timerRef.current = null;
+                    }
+                    setLoading(false);
                 }
-            } catch (err: any) {
-                setError(err.message);
-                if (timerRef.current) window.clearInterval(timerRef.current);
+            } catch (err: unknown) {
+                if (!active) {
+                    return;
+                }
+                setError(formatApiErrorMessage(err));
+                setLoading(false);
+                if (timerRef.current !== null) {
+                    globalThis.clearInterval(timerRef.current);
+                    timerRef.current = null;
+                }
+            } finally {
+                inFlightRef.current = false;
             }
         };
 
         setLoading(true);
-        poll();
-        timerRef.current = window.setInterval(poll, interval);
+        void poll();
+        timerRef.current = globalThis.setInterval(() => {
+            void poll();
+        }, interval);
 
         return () => {
-            if (timerRef.current) window.clearInterval(timerRef.current);
+            active = false;
+            if (timerRef.current !== null) {
+                globalThis.clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
+            inFlightRef.current = false;
         };
     }, [jobId, getAccessToken, interval]);
 
-    return { status, loading: _loading, error: _error };
+    return { status, loading, error };
 }
