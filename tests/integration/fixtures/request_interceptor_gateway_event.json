@@ -1,0 +1,15 @@
+{
+  "interceptorInputVersion": "1.0",
+  "mcp": {
+    "gatewayRequest": {
+      "path": "/mcp",
+      "httpMethod": "POST",
+      "headers": {
+        "Authorization": "Bearer original.user.token",
+        "Mcp-Session-Id": "mcp-session-123",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":\"rpc-42\",\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"text\":\"hello world\"}}}"
+    }
+  }
+}
