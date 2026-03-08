@@ -77,6 +77,11 @@ class SessionStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class WebhookEventType(StrEnum):
+    JOB_COMPLETED = "job.completed"
+    JOB_FAILED = "job.failed"
+
+
 # ---------------------------------------------------------------------------
 # Table: platform-tenants
 # PK: TENANT#{tenantId}  SK: METADATA
@@ -342,6 +347,39 @@ class OpsLockRecord:
     @property
     def sk(self) -> str:
         return "METADATA"
+
+
+# ---------------------------------------------------------------------------
+# Table: platform-webhooks
+# PK: WEBHOOK#{webhookId}  SK: TENANT#{tenantId}
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WebhookRecord:
+    """Webhook registration record.
+
+    signature_header: defaults to X-Platform-Signature.
+    secret: HMAC-SHA256 secret key.
+    """
+
+    webhook_id: str
+    tenant_id: str
+    callback_url: str
+    events: list[WebhookEventType]
+    secret: str
+    created_at: str  # ISO 8601 UTC
+    description: str | None = None
+    enabled: bool = True
+    signature_header: str = "X-Platform-Signature"
+
+    @property
+    def pk(self) -> str:
+        return f"WEBHOOK#{self.webhook_id}"
+
+    @property
+    def sk(self) -> str:
+        return f"TENANT#{self.tenant_id}"
 
 
 # ---------------------------------------------------------------------------

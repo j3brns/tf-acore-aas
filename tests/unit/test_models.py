@@ -452,9 +452,44 @@ class TestOpsLockRecord:
             lock.lock_id = "different-id"  # type: ignore[misc]
 
 
+def _make_webhook(**overrides):
+    from data_access.models import WebhookEventType, WebhookRecord
+
+    defaults = dict(
+        webhook_id="wh-xyz",
+        tenant_id="t-abc123",
+        callback_url="https://example.com/webhook",
+        events=[WebhookEventType.JOB_COMPLETED],
+        secret="super-secret",  # pragma: allowlist secret
+        created_at="2026-02-24T12:00:00Z",
+    )
+    defaults.update(overrides)
+    return WebhookRecord(**defaults)
+
+
+class TestWebhookRecord:
+    def test_pk_format(self):
+        webhook = _make_webhook(webhook_id="wh-123")
+        assert webhook.pk == "WEBHOOK#wh-123"
+
+    def test_sk_format(self):
+        webhook = _make_webhook(tenant_id="t-001")
+        assert webhook.sk == "TENANT#t-001"
+
+    def test_optional_fields_default(self):
+        webhook = _make_webhook()
+        assert webhook.description is None
+        assert webhook.enabled is True
+        assert webhook.signature_header == "X-Platform-Signature"
+
+    def test_frozen(self):
+        webhook = _make_webhook()
+        with pytest.raises((dataclasses.FrozenInstanceError, TypeError)):
+            webhook.enabled = False  # type: ignore[misc]
+
+
 # ---------------------------------------------------------------------------
 # Cross-table key prefix uniqueness
-# (ensures no two tables share a PK prefix — prevents accidental cross-table reads)
 # ---------------------------------------------------------------------------
 
 
@@ -470,6 +505,7 @@ class TestKeyPrefixUniqueness:
             _make_session(),
             _make_tool(),
             _make_lock(),
+            _make_webhook(),
         ]
         prefixes = [r.pk.split("#")[0] for r in records]
         # TenantRecord and InvocationRecord/SessionRecord share TENANT# prefix
