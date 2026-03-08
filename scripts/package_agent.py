@@ -21,8 +21,7 @@ from pathlib import Path
 logger = logging.getLogger("package_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_DIR = REPO_ROOT / ".build"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 EXCLUDE_PATTERNS = {
     "__pycache__",
@@ -50,14 +49,16 @@ def should_exclude(path: Path, base_dir: Path) -> bool:
     return False
 
 
-def package_agent(agent_name: str) -> bool:
-    agent_dir = REPO_ROOT / "agents" / agent_name
+def package_agent(agent_name: str, repo_root: Path | None = None) -> bool:
+    root = repo_root or _REPO_ROOT
+    agent_dir = root / "agents" / agent_name
     if not agent_dir.exists():
         logger.error(f"Agent directory not found: {agent_dir}")
         return False
 
-    BUILD_DIR.mkdir(exist_ok=True)
-    zip_path = BUILD_DIR / f"{agent_name}-code.zip"
+    build_dir = root / ".build"
+    build_dir.mkdir(exist_ok=True)
+    zip_path = build_dir / f"{agent_name}-code.zip"
 
     logger.info(f"Packaging agent '{agent_name}' to {zip_path}")
 

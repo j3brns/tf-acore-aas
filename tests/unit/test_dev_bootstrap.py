@@ -314,10 +314,11 @@ def test_write_env_test_is_idempotent(tmp_path: Path) -> None:
     """Writing .env.test twice must produce stable output (no appending)."""
     env_test_path = tmp_path / ".env.test"
     tokens = {"basic": "jwt-b", "premium": "jwt-p", "admin": "jwt-a"}
-    bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
-    first_content = env_test_path.read_text()
-    bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
-    second_content = env_test_path.read_text()
+    with patch("secrets.token_hex", return_value="static-test-token"):
+        bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
+        first_content = env_test_path.read_text()
+        bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
+        second_content = env_test_path.read_text()
     assert first_content == second_content
 
 

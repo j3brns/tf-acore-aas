@@ -23,7 +23,7 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger("register_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_aws_region() -> str:
@@ -51,9 +51,10 @@ def get_ssm_param(ssm, name: str) -> str | None:
         raise
 
 
-def register_agent(agent_name: str, env: str) -> bool:
+def register_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bool:
     aws_region = require_aws_region()
-    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
+    root = repo_root or _REPO_ROOT
+    toml_path = root / "agents" / agent_name / "pyproject.toml"
     with open(toml_path, "rb") as f:
         data = tomllib.load(f)
 
@@ -76,8 +77,8 @@ def register_agent(agent_name: str, env: str) -> bool:
     runtime_arn = get_ssm_param(ssm, f"/platform/agents/{agent_name}/runtime-arn")
 
     item = {
-        "pk": f"AGENT#{agent_name}",
-        "sk": f"VERSION#{version}",
+        "PK": f"AGENT#{agent_name}",
+        "SK": f"VERSION#{version}",
         "agent_name": agent_name,
         "version": version,
         "owner_team": manifest.get("owner_team", "unknown"),
@@ -97,15 +98,17 @@ def register_agent(agent_name: str, env: str) -> bool:
     table = dynamodb.Table(table_name)
 
     logger.info(f"Registering agent '{agent_name}' v{version} in DynamoDB table '{table_name}'")
-    try:
-        table.put_item(Item=item)
-    except ClientError as e:
-        logger.error(f"Failed to write to DynamoDB: {e}")
-        if not os.environ.get("CI"):
-            return False
-        logger.info("Continuing anyway because CI is set (might be using mock)")
+    table.put_item(Item=item)
 
-    logger.info(f"Agent '{agent_name}' registered successfully.")
+    # Update latest-version in SSM
+    ssm.put_parameter(
+        Name=f"/platform/agents/{agent_name}/latest-version",
+        Value=version,
+        Type="String",
+        Overwrite=True,
+    )
+
+    logger.info(f"Agent '{agent_name}' registered successfully")
     return True
 
 

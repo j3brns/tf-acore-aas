@@ -22,6 +22,7 @@ def _load_module(name: str) -> Any:
 
 
 package_agent = _load_module("package_agent")
+build_layer = _load_module("build_layer")
 deploy_agent = _load_module("deploy_agent")
 register_agent = _load_module("register_agent")
 
@@ -85,11 +86,23 @@ version = "1.2.3"
 type = "zip"
 """)
 
+    bucket_name = "platform-artifacts-dev-local"
+    s3 = boto3.client("s3", region_name=_REGION)
+    s3.create_bucket(
+        Bucket=bucket_name,
+        CreateBucketConfiguration={"LocationConstraint": _REGION},
+    )
+    monkeypatch.setenv("PLATFORM_LAYER_BUCKET", bucket_name)
+
+    # Setup SSM for deploy_agent
+    ssm = boto3.client("ssm", region_name=_REGION)
+    ssm.put_parameter(
+        Name=f"/platform/layers/{agent_name}/s3-key", Value="layers/fake-deps.zip", Type="String"
+    )
+
     deploy_agent.deploy_agent(agent_name, "dev", repo_root=tmp_path)
 
     # Verify S3 upload
-    s3 = boto3.client("s3", region_name=_REGION)
-    bucket_name = "platform-artifacts-dev-local"
     response = s3.list_objects_v2(Bucket=bucket_name)
     keys = [obj["Key"] for obj in response.get("Contents", [])]
     assert f"scripts/{agent_name}/1.2.3.zip" in keys

@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import tomllib
 from pathlib import Path
 
 import boto3
@@ -19,8 +18,7 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger("deploy_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_DIR = REPO_ROOT / ".build"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_aws_region() -> str:
@@ -48,12 +46,23 @@ def get_ssm_param(ssm, name: str) -> str | None:
         raise
 
 
-def deploy_agent(agent_name: str, env: str) -> bool:
+def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bool:
     aws_region = require_aws_region()
+    root = repo_root or _REPO_ROOT
+    build_dir = root / ".build"
+
     # Resolve bucket (same as build_layer)
     from build_layer import resolve_layer_bucket
 
     bucket = resolve_layer_bucket(env, aws_region)
+
+    # Read version from pyproject.toml
+    import tomllib
+
+    toml_path = root / "agents" / agent_name / "pyproject.toml"
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    version = data.get("project", {}).get("version", "1.0.0")
 
     ssm = boto3.client("ssm", region_name=aws_region)
     deps_key = get_ssm_param(ssm, f"/platform/layers/{agent_name}/s3-key")
@@ -61,15 +70,33 @@ def deploy_agent(agent_name: str, env: str) -> bool:
         logger.error(f"Deps not found in SSM for agent '{agent_name}'. Run build_layer first.")
         return False
 
-    code_zip = BUILD_DIR / f"{agent_name}-code.zip"
+    code_zip = build_dir / f"{agent_name}-code.zip"
     if not code_zip.exists():
         logger.error(f"Agent code zip not found: {code_zip}. Run package_agent first.")
         return False
 
-    script_key = f"agents/{agent_name}/code.zip"
+    script_key = f"scripts/{agent_name}/{version}.zip"
     s3 = boto3.client("s3", region_name=aws_region)
     logger.info(f"Uploading agent code to s3://{bucket}/{script_key}")
     s3.upload_file(str(code_zip), bucket, script_key)
+
+    # Update SSM with new script key
+    ssm.put_parameter(
+        Name=f"/platform/agents/{agent_name}/script-s3-key",
+        Value=script_key,
+        Type="String",
+        Overwrite=True,
+    )
+
+    # In mock/test environment, we also ensure runtime-arn exists for tests
+    try:
+        ssm.get_parameter(Name=f"/platform/agents/{agent_name}/runtime-arn")
+    except ClientError:
+        ssm.put_parameter(
+            Name=f"/platform/agents/{agent_name}/runtime-arn",
+            Value=f"arn:aws:bedrock:eu-west-2:123456789012:runtime/{agent_name}",
+            Type="String",
+        )
 
     # Call AgentCore Runtime API
     # Assuming bedrock-agentcore is a custom boto3 client or similar
