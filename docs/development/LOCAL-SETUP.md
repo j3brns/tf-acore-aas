@@ -18,6 +18,7 @@ Copy `.env.example` to `.env.local` and fill in these values:
 |-----------------------|----------------------------------------------------------|
 | VITE_ENTRA_CLIENT_ID  | Entra portal → App Registrations → platform-{env}       |
 | VITE_ENTRA_TENANT_ID  | Entra portal → Overview → Directory (tenant) ID         |
+| VITE_ENTRA_SCOPES     | Entra app expose-an-API scopes (space/comma separated)  |
 | VITE_API_BASE_URL     | CDK outputs after infra-deploy, or team-platform Slack   |
 | GITLAB_PROJECT_ID     | GitLab project settings → General → Project ID           |
 

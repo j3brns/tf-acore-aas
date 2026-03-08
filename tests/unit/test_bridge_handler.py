@@ -5,9 +5,11 @@ import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import boto3
 import pytest
+from boto3.dynamodb.conditions import Key
 from moto import mock_aws
 
 # Add project root and data-access-lib to path
@@ -300,3 +302,370 @@ def test_handler_streaming(setup_data):
 
         assert response is None
         mock_stream.write.assert_called()
+
+
+def test_handler_session_id_propagation(setup_data):
+    event = {
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"input": "Hello", "sessionId": "provided-session-123"}),
+    }
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = [
+            b'data: {"type": "text", "content": "Echo"}',
+            b"data: [DONE]",
+        ]
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        response = handler(event, FakeLambdaContext())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["sessionId"] == "provided-session-123"
+
+        # Verify it was logged with the provided session ID
+        ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+        inv_table = ddb.Table("platform-invocations")
+
+        # Find the record - SK starts with INV#
+        items = inv_table.query(KeyConditionExpression=Key("PK").eq("TENANT#t-001"))["Items"]
+        assert any(item["session_id"] == "provided-session-123" for item in items)
+
+
+def test_handler_session_id_from_runtime(setup_data):
+    event = {
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"input": "Hello"}),
+    }
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = [
+            b'data: {"type": "session", "sessionId": "runtime-session-456"}',
+            b'data: {"type": "text", "content": "Echo"}',
+            b"data: [DONE]",
+        ]
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        response = handler(event, FakeLambdaContext())
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["sessionId"] == "runtime-session-456"
+
+        # Verify it was logged with the runtime session ID
+        ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+        inv_table = ddb.Table("platform-invocations")
+
+        items = inv_table.query(KeyConditionExpression=Key("PK").eq("TENANT#t-001"))["Items"]
+        assert any(item["session_id"] == "runtime-session-456" for item in items)
+
+
+def test_get_job_status_returns_job_payload(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+    jobs_table.put_item(
+        Item={
+            "PK": "JOB#job-123",
+            "SK": "METADATA",
+            "job_id": "job-123",
+            "tenant_id": "t-001",
+            "agent_name": "echo-agent",
+            "status": "running",
+            "created_at": "2026-03-01T10:00:00Z",
+            "started_at": "2026-03-01T10:00:05Z",
+            "webhook_delivered": False,
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/jobs/job-123",
+        "pathParameters": {"jobId": "job-123"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["jobId"] == "job-123"
+    assert body["tenantId"] == "t-001"
+    assert body["status"] == "running"
+    assert body["resultUrl"] is None
+
+
+def test_get_job_status_generates_presigned_result_url_with_expected_expiry(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+
+    s3 = boto3.client("s3", region_name="eu-west-2")
+    s3.create_bucket(
+        Bucket="platform-job-results",
+        CreateBucketConfiguration={"LocationConstraint": "eu-west-2"},
+    )
+    result_key = "tenants/t-001/results/job-456.json"
+    s3.put_object(Bucket="platform-job-results", Key=result_key, Body=b"{}")
+
+    jobs_table.put_item(
+        Item={
+            "PK": "JOB#job-456",
+            "SK": "METADATA",
+            "job_id": "job-456",
+            "tenant_id": "t-001",
+            "agent_name": "echo-agent",
+            "status": "completed",
+            "created_at": "2026-03-01T10:00:00Z",
+            "completed_at": "2026-03-01T10:00:30Z",
+            "result_s3_key": result_key,
+            "webhook_delivered": True,
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/jobs/job-456",
+        "pathParameters": {"jobId": "job-456"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    with (
+        patch("src.bridge.handler.JOB_RESULTS_BUCKET", "platform-job-results"),
+        patch("src.bridge.handler.JOB_RESULT_URL_EXPIRY_SECONDS", 900),
+    ):
+        response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "completed"
+    assert isinstance(body["resultUrl"], str)
+
+    query = parse_qs(urlparse(body["resultUrl"]).query)
+    expires = (query.get("X-Amz-Expires") or query.get("Expires") or [None])[0]
+    assert expires == "900"
+
+
+def test_get_job_status_hides_other_tenants_job(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+    jobs_table.put_item(
+        Item={
+            "PK": "JOB#job-foreign",
+            "SK": "METADATA",
+            "job_id": "job-foreign",
+            "tenant_id": "t-999",
+            "agent_name": "echo-agent",
+            "status": "pending",
+            "created_at": "2026-03-01T10:00:00Z",
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/jobs/job-foreign",
+        "pathParameters": {"jobId": "job-foreign"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+def test_register_and_delete_webhook(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+
+    register_event = {
+        "httpMethod": "POST",
+        "path": "/v1/webhooks",
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps(
+            {
+                "callbackUrl": "https://example.com/webhooks/platform",
+                "events": ["job.completed", "job.failed"],
+                "description": "Ops endpoint",
+            }
+        ),
+    }
+
+    register_response = handler(register_event, FakeLambdaContext())
+    assert register_response["statusCode"] == 201
+    register_body = json.loads(register_response["body"])
+
+    webhook_id = register_body["webhookId"]
+    assert register_body["callbackUrl"] == "https://example.com/webhooks/platform"
+    assert register_body["events"] == ["job.completed", "job.failed"]
+    assert register_body["signatureHeader"] == "X-Platform-Signature"
+
+    webhook_record = jobs_table.get_item(Key={"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"})
+    assert webhook_record["Item"]["tenant_id"] == "t-001"
+    assert webhook_record["Item"]["callback_url"] == "https://example.com/webhooks/platform"
+    assert "signature_secret" in webhook_record["Item"]
+    assert "signature_secret" not in register_body
+
+    delete_event = {
+        "httpMethod": "DELETE",
+        "path": f"/v1/webhooks/{webhook_id}",
+        "pathParameters": {"webhookId": webhook_id},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    delete_response = handler(delete_event, FakeLambdaContext())
+    assert delete_response["statusCode"] == 204
+    deleted = jobs_table.get_item(Key={"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"})
+    assert "Item" not in deleted
+
+
+def test_handler_async_uses_registered_webhook_callback(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    agents_table = ddb.Table("platform-agents")
+    jobs_table = ddb.Table("platform-jobs")
+
+    agents_table.put_item(
+        Item={
+            "PK": "AGENT#async-webhook-agent",
+            "SK": "VERSION#1.0.0",
+            "agent_name": "async-webhook-agent",
+            "version": "1.0.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "0000",
+            "layer_s3_key": "k",
+            "script_s3_key": "s",
+            "deployed_at": "2026-01-01T00:00:00Z",
+            "invocation_mode": "async",
+            "streaming_enabled": False,
+        }
+    )
+    jobs_table.put_item(
+        Item={
+            "PK": "WEBHOOK#webhook-001",
+            "SK": "METADATA",
+            "webhook_id": "webhook-001",
+            "tenant_id": "t-001",
+            "app_id": "app-001",
+            "callback_url": "https://example.com/hooks/job",
+            "events": ["job.completed"],
+            "created_at": "2026-03-01T09:59:00Z",
+            "signature_secret": "test-signature-material",  # pragma: allowlist secret
+        }
+    )
+
+    event = {
+        "pathParameters": {"agentName": "async-webhook-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"input": "hello", "webhookId": "webhook-001"}),
+    }
+
+    with patch("requests.post"):
+        response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 202
+    response_body = json.loads(response["body"])
+    assert response_body["webhookDelivery"] == "registered"
+
+    job = jobs_table.get_item(Key={"PK": f"JOB#{response_body['jobId']}", "SK": "METADATA"})["Item"]
+    assert job["webhook_url"] == "https://example.com/hooks/job"
+
+
+def test_handler_async_rejects_unknown_webhook_id(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#async-agent-missing-webhook",
+            "SK": "VERSION#1.0.0",
+            "agent_name": "async-agent-missing-webhook",
+            "version": "1.0.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "0000",
+            "layer_s3_key": "k",
+            "script_s3_key": "s",
+            "deployed_at": "2026-01-01T00:00:00Z",
+            "invocation_mode": "async",
+            "streaming_enabled": False,
+        }
+    )
+
+    event = {
+        "pathParameters": {"agentName": "async-agent-missing-webhook"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"input": "hello", "webhookId": "does-not-exist"}),
+    }
+
+    with patch("requests.post"):
+        response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "NOT_FOUND"
