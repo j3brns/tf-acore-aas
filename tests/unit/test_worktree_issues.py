@@ -383,6 +383,7 @@ def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypat
     monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
     monkeypatch.setattr(worktree_issues, "gh_repo_ready", lambda _root: (False, None))
     monkeypatch.setattr(worktree_issues, "finish_stage", lambda *_args, **_kwargs: "merged")
+
     def _run_summary(*args, **kwargs):
         return subprocess.CompletedProcess(args[0], 0, "## wt/infra/53-explicit-dod\n", "")
 
