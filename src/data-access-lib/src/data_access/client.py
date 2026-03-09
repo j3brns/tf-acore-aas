@@ -112,7 +112,7 @@ class TenantScopedDynamoDB:
 
         Convention: all platform DynamoDB tables use "PK" as the partition key
         attribute name (single-table design standard).  Non-TENANT# prefixed PKs
-        (AGENT#, JOB#, LOCK#, TOOL#) bypass this check; IAM governs those tables.
+        (AGENT#, LOCK#, TOOL#) bypass this check; IAM governs those tables.
         """
         pk = key.get("PK", "")
         if isinstance(pk, str) and pk.startswith(_TENANT_PK_PREFIX):

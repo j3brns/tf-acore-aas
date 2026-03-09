@@ -210,7 +210,7 @@ class InvocationRecord:
 
 # ---------------------------------------------------------------------------
 # Table: platform-jobs
-# PK: JOB#{jobId}  SK: METADATA
+# PK: TENANT#{tenantId}  SK: JOB#{jobId}
 # Capacity: on-demand. TTL: 7 days.
 # ---------------------------------------------------------------------------
 
@@ -239,11 +239,11 @@ class JobRecord:
 
     @property
     def pk(self) -> str:
-        return f"JOB#{self.job_id}"
+        return f"TENANT#{self.tenant_id}"
 
     @property
     def sk(self) -> str:
-        return "METADATA"
+        return f"JOB#{self.job_id}"
 
 
 # ---------------------------------------------------------------------------

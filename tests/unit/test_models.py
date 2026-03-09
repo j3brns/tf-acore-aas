@@ -289,14 +289,15 @@ def _make_job(**overrides) -> JobRecord:
 
 class TestJobRecord:
     def test_pk_format(self):
-        job = _make_job(job_id="job-xyz")
-        assert job.pk == "JOB#job-xyz"
+        job = _make_job(tenant_id="t-xyz")
+        assert job.pk == "TENANT#t-xyz"
 
-    def test_sk_is_metadata(self):
-        assert _make_job().sk == "METADATA"
+    def test_sk_format(self):
+        job = _make_job(job_id="job-123")
+        assert job.sk == "JOB#job-123"
 
-    def test_pk_starts_with_job_prefix(self):
-        assert _make_job().pk.startswith("JOB#")
+    def test_pk_starts_with_tenant_prefix(self):
+        assert _make_job().pk.startswith("TENANT#")
 
     def test_optional_fields_default(self):
         job = _make_job()

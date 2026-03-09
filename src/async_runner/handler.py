@@ -63,7 +63,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         sub="async-runner",
     )
     db = TenantScopedDynamoDB(tenant_context)
-    key = {"PK": f"JOB#{job_id}", "SK": "METADATA"}
+    key = {"PK": f"TENANT#{tenant_id}", "SK": f"JOB#{job_id}"}
     job = db.get_item(JOBS_TABLE, key)
     if job is None:
         return _error_response(404, "NOT_FOUND", f"Job '{job_id}' not found")

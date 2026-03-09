@@ -458,8 +458,8 @@ def _coerce_optional_string(value: Any) -> str | None:
     return text
 
 
-def _job_key(job_id: str) -> dict[str, str]:
-    return {"PK": f"JOB#{job_id}", "SK": "METADATA"}
+def _job_key(tenant_id: str, job_id: str) -> dict[str, str]:
+    return {"PK": f"TENANT#{tenant_id}", "SK": f"JOB#{job_id}"}
 
 
 def _webhook_key(webhook_id: str) -> dict[str, str]:
@@ -474,9 +474,9 @@ def get_job_status(
         return error_response(400, "INVALID_REQUEST", "Missing jobId in path", request_id)
 
     db = TenantScopedDynamoDB(tenant_context)
-    record = db.get_item(JOBS_TABLE, _job_key(job_id))
+    record = db.get_item(JOBS_TABLE, _job_key(tenant_context.tenant_id, job_id))
 
-    if record is None or str(record.get("tenant_id", "")) != tenant_context.tenant_id:
+    if record is None:
         return error_response(404, "NOT_FOUND", f"Job '{job_id}' not found", request_id)
 
     result_url: str | None = None
