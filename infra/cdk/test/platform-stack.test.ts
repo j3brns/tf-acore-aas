@@ -75,7 +75,7 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
-  test('wires invoke route to /v1/agents/{agentName}/invoke and removes legacy /v1/invoke', () => {
+  test('wires canonical invoke and jobs routes and removes legacy /v1/invoke', () => {
     const resources = template.findResources('AWS::ApiGateway::Resource');
     const pathParts = Object.values(resources).map((resource) => {
       const properties = (resource as { Properties?: { PathPart?: string } }).Properties;
@@ -85,6 +85,8 @@ describe('PlatformStack (TASK-023)', () => {
     expect(pathParts).toContain('agents');
     expect(pathParts).toContain('{agentName}');
     expect(pathParts).toContain('invoke');
+    expect(pathParts).toContain('jobs');
+    expect(pathParts).toContain('{jobId}');
 
     const stages = template.findResources('AWS::ApiGateway::Stage');
     const methodSettings = Object.values(stages).flatMap((stage) => {
@@ -97,6 +99,10 @@ describe('PlatformStack (TASK-023)', () => {
         expect.objectContaining({
           HttpMethod: 'POST',
           ResourcePath: '/~1v1~1agents~1{agentName}~1invoke',
+        }),
+        expect.objectContaining({
+          HttpMethod: 'GET',
+          ResourcePath: '/~1v1~1jobs~1{jobId}',
         }),
       ]),
     );

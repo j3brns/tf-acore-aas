@@ -364,7 +364,10 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
         path_params = {}
 
     # 2. Route non-invocation APIs implemented in TASK-048.
-    if method == "GET" and _coerce_optional_string(path_params.get("jobId")):
+    job_id = _coerce_optional_string(path_params.get("jobId"))
+    if method == "GET" and job_id:
+        if path and not _is_jobs_contract_path(path, job_id):
+            return error_response(404, "NOT_FOUND", "Route not found", request_id)
         return get_job_status(tenant_context, path_params, request_id)
     if method == "GET" and path.endswith("/v1/agents"):
         return list_agents(tenant_context)
@@ -460,6 +463,20 @@ def _is_invoke_contract_path(path: str, agent_name: str | None) -> bool:
     if not route_agent_name:
         return False
     return agent_name is None or route_agent_name == agent_name
+
+
+def _is_jobs_contract_path(path: str, job_id: str | None) -> bool:
+    normalized = str(path).rstrip("/")
+    segments = [segment for segment in normalized.split("/") if segment]
+    if len(segments) < 3:
+        return False
+    if segments[-3] != "v1" or segments[-2] != "jobs":
+        return False
+
+    route_job_id = segments[-1].strip()
+    if not route_job_id:
+        return False
+    return job_id is None or route_job_id == job_id
 
 
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:

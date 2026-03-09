@@ -37,6 +37,22 @@ def _invoke_event(path: str, path_parameters: dict[str, str] | None, body: dict[
     }
 
 
+def _job_status_event(path: str, path_parameters: dict[str, str] | None) -> dict:
+    return {
+        "httpMethod": "GET",
+        "path": path,
+        "pathParameters": path_parameters,
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+
 def _agent(agent_name: str) -> AgentRecord:
     return AgentRecord(
         agent_name=agent_name,
@@ -81,6 +97,33 @@ def test_contract_invoke_route_uses_agent_name_path_parameter():
 
 def test_legacy_invoke_route_is_not_accepted():
     event = _invoke_event("/v1/invoke", None, {"agentName": "echo-agent", "input": "hello"})
+
+    response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+def test_contract_jobs_route_uses_path_parameter():
+    event = _job_status_event("/v1/jobs/job-123", {"jobId": "job-123"})
+
+    with patch(
+        "src.bridge.handler.get_job_status",
+        return_value={
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"jobId": "job-123", "status": "running"}),
+        },
+    ) as mock_get_job_status:
+        response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 200
+    mock_get_job_status.assert_called_once()
+
+
+def test_non_contract_jobs_route_is_not_accepted():
+    event = _job_status_event("/v1/platform/ops/jobs/job-123", {"jobId": "job-123"})
 
     response = handler(event, FakeLambdaContext())
 
