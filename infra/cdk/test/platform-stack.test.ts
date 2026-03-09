@@ -5,8 +5,12 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import { PlatformStack } from '../lib/platform-stack';
 
 describe('PlatformStack (TASK-023)', () => {
-  const synthTemplate = () => {
-    const app = new cdk.App();
+  const synthTemplate = (environment: 'dev' | 'staging' | 'prod' = 'dev') => {
+    const app = new cdk.App({
+      context: {
+        env: environment,
+      },
+    });
     const env = { account: '123456789012', region: 'eu-west-2' };
     const identityStack = new cdk.Stack(app, 'IdentityStack', { env });
     const mockKey = new kms.Key(identityStack, 'MockKey');
@@ -25,7 +29,7 @@ describe('PlatformStack (TASK-023)', () => {
       ],
     });
 
-    const stack = new PlatformStack(app, 'platform-core-dev', {
+    const stack = new PlatformStack(app, `platform-core-${environment}`, {
       env,
       vpc: mockVpc,
       tenantDataKey: mockKey,
@@ -33,7 +37,7 @@ describe('PlatformStack (TASK-023)', () => {
     });
     return Template.fromStack(stack);
   };
-  const template = synthTemplate();
+  const template = synthTemplate('dev');
 
   test('creates all required DynamoDB tables with PITR and encryption', () => {
     template.resourceCountIs('AWS::DynamoDB::Table', 8);
@@ -116,15 +120,34 @@ describe('PlatformStack (TASK-023)', () => {
     );
   });
 
-  test('creates bridge canary deployment group with error-rate auto-rollback alarm', () => {
-    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'platform-core-dev-error_rate_high',
+  test('creates environment-aware bridge rollout policy with auto-rollback alarm', () => {
+    const devTemplate = synthTemplate('dev');
+    const stagingTemplate = synthTemplate('staging');
+    const prodTemplate = synthTemplate('prod');
+
+    devTemplate.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
+      DeploymentConfigName: 'CodeDeployDefault.LambdaAllAtOnce',
+    });
+    stagingTemplate.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
+      DeploymentConfigName: 'CodeDeployDefault.LambdaCanary10Percent30Minutes',
+    });
+    prodTemplate.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
+      DeploymentConfigName: 'CodeDeployDefault.LambdaCanary10Percent15Minutes',
+    });
+
+    stagingTemplate.hasOutput('BridgeCanaryPolicy', {
+      Value: 'staging=canary-10%-30m',
+    });
+    prodTemplate.hasOutput('BridgeCanaryPolicy', {
+      Value: 'prod=canary-10%-15m',
+    });
+
+    prodTemplate.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'platform-core-prod-error_rate_high',
       ComparisonOperator: 'GreaterThanOrEqualToThreshold',
       Threshold: 5,
     });
-
-    template.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
-      DeploymentConfigName: 'CodeDeployDefault.LambdaCanary10Percent5Minutes',
+    prodTemplate.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
       AutoRollbackConfiguration: {
         Enabled: true,
         Events: Match.arrayWith([

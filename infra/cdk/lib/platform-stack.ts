@@ -38,6 +38,11 @@ type PythonLambdaProps = {
   environment?: Record<string, string>;
 };
 
+type BridgeCanaryPolicy = {
+  readonly deploymentConfig: codedeploy.ILambdaDeploymentConfig;
+  readonly summary: string;
+};
+
 export interface PlatformStackProps extends cdk.StackProps {
   readonly vpc: ec2.IVpc;
   readonly tenantDataKey: kms.IKey;
@@ -73,7 +78,8 @@ export class PlatformStack extends cdk.Stack {
     super(scope, id, props);
     this.vpc = props.vpc;
 
-    const env = this.node.tryGetContext('env') as string;
+    const env = ((this.node.tryGetContext('env') as string | undefined) ?? 'dev').toLowerCase();
+    const bridgeCanaryPolicy = this.resolveBridgeCanaryPolicy(env);
 
     // --- Secrets ---
 
@@ -378,13 +384,18 @@ export class PlatformStack extends cdk.Stack {
 
     new codedeploy.LambdaDeploymentGroup(this, 'BridgeCanaryDeploymentGroup', {
       alias: bridgeAlias,
-      deploymentConfig: codedeploy.LambdaDeploymentConfig.CANARY_10PERCENT_5MINUTES,
+      deploymentConfig: bridgeCanaryPolicy.deploymentConfig,
       alarms: [bridgeErrorRateHighAlarm],
       autoRollback: {
         deploymentInAlarm: true,
         failedDeployment: true,
         stoppedDeployment: true,
       },
+    });
+
+    new cdk.CfnOutput(this, 'BridgeCanaryPolicy', {
+      description: 'Environment-specific bridge rollout policy',
+      value: bridgeCanaryPolicy.summary,
     });
 
     const authoriserAlias = new lambda.Alias(this, 'AuthoriserLiveAlias', {
@@ -912,5 +923,27 @@ export class PlatformStack extends cdk.Stack {
         ...props.environment,
       },
     });
+  }
+
+  private resolveBridgeCanaryPolicy(env: string): BridgeCanaryPolicy {
+    switch (env) {
+      case 'dev':
+        return {
+          deploymentConfig: codedeploy.LambdaDeploymentConfig.ALL_AT_ONCE,
+          summary: 'dev=all-at-once',
+        };
+      case 'staging':
+        return {
+          deploymentConfig: codedeploy.LambdaDeploymentConfig.CANARY_10PERCENT_30MINUTES,
+          summary: 'staging=canary-10%-30m',
+        };
+      case 'prod':
+        return {
+          deploymentConfig: codedeploy.LambdaDeploymentConfig.CANARY_10PERCENT_15MINUTES,
+          summary: 'prod=canary-10%-15m',
+        };
+      default:
+        throw new Error(`Unsupported env context for canary policy: ${env}`);
+    }
   }
 }

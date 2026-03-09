@@ -66,9 +66,9 @@ class FakeScopedDb:
 
     def scan(
         self,
-        _table_name: str,
+        _table_name: str | None = None,
         **kwargs: Any,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         results = [dict(item) for item in self.items.values()]
         # Simple filter implementation for tests
         status_filter = kwargs.get("ExpressionAttributeValues", {}).get(":s")
@@ -77,6 +77,8 @@ class FakeScopedDb:
             results = [r for r in results if r.get("status") == status_filter]
         if tier_filter:
             results = [r for r in results if r.get("tier") == tier_filter]
+        if _table_name is None:
+            return {"Items": results}
         return results
 
 
