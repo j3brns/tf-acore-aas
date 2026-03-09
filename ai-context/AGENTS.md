@@ -14,7 +14,7 @@ State the task number when you start: "Starting TASK-016: authoriser Lambda"
 ## Key Principles
 - This is a multi-tenant platform. EVERY operation must be tenant-scoped.
 - appid and tenantid must appear on every log line, metric, and trace.
-- data-access-lib (src/data-access-lib/) is the ONLY permitted DynamoDB interface.
+- data_access (src/data_access/) is the ONLY permitted DynamoDB interface.
   Never write raw boto3 DynamoDB calls in Lambda handlers.
 - AgentCore Runtime is arm64 only. All Python deps need arm64 cross-compilation.
 - Authentication: Entra JWT for humans, SigV4 for machines. No Cognito.
@@ -26,7 +26,7 @@ State the task number when you start: "Starting TASK-016: authoriser Lambda"
 - Any change to IAM policies or trust relationships
 - Any change to authoriser Lambda validation logic
 - Any new dependency adding >10MB to the deployment package
-- Any change affecting tenant isolation in data-access-lib
+- Any change affecting tenant isolation in data_access
 - Any change to KMS key policy
 - Any operation touching production data
 

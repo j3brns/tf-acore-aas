@@ -30,7 +30,7 @@ import { Construct } from 'constructs';
 import * as path from 'path';
 
 type PythonLambdaProps = {
-  assetPath: string;
+  code: lambda.Code;
   handler: string;
   functionNameSuffix: string;
   timeout: cdk.Duration;
@@ -74,6 +74,8 @@ export class PlatformStack extends cdk.Stack {
     this.vpc = props.vpc;
 
     const env = this.node.tryGetContext('env') as string;
+
+    const platformCode = lambda.Code.fromAsset(path.join(__dirname, '../../../src'));
 
     // --- Secrets ---
 
@@ -199,8 +201,8 @@ export class PlatformStack extends cdk.Stack {
     // --- Lambdas ---
 
     this.tenantApiFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../src/tenant_api'),
-      handler: 'handler.lambda_handler',
+      code: platformCode,
+      handler: 'tenant_api.handler.lambda_handler',
       functionNameSuffix: 'tenant-api',
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -233,8 +235,8 @@ export class PlatformStack extends cdk.Stack {
     );
 
     this.bridgeFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../src/bridge'),
-      handler: 'handler.handler',
+      code: platformCode,
+      handler: 'bridge.handler.handler',
       functionNameSuffix: 'bridge',
       timeout: cdk.Duration.minutes(15),
       memorySize: 1024,
@@ -247,8 +249,8 @@ export class PlatformStack extends cdk.Stack {
     });
 
     this.bffFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../src/bff'),
-      handler: 'handler.handler',
+      code: platformCode,
+      handler: 'bff.handler.handler',
       functionNameSuffix: 'bff',
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -258,8 +260,8 @@ export class PlatformStack extends cdk.Stack {
     });
 
     this.authoriserFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../src/authoriser'),
-      handler: 'handler.handler',
+      code: platformCode,
+      handler: 'authoriser.handler.handler',
       functionNameSuffix: 'authoriser',
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -275,8 +277,8 @@ export class PlatformStack extends cdk.Stack {
     this.tenantsTable.grantReadData(this.authoriserFn);
 
     this.requestInterceptorFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../gateway/interceptors'),
-      handler: 'request_interceptor.handler',
+      code: platformCode,
+      handler: 'gateway.interceptors.request_interceptor.handler',
       functionNameSuffix: 'interceptor-request',
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -296,8 +298,8 @@ export class PlatformStack extends cdk.Stack {
     scopedTokenSigningKeySecret.grantRead(this.requestInterceptorFn);
 
     this.responseInterceptorFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../gateway/interceptors'),
-      handler: 'response_interceptor.handler',
+      code: platformCode,
+      handler: 'gateway.interceptors.response_interceptor.handler',
       functionNameSuffix: 'interceptor-response',
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -307,8 +309,8 @@ export class PlatformStack extends cdk.Stack {
     });
 
     this.billingFn = this.createPythonLambda({
-      assetPath: path.join(__dirname, '../../../src/billing'),
-      handler: 'handler.lambda_handler',
+      code: platformCode,
+      handler: 'billing.handler.lambda_handler',
       functionNameSuffix: 'billing',
       timeout: cdk.Duration.minutes(15),
       memorySize: 512,
@@ -899,7 +901,7 @@ export class PlatformStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_12,
       architecture: lambda.Architecture.ARM_64,
       handler: props.handler,
-      code: lambda.Code.fromAsset(props.assetPath),
+      code: props.code,
       tracing: lambda.Tracing.ACTIVE,
       deadLetterQueueEnabled: true,
       deadLetterQueue: dlq,

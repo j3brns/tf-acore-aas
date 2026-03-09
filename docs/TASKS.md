@@ -104,7 +104,7 @@ in one session should be split — raise this before starting, not after.
 ## Phase 1 — Data Contracts (no infra, no Lambda)
 
 [x] TASK-011  Define all DynamoDB table schemas as Python dataclasses
-              File: src/data-access-lib/src/data_access/models.py
+              File: src/data_access/src/data_access/models.py
               Tables: tenants, agents, invocations, jobs, sessions, tools, ops-locks
               PRESENT FOR REVIEW before writing any Lambda code
               ADRs: ADR-012 | Tests: pytest validate schema constraints
@@ -121,8 +121,8 @@ in one session should be split — raise this before starting, not after.
               Gate: spec reviewed and confirmed before Phase 2
               Done: 2026-02-25, commit b19986c
 
-[x] TASK-013  Write data-access-lib
-              Files: src/data-access-lib/src/data_access/
+[x] TASK-013  Write data_access
+              Files: src/data_access/src/data_access/
               TenantScopedDynamoDB — enforces tenant partition on every operation
               TenantScopedS3 — enforces tenant prefix on every operation
               TenantAccessViolation exception
@@ -175,7 +175,7 @@ Nothing in Phase 2 starts until written confirmation.
               READ: authorise (own tenant or Platform.Admin), enrich with usage
               UPDATE: admin only, tier/budget/status, publish tier_changed event
               DELETE: soft delete, 30-day retention, EventBridge event
-              Uses data-access-lib exclusively — no raw DynamoDB calls
+              Uses data_access exclusively — no raw DynamoDB calls
               ADRs: ADR-012 | Tests: CRUD + isolation + soft delete + event emission
 
 [x] TASK-018  Write src/bridge/handler.py

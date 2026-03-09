@@ -5,6 +5,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,6 +36,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         events=FakeEvents(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
+        dynamodb=MagicMock(),
     )
     monkeypatch.setenv("AWS_REGION", "eu-west-2")
     monkeypatch.setenv("TENANTS_TABLE_NAME", "platform-tenants")

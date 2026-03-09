@@ -99,7 +99,7 @@ compromise tenant data.
 Layer 1: REST API authoriser — validates JWT, rejects invalid/suspended tenants
 Layer 2: Bridge Lambda — assumes tenant execution role (tenant owns their data)
 Layer 3: Gateway interceptors — scoped act-on-behalf token, tier-filtered tools
-Layer 4: data-access-lib — TenantScopedDynamoDB raises TenantAccessViolation
+Layer 4: data_access — TenantScopedDynamoDB raises TenantAccessViolation
          if any operation accesses outside the caller's tenant partition
 ```
 

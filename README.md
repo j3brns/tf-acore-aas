@@ -61,7 +61,7 @@ platform/
 │   ├── tenant-api/            Tenant CRUD API
 │   ├── async-runner/          Long-running agent job processor
 │   ├── webhook-delivery/      Async job result delivery
-│   └── data-access-lib/       Tenant-scoped DynamoDB/S3 library
+│   └── data_access/       Tenant-scoped DynamoDB/S3 library
 ├── spa/                       React SPA frontend
 ├── infra/
 │   ├── cdk/                   CDK stacks (TypeScript strict)

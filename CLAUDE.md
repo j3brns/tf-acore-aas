@@ -38,7 +38,7 @@ alternative. Never silently work around them.
    Sync limit 15 minutes. Async uses app.add_async_task / app.complete_async_task.
 10. No impersonation — act-on-behalf only. Original JWT never reaches tool Lambdas.
 11. appid and tenantid on every log line, metric dimension, and trace annotation.
-12. data-access-lib is the only permitted way to access DynamoDB from Lambda handlers.
+12. data_access is the only permitted way to access DynamoDB from Lambda handlers.
 13. No superuser IAM roles in normal operation.
 14. All data remains in the EU at all times.
 
@@ -93,7 +93,7 @@ apply a fix, and re-run the smallest relevant check. Only stop for the explicit
 - Any change to IAM policies or trust relationships
 - Any change to authoriser Lambda validation logic
 - Any new dependency adding >10MB to the deployment package
-- Any change affecting tenant isolation in data-access-lib
+- Any change affecting tenant isolation in data_access
 - Any change to KMS key policy
 - Any operation touching production data
 
@@ -116,7 +116,7 @@ apply a fix, and re-run the smallest relevant check. Only stop for the explicit
 # FORBIDDEN: raw boto3 DynamoDB in handlers
 dynamodb.Table('platform-tenants').get_item(...)
 
-# REQUIRED: data-access-lib only
+# REQUIRED: data_access only
 from data_access import TenantScopedDynamoDB
 db = TenantScopedDynamoDB(tenant_context)
 

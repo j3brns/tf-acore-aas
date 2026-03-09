@@ -11,7 +11,9 @@ import json
 import os
 import secrets
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -22,6 +24,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
+
 from data_access import TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AgentRecord,
@@ -52,6 +55,7 @@ MOCK_RUNTIME_URL_PARAM = os.environ.get(
     "MOCK_RUNTIME_URL_PARAM", "/platform/config/mock-runtime-url"
 )
 JOB_RESULT_URL_EXPIRY_SECONDS = int(os.environ.get("JOB_RESULT_URL_EXPIRY_SECONDS", "3600"))
+RUNTIME_PING_TIMEOUT_SECONDS = float(os.environ.get("RUNTIME_PING_TIMEOUT_SECONDS", "2.0"))
 
 # TTL constants from models
 INVOCATION_TTL_SECONDS = 90 * 24 * 60 * 60
@@ -131,6 +135,15 @@ def get_config(force_refresh: bool = False) -> dict[str, Any]:
         if _config_cache:
             return _config_cache
         return {"runtime_region": "eu-west-1", "mock_runtime_url": None}
+
+
+def _get_runtime_url() -> str:
+    """Resolve base URL for AgentCore Runtime or Mock."""
+    config = get_config()
+    if config.get("mock_runtime_url"):
+        return str(config["mock_runtime_url"])
+    region = config.get("runtime_region", "eu-west-1")
+    return f"https://runtime.{region}.bedrock-agentcore.amazonaws.com"
 
 
 def acquire_lock(lock_name: str, identity: str, ttl_seconds: int = 300) -> str | None:
@@ -589,6 +602,23 @@ def get_agent_detail(path_params: dict[str, Any], request_id: str) -> dict[str, 
     }
 
 
+def _http_get_json(
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Perform a synchronous HTTP GET returning JSON."""
+    request = urllib.request.Request(url=url, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        raw_payload = response.read().decode("utf-8")
+
+    parsed = json.loads(raw_payload) if raw_payload else {}
+    if not isinstance(parsed, dict):
+        raise ValueError("Response must be a JSON object")
+    return parsed
+
+
 def get_job_status(
     tenant_context: TenantContext, path_params: dict[str, Any], request_id: str
 ) -> dict[str, Any]:
@@ -597,13 +627,86 @@ def get_job_status(
         return error_response(400, "INVALID_REQUEST", "Missing jobId in path", request_id)
 
     db = TenantScopedDynamoDB(tenant_context)
-    record = db.get_item(JOBS_TABLE, _job_key(tenant_context.tenant_id, job_id))
+    key = _job_key(tenant_context.tenant_id, job_id)
+    record = db.get_item(JOBS_TABLE, key)
+
+    if record is None:
+        return error_response(404, "NOT_FOUND", f"Job '{job_id}' not found", request_id)
+
+    status = str(record.get("status", JobStatus.PENDING))
+
+    # Just-in-time polling for active jobs (ADR-010 drift resolution)
+    if status in {str(JobStatus.PENDING), str(JobStatus.RUNNING)}:
+        agent_name = record.get("agent_name")
+        session_id = record.get("session_id")
+        if agent_name and session_id:
+            try:
+                ping_url = f"{_get_runtime_url().rstrip('/')}/ping"
+                headers = {
+                    "x-tenant-id": tenant_context.tenant_id,
+                    "x-app-id": tenant_context.app_id or "unknown",
+                    "x-session-id": session_id,
+                    "x-agent-name": agent_name,
+                }
+                ping_payload = _http_get_json(
+                    ping_url, headers=headers, timeout_seconds=RUNTIME_PING_TIMEOUT_SECONDS
+                )
+                runtime_status = str(ping_payload.get("status", "")).strip()
+                now_iso = datetime.now(UTC).isoformat()
+
+                if runtime_status == "HealthyBusy":
+                    db.update_item(
+                        JOBS_TABLE,
+                        key,
+                        update_expression=(
+                            "SET #status = :status, started_at = if_not_exists(started_at, :now)"
+                        ),
+                        expression_attribute_values={
+                            ":status": str(JobStatus.RUNNING),
+                            ":now": now_iso,
+                        },
+                        expression_attribute_names={"#status": "status"},
+                    )
+                    status = str(JobStatus.RUNNING)
+                elif runtime_status == "Healthy":
+                    db.update_item(
+                        JOBS_TABLE,
+                        key,
+                        update_expression="SET #status = :status, completed_at = :now",
+                        expression_attribute_values={
+                            ":status": str(JobStatus.COMPLETED),
+                            ":now": now_iso,
+                        },
+                        expression_attribute_names={"#status": "status"},
+                    )
+                    status = str(JobStatus.COMPLETED)
+                    # Refresh record to get any result_s3_key written by agent
+                    refreshed = db.get_item(JOBS_TABLE, key)
+                    if refreshed:
+                        record = refreshed
+                else:
+                    # Unexpected or missing status implies failure
+                    db.update_item(
+                        JOBS_TABLE,
+                        key,
+                        update_expression=(
+                            "SET #status = :status, completed_at = :now, error_message = :err"
+                        ),
+                        expression_attribute_values={
+                            ":status": str(JobStatus.FAILED),
+                            ":now": now_iso,
+                            ":err": f"Unexpected runtime status: {runtime_status}",
+                        },
+                        expression_attribute_names={"#status": "status"},
+                    )
+                    status = str(JobStatus.FAILED)
+            except Exception as e:
+                logger.warning(f"Failed to poll runtime status for job {job_id}: {e}")
 
     if record is None:
         return error_response(404, "NOT_FOUND", f"Job '{job_id}' not found", request_id)
 
     result_url: str | None = None
-    status = str(record.get("status", JobStatus.PENDING))
     result_key = _coerce_optional_string(record.get("result_s3_key"))
     if status == str(JobStatus.COMPLETED) and result_key:
         try:
@@ -1127,11 +1230,13 @@ def handle_async_invocation(
     job_record = JobRecord(
         job_id=job_id,
         tenant_id=tenant_context.tenant_id,
+        app_id=tenant_context.app_id,
         agent_name=agent.agent_name,
         status=JobStatus.PENDING,
         created_at=now_iso,
         ttl=now_ts + JOB_TTL_SECONDS,
         webhook_url=webhook_url,
+        session_id=session_id,
     )
     log_job(tenant_context, job_record)
 
@@ -1182,7 +1287,7 @@ def log_invocation(
     job_id: str | None = None,
     session_id: str | None = None,
 ) -> None:
-    """Write invocation audit record to DynamoDB using data-access-lib."""
+    """Write invocation audit record to DynamoDB using data_access."""
     try:
         db = TenantScopedDynamoDB(tenant_context)
         now_iso = datetime.now(UTC).isoformat()

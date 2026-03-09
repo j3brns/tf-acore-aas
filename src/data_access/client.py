@@ -28,7 +28,7 @@ from boto3.dynamodb.conditions import ConditionBase, Key
 from data_access.exceptions import TenantAccessViolation
 from data_access.models import TenantContext
 
-logger = Logger(service="data-access-lib")
+logger = Logger(service="data-access")
 
 _TENANT_PK_PREFIX = "TENANT#"
 _S3_TENANT_DIR = "tenants/"

@@ -17,7 +17,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-# Add src/data-access-lib/src to path to import models if needed,
+# Add src to path to import models if needed,
 # but for simple validation we can just define the expected fields here
 # to avoid dependency issues in the validation stage.
 

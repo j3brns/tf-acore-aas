@@ -10,7 +10,7 @@ import pytest
 from moto import mock_aws
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "data-access-lib" / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import gateway.interceptors.response_interceptor as response_interceptor
 

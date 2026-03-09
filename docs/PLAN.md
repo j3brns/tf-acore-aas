@@ -46,7 +46,7 @@ Phase 4 costs days.
 **Deliverables**:
 - DynamoDB table schemas as Python dataclasses (data_models.py)
 - OpenAPI 3.1 spec for all northbound routes
-- data-access-lib with TenantScopedDynamoDB and TenantScopedS3
+- data_access with TenantScopedDynamoDB and TenantScopedS3
 - TenantAccessViolation exception with 100% test coverage
 
 **Gate**: Data models and OpenAPI spec reviewed by platform engineer and operator.
@@ -55,7 +55,7 @@ Written confirmation required before Phase 2 begins.
 **Success criteria**:
 - `spectral lint` passes on OpenAPI spec
 - TenantAccessViolation raised on every cross-tenant DynamoDB access attempt
-- data-access-lib has 100% test coverage
+- data_access has 100% test coverage
 
 ---
 

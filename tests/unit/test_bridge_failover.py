@@ -12,9 +12,9 @@ import pytest
 import requests
 from moto import mock_aws
 
-# Add project root and data-access-lib to path
+# Add project root and data_access to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "data-access-lib" / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from src.bridge.handler import handler
 
@@ -29,10 +29,10 @@ class FakeLambdaContext:
 @pytest.fixture
 def aws_credentials():
     """Mocked AWS Credentials for moto."""
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "testing"
-    os.environ["AWS_SESSION_TOKEN"] = "testing"
+    os.environ["AWS_ACCESS_KEY_ID"] = "testing"  # pragma: allowlist secret
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"  # pragma: allowlist secret
+    os.environ["AWS_SECURITY_TOKEN"] = "testing"  # pragma: allowlist secret
+    os.environ["AWS_SESSION_TOKEN"] = "testing"  # pragma: allowlist secret
     os.environ["AWS_DEFAULT_REGION"] = "eu-west-2"
     os.environ["AWS_REGION"] = "eu-west-2"
     os.environ["OPS_LOCKS_TABLE"] = "platform-ops-locks"
