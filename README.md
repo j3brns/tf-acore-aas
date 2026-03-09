@@ -1,16 +1,16 @@
-# SaaS-ified Cell Templates: AgentCore Agents-aaT packaged for two-pizza teams to experiment. 
+# SaaS-ified Cell Templates: AgentCore Agents-aaT packaged for two-pizza teams to experiment.
 
 ## What This Is
 
 A small cell enterprise-style Agent as a Template platform vended on Amazon Bedrock AgentCore.
 
 Small squads can experiment with AI agents via REST API with full isolation, billing attribution,
-and compliance controls. SPA annd OIDC included, along with a few sample Strands and 'bare' agents.
+and compliance controls. SPA and OIDC included, along with sample Strands and bare agents.
 
-Internal agent developer teams are the empowered and may push new agents independently
-via a self-service pipeline. OIDC Identity and 3LO baked in, Strands keeps things simple. Langgraph for when its not.
+Internal agent developer teams are empowered to push new agents independently
+via a self-service pipeline. OIDC identity and 3LO are built in.
 
-DevX, I've heard of it.. Added a TuI inner-loop for responsive boto3 backed localstack experimentations.
+DevX is included with a TUI inner loop for responsive boto3-backed LocalStack experimentation.
 
 ## Quick Start
 
@@ -59,7 +59,8 @@ platform/
 │   ├── bridge/                Agent invocation bridge
 │   ├── bff/                   Token refresh and session keepalive
 │   ├── tenant-api/            Tenant CRUD API
-│   ├── webhook-delivery/      Async job result delivery
+│   ├── async_runner/          Long-running agent job processor
+│   ├── webhook_delivery/      Async job result delivery
 │   └── data-access-lib/       Tenant-scoped DynamoDB/S3 library
 ├── spa/                       React SPA frontend
 ├── infra/
@@ -122,7 +123,9 @@ make failover-lock-acquire && make infra-set-runtime-region REGION=eu-central-1 
 
 ## Key Documents
 
+- [Documentation Suite Index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Architecture Diagram Catalog](docs/README.md#diagram-catalog)
 - [Delivery Plan](docs/PLAN.md)
 - [Task Snapshot](docs/TASKS.md)
 - [GitHub Issues (canonical task queue)](https://github.com/j3brns/tf-acore-aas/issues)

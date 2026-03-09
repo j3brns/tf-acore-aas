@@ -7,6 +7,14 @@ is a business customer with their own isolated data, memory, and tool access. In
 agent developer teams push specialised agents to the platform independently of platform
 infrastructure releases. Platform operators monitor, scale, and respond to incidents.
 
+## Architecture Visuals
+
+- Standard architecture: [`images/tf_acore_aas_architecture.drawio.svg`](images/tf_acore_aas_architecture.drawio.svg)
+- Engineer architecture: [`images/tf_acore_aas_architecture_engineer.drawio.svg`](images/tf_acore_aas_architecture_engineer.drawio.svg)
+- Executive architecture: [`images/tf_acore_aas_architecture_exec.drawio.svg`](images/tf_acore_aas_architecture_exec.drawio.svg)
+- Engineer request lifecycle: [`images/tf_acore_aas_request_lifecycle_engineer.drawio.svg`](images/tf_acore_aas_request_lifecycle_engineer.drawio.svg)
+- Entity lifecycle/state: [`images/tf_acore_aas_entities_state_diagram.drawio.svg`](images/tf_acore_aas_entities_state_diagram.drawio.svg)
+
 ## Region Topology
 
 ```
@@ -21,6 +29,7 @@ eu-west-2 London (HOME — owns everything)
 ├── Secrets Manager
 ├── SSM Parameter Store
 ├── EventBridge
+├── SQS (webhook delivery retry queue only, not async invocation routing)
 ├── Bridge Lambda
 ├── Authoriser Lambda
 ├── Tenant API Lambda
