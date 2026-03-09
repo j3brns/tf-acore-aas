@@ -60,8 +60,8 @@ def jobs_table(mock_aws_services: None):
     table = ddb.Table("platform-jobs")
     table.put_item(
         Item={
-            "PK": "JOB#job-001",
-            "SK": "METADATA",
+            "PK": "TENANT#t-001",
+            "SK": "JOB#job-001",
             "job_id": "job-001",
             "tenant_id": "t-001",
             "agent_name": "echo-agent",
@@ -101,14 +101,14 @@ def test_handler_marks_job_running_on_healthybusy(jobs_table) -> None:
     assert payload["status"] == "running"
     assert payload["runtimeStatus"] == "HealthyBusy"
 
-    item = jobs_table.get_item(Key={"PK": "JOB#job-001", "SK": "METADATA"})["Item"]
+    item = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": "JOB#job-001"})["Item"]
     assert item["status"] == "running"
     assert "started_at" in item
 
 
 def test_handler_marks_job_completed_on_healthy(jobs_table) -> None:
     jobs_table.update_item(
-        Key={"PK": "JOB#job-001", "SK": "METADATA"},
+        Key={"PK": "TENANT#t-001", "SK": "JOB#job-001"},
         UpdateExpression="SET #status = :status, started_at = :started",
         ExpressionAttributeNames={"#status": "status"},
         ExpressionAttributeValues={
@@ -125,7 +125,7 @@ def test_handler_marks_job_completed_on_healthy(jobs_table) -> None:
     assert payload["status"] == "completed"
     assert payload["runtimeStatus"] == "Healthy"
 
-    item = jobs_table.get_item(Key={"PK": "JOB#job-001", "SK": "METADATA"})["Item"]
+    item = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": "JOB#job-001"})["Item"]
     assert item["status"] == "completed"
     assert "completed_at" in item
 

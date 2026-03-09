@@ -87,8 +87,6 @@ export class TenantStack extends cdk.Stack {
           'ForAllValues:StringLike': {
             'dynamodb:LeadingKeys': [
               `TENANT#${tenantId}*`,
-              `JOB#*`, // Fallback for JOB table where PK is JOB#uuid (see models.py)
-              `SESSION#*`, // Fallback for SESSION table if needed
             ],
           },
         },

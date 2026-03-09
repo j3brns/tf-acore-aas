@@ -356,7 +356,7 @@ def test_handler_async_accepted(setup_data):
 
         # Verify job was written to DynamoDB
         jobs_table = ddb.Table("platform-jobs")
-        job_item = jobs_table.get_item(Key={"PK": f"JOB#{body['jobId']}", "SK": "METADATA"})
+        job_item = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": f"JOB#{body['jobId']}"})
         assert "Item" in job_item
         assert job_item["Item"]["status"] == "pending"
 
@@ -492,8 +492,8 @@ def test_get_job_status_returns_job_payload(setup_data):
     jobs_table = ddb.Table("platform-jobs")
     jobs_table.put_item(
         Item={
-            "PK": "JOB#job-123",
-            "SK": "METADATA",
+            "PK": "TENANT#t-001",
+            "SK": "JOB#job-123",
             "job_id": "job-123",
             "tenant_id": "t-001",
             "agent_name": "echo-agent",
@@ -541,8 +541,8 @@ def test_get_job_status_generates_presigned_result_url_with_expected_expiry(setu
 
     jobs_table.put_item(
         Item={
-            "PK": "JOB#job-456",
-            "SK": "METADATA",
+            "PK": "TENANT#t-001",
+            "SK": "JOB#job-456",
             "job_id": "job-456",
             "tenant_id": "t-001",
             "agent_name": "echo-agent",
@@ -589,8 +589,8 @@ def test_get_job_status_hides_other_tenants_job(setup_data):
     jobs_table = ddb.Table("platform-jobs")
     jobs_table.put_item(
         Item={
-            "PK": "JOB#job-foreign",
-            "SK": "METADATA",
+            "PK": "TENANT#t-999",
+            "SK": "JOB#job-foreign",
             "job_id": "job-foreign",
             "tenant_id": "t-999",
             "agent_name": "echo-agent",
@@ -733,7 +733,8 @@ def test_handler_async_uses_registered_webhook_callback(setup_data):
     response_body = json.loads(response["body"])
     assert response_body["webhookDelivery"] == "registered"
 
-    job = jobs_table.get_item(Key={"PK": f"JOB#{response_body['jobId']}", "SK": "METADATA"})["Item"]
+    job_id = response_body["jobId"]
+    job = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": f"JOB#{job_id}"})["Item"]
     assert job["webhook_url"] == "https://example.com/hooks/job"
 
 
