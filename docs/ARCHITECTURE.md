@@ -57,7 +57,8 @@ Client
       Returns usageIdentifierKey for usage plan enforcement
   → Bridge Lambda eu-west-2
       Reads invocation_mode from DynamoDB agent registry
-      Assumes tenant execution role via STS
+      Resolves executionRoleArn from tenant metadata (fallback: SSM /platform/tenants/{tenantId}/execution-role-arn)
+      Validates IAM role ARN/account match, then assumes tenant execution role via STS
       Reads active runtime region from SSM (cached 60s)
       Invokes AgentCore Runtime eu-west-1 via bedrock-agentcore SDK
       Writes INVOCATION record to DynamoDB on completion
@@ -263,6 +264,7 @@ tenant-premium      → Agent.Invoke tier:premium
 
 TenantStack deploys per-tenant on EventBridge platform.tenant.created event.
 It is NOT deployed by the platform pipeline — only triggered by tenant provisioning.
+Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
 
 ## Known Constraints
 

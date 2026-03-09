@@ -9,6 +9,7 @@ ADRs: ADR-003, ADR-005, ADR-009, ADR-010
 
 import json
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -22,6 +23,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 from data_access import TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AgentRecord,
@@ -51,7 +53,13 @@ RUNTIME_REGION_PARAM = os.environ.get("RUNTIME_REGION_PARAM", "/platform/config/
 MOCK_RUNTIME_URL_PARAM = os.environ.get(
     "MOCK_RUNTIME_URL_PARAM", "/platform/config/mock-runtime-url"
 )
+TENANT_EXECUTION_ROLE_PARAM_TEMPLATE = os.environ.get(
+    "TENANT_EXECUTION_ROLE_PARAM_TEMPLATE", "/platform/tenants/{tenant_id}/execution-role-arn"
+)
 JOB_RESULT_URL_EXPIRY_SECONDS = int(os.environ.get("JOB_RESULT_URL_EXPIRY_SECONDS", "3600"))
+IAM_ROLE_ARN_PATTERN = re.compile(
+    r"^arn:(?:aws|aws-us-gov|aws-cn):iam::(?P<account_id>\d{12}):role/(?P<role_name>[\w+=,.@\-_/]+)$"
+)
 
 # TTL constants from models
 INVOCATION_TTL_SECONDS = 90 * 24 * 60 * 60
@@ -298,19 +306,78 @@ def error_response(status_code: int, code: str, message: str, request_id: str) -
     }
 
 
-def assume_tenant_role(
-    tenant_id: str, account_id: str, role_arn: str | None = None
-) -> dict[str, Any] | None:
+def _tenant_execution_role_param_name(tenant_id: str) -> str:
+    return TENANT_EXECUTION_ROLE_PARAM_TEMPLATE.format(tenant_id=tenant_id)
+
+
+def _get_execution_role_arn_from_ssm(tenant_id: str) -> str | None:
+    parameter_name = _tenant_execution_role_param_name(tenant_id)
+    try:
+        ssm = get_ssm()
+        response = ssm.get_parameter(Name=parameter_name)
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code == "ParameterNotFound":
+            logger.warning(
+                "Tenant execution role ARN parameter not found",
+                extra={"tenant_id": tenant_id, "parameter_name": parameter_name},
+            )
+            return None
+        logger.exception(
+            "Failed to fetch tenant execution role ARN from SSM",
+            extra={"tenant_id": tenant_id, "parameter_name": parameter_name},
+        )
+        raise
+
+    parameter = response.get("Parameter", {})
+    role_arn = _coerce_optional_string(parameter.get("Value"))
+    if role_arn is None:
+        logger.warning(
+            "Tenant execution role ARN parameter is empty",
+            extra={"tenant_id": tenant_id, "parameter_name": parameter_name},
+        )
+    return role_arn
+
+
+def _validate_execution_role_arn(role_arn: str, expected_account_id: str) -> str:
+    match = IAM_ROLE_ARN_PATTERN.fullmatch(role_arn)
+    if not match:
+        raise ValueError("Tenant execution role ARN is malformed")
+
+    if match.group("account_id") != expected_account_id:
+        raise ValueError("Tenant execution role ARN account mismatch")
+
+    return role_arn
+
+
+def resolve_tenant_execution_role_arn(
+    tenant: dict[str, Any], *, tenant_id: str, account_id: str
+) -> str | None:
+    role_arn = _coerce_optional_string(
+        tenant.get("execution_role_arn") or tenant.get("executionRoleArn")
+    )
+    source = "tenant-record"
+    if role_arn is None:
+        role_arn = _get_execution_role_arn_from_ssm(tenant_id)
+        source = "ssm"
+    if role_arn is None:
+        return None
+
+    validated = _validate_execution_role_arn(role_arn, expected_account_id=account_id)
+    logger.info(
+        "Resolved tenant execution role ARN",
+        extra={"tenant_id": tenant_id, "account_id": account_id, "source": source},
+    )
+    return validated
+
+
+def assume_tenant_role(tenant_id: str, role_arn: str) -> dict[str, Any] | None:
     """Assume the tenant's execution role via STS.
 
     Returns temporary credentials, or None if in local/mock mode.
     """
     if os.environ.get("MOCK_RUNTIME") == "true":
         return None
-
-    if not role_arn:
-        # Fallback to standard naming convention (fixed suffix mismatch: TASK-092)
-        role_arn = f"arn:aws:iam::{account_id}:role/platform-tenant-{tenant_id}-execution-role"
 
     try:
         sts = get_sts()
@@ -893,19 +960,39 @@ def invoke_real_runtime(
     if not account_id:
         return error_response(500, "INTERNAL_ERROR", "Tenant account_id not configured", request_id)
 
-    # Lookup execution role ARN (Phase 3 contract fix: TASK-092)
-    execution_role_arn = tenant.get("execution_role_arn") or tenant.get("executionRoleArn")
+    account_id_str = str(account_id)
+    try:
+        execution_role_arn = resolve_tenant_execution_role_arn(
+            tenant,
+            tenant_id=tenant_context.tenant_id,
+            account_id=account_id_str,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Tenant execution role ARN validation failed",
+            extra={"tenant_id": tenant_context.tenant_id, "account_id": account_id_str},
+        )
+        return error_response(500, "INTERNAL_ERROR", str(exc), request_id)
+    except Exception:
+        return error_response(
+            500, "INTERNAL_ERROR", "Failed to resolve tenant execution role ARN", request_id
+        )
+
+    if not execution_role_arn:
+        return error_response(
+            500, "INTERNAL_ERROR", "Tenant execution role ARN not configured", request_id
+        )
 
     # 2. Assume tenant role
     try:
         # returns credentials; will be used in Phase 3 to initialize SDK client
-        assume_tenant_role(tenant_context.tenant_id, str(account_id), role_arn=execution_role_arn)
+        assume_tenant_role(tenant_context.tenant_id, execution_role_arn)
         logger.info(
             "Assumed tenant role",
             extra={
-                "account_id": account_id,
+                "account_id": account_id_str,
                 "region": region,
-                "role_arn": execution_role_arn or "constructed",
+                "role_arn": execution_role_arn,
             },
         )
     except Exception:

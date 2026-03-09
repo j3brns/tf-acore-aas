@@ -100,6 +100,7 @@ make agent-test AGENT=my-agent
 # Operations
 make ops-top-tenants ENV=prod
 make ops-quota-report ENV=prod
+make ops-backfill-tenant-role-arn APPLY=1   # backfill/verify tenant executionRoleArn from SSM
 make failover-lock-acquire && make infra-set-runtime-region REGION=eu-central-1 ENV=prod
 ```
 
