@@ -554,11 +554,6 @@ export class PlatformStack extends cdk.Stack {
         tracingEnabled: true,
         metricsEnabled: true,
         methodOptions: {
-          '/v1/invoke/POST': {
-            throttlingRateLimit: 50,
-            throttlingBurstLimit: 100,
-            metricsEnabled: true,
-          },
           '/v1/agents/{agentName}/invoke/POST': {
             throttlingRateLimit: 50,
             throttlingBurstLimit: 100,
@@ -589,7 +584,6 @@ export class PlatformStack extends cdk.Stack {
     const agents = v1.addResource('agents');
     const agentByName = agents.addResource('{agentName}');
     const agentInvoke = agentByName.addResource('invoke');
-    const invoke = v1.addResource('invoke');
     const jobs = v1.addResource('jobs');
     const jobById = jobs.addResource('{jobId}');
     const webhooks = v1.addResource('webhooks');
@@ -670,11 +664,6 @@ export class PlatformStack extends cdk.Stack {
     agents.addMethod('GET', bridgeIntegration, securedMethodOptions);
     agentByName.addMethod('GET', bridgeIntegration, securedMethodOptions);
     agentInvoke.addMethod('POST', bridgeIntegration, securedMethodOptions);
-    invoke.addMethod(
-      'POST',
-      bridgeIntegration,
-      securedMethodOptions,
-    );
     jobById.addMethod(
       'GET',
       bridgeIntegration,

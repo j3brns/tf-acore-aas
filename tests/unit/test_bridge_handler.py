@@ -114,6 +114,7 @@ def setup_data(mock_aws_services):
 
 def test_handler_sync_success(setup_data):
     event = {
+        "path": "/v1/agents/echo-agent/invoke",
         "pathParameters": {"agentName": "echo-agent"},
         "requestContext": {
             "authorizer": {
@@ -231,6 +232,26 @@ def test_get_agent_detail_returns_latest_version_and_versions(setup_data):
     assert body["versions"][0]["version"] == "1.1.0"
 
 
+def test_handler_rejects_legacy_invoke_route(setup_data):
+    event = {
+        "path": "/v1/invoke",
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({"agentName": "echo-agent", "input": "Hello"}),
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
 def test_handler_tier_insufficient(setup_data):
     # Seed agent requiring premium
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
@@ -253,6 +274,7 @@ def test_handler_tier_insufficient(setup_data):
     )
 
     event = {
+        "path": "/v1/agents/premium-agent/invoke",
         "pathParameters": {"agentName": "premium-agent"},
         "requestContext": {
             "authorizer": {
@@ -273,6 +295,7 @@ def test_handler_tier_insufficient(setup_data):
 
 def test_handler_agent_not_found(setup_data):
     event = {
+        "path": "/v1/agents/missing-agent/invoke",
         "pathParameters": {"agentName": "missing-agent"},
         "requestContext": {
             "authorizer": {
@@ -334,6 +357,7 @@ def test_handler_async_accepted(setup_data):
     )
 
     event = {
+        "path": "/v1/agents/async-agent/invoke",
         "pathParameters": {"agentName": "async-agent"},
         "requestContext": {
             "authorizer": {
@@ -383,6 +407,7 @@ def test_handler_streaming(setup_data):
     )
 
     event = {
+        "path": "/v1/agents/stream-agent/invoke",
         "pathParameters": {"agentName": "stream-agent"},
         "requestContext": {
             "authorizer": {
@@ -413,6 +438,7 @@ def test_handler_streaming(setup_data):
 
 def test_handler_session_id_propagation(setup_data):
     event = {
+        "path": "/v1/agents/echo-agent/invoke",
         "pathParameters": {"agentName": "echo-agent"},
         "requestContext": {
             "authorizer": {
@@ -451,6 +477,7 @@ def test_handler_session_id_propagation(setup_data):
 
 def test_handler_session_id_from_runtime(setup_data):
     event = {
+        "path": "/v1/agents/echo-agent/invoke",
         "pathParameters": {"agentName": "echo-agent"},
         "requestContext": {
             "authorizer": {
@@ -714,6 +741,7 @@ def test_handler_async_uses_registered_webhook_callback(setup_data):
     )
 
     event = {
+        "path": "/v1/agents/async-webhook-agent/invoke",
         "pathParameters": {"agentName": "async-webhook-agent"},
         "requestContext": {
             "authorizer": {
@@ -759,6 +787,7 @@ def test_handler_async_rejects_unknown_webhook_id(setup_data):
     )
 
     event = {
+        "path": "/v1/agents/async-agent-missing-webhook/invoke",
         "pathParameters": {"agentName": "async-agent-missing-webhook"},
         "requestContext": {
             "authorizer": {

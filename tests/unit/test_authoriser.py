@@ -74,7 +74,9 @@ def _sigv4_authorization(
 
 def _sigv4_event(
     *,
-    method_arn: str = "arn:aws:execute-api:eu-west-2:123456789012:api/dev/POST/v1/invoke",
+    method_arn: str = (
+        "arn:aws:execute-api:eu-west-2:123456789012:api/dev/POST/v1/agents/echo-agent/invoke"
+    ),
     tenant_id: str = "t-test-001",
     authorization: str | None = None,
     include_identity: bool = True,
