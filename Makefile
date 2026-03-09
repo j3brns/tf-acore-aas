@@ -21,7 +21,7 @@
 .PHONY: ops-reinstate-tenant ops-quota-report ops-invocation-report
 .PHONY: ops-security-events ops-dlq-inspect ops-dlq-redrive ops-error-rate
 .PHONY: ops-notify-tenant ops-service-health ops-billing-status
-.PHONY: ops-update-tenant-budget ops-fail-job ops-audit-export ops-page-security
+.PHONY: ops-update-tenant-budget ops-fail-job ops-audit-export ops-page-security ops-backfill-tenant-role-arn
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-async-runner logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
@@ -569,6 +569,13 @@ ops-audit-export:
 ops-page-security:
 	@test -n "$(INCIDENT)" || (echo "ERROR: INCIDENT required" && exit 1)
 	uv run python scripts/ops.py page-security --incident "$(INCIDENT)" --tenant "$(or $(TENANT),unknown)" --env $(ENV)
+
+## ops-backfill-tenant-role-arn: Backfill/verify executionRoleArn from SSM for tenant records
+## Usage: make ops-backfill-tenant-role-arn [TENANT=t-abc123] [APPLY=1]
+ops-backfill-tenant-role-arn:
+	uv run python scripts/backfill_tenant_execution_role_arn.py \
+		$(if $(TENANT),--tenant-id $(TENANT),) \
+		$(if $(APPLY),--apply,)
 
 # =============================================================================
 # LOG STREAMING
