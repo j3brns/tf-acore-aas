@@ -103,6 +103,7 @@ class TenantRecord:
     owner_email: str
     owner_team: str
     account_id: str  # AWS account ID for tenant Runtime
+    execution_role_arn: str | None = None
     memory_store_arn: str | None = None
     runtime_region: str | None = None
     fallback_region: str | None = None

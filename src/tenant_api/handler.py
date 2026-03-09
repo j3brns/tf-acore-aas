@@ -362,6 +362,7 @@ def _serialize_tenant(item: dict[str, Any]) -> dict[str, Any]:
         "accountId": item.get("accountId"),
     }
     optional_fields = (
+        "executionRoleArn",
         "memoryStoreArn",
         "runtimeRegion",
         "fallbackRegion",
@@ -418,7 +419,7 @@ def _handle_create(
             field="monthlyBudgetUsd",
         )
 
-    for field in ("runtimeRegion", "fallbackRegion"):
+    for field in ("runtimeRegion", "fallbackRegion", "executionRoleArn"):
         text = _str_or_none(body.get(field))
         if text is not None:
             attributes[field] = text
@@ -567,7 +568,15 @@ def _handle_update(
         return _error(404, "NOT_FOUND", "Tenant not found")
 
     body = _require_json_body(event)
-    allowed = {"tier", "monthlyBudgetUsd", "status"}
+    allowed = {
+        "tier",
+        "monthlyBudgetUsd",
+        "status",
+        "executionRoleArn",
+        "memoryStoreArn",
+        "runtimeRegion",
+        "fallbackRegion",
+    }
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise ValueError(f"Unsupported update field(s): {', '.join(unknown)}")
@@ -581,6 +590,16 @@ def _handle_update(
         attrs["monthlyBudgetUsd"] = _as_float(body["monthlyBudgetUsd"], field="monthlyBudgetUsd")
     if "status" in body:
         attrs["status"] = _normalize_status(body["status"])
+
+    # Infrastructure fields
+    for field in (
+        "executionRoleArn",
+        "memoryStoreArn",
+        "runtimeRegion",
+        "fallbackRegion",
+    ):
+        if field in body:
+            attrs[field] = _str_or_none(body[field])
 
     update_expression, expr_names, expr_values = _build_update_expression(attrs)
     db = _db_for_tenant(

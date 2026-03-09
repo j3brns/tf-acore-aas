@@ -158,6 +158,9 @@ TENANT_FIXTURES: list[dict[str, Any]] = [
         "owner_email": "basic-test@example.local",
         "owner_team": "platform-test",
         "account_id": "000000000000",
+        "execution_role_arn": (
+            "arn:aws:iam::000000000000:role/platform-tenant-t-basic-001-execution-role"
+        ),
         "monthly_budget_usd": Decimal("100"),
     },
     {
@@ -173,6 +176,9 @@ TENANT_FIXTURES: list[dict[str, Any]] = [
         "owner_email": "premium-test@example.local",
         "owner_team": "platform-test",
         "account_id": "000000000000",
+        "execution_role_arn": (
+            "arn:aws:iam::000000000000:role/platform-tenant-t-premium-001-execution-role"
+        ),
         "monthly_budget_usd": Decimal("1000"),
     },
 ]

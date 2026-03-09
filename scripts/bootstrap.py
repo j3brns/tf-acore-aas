@@ -598,6 +598,10 @@ def step_post_deploy(ctx: BootstrapContext) -> dict[str, Any]:
             "runtimeRegion": ctx.runtime_region,
             "fallback_region": ctx.fallback_region,
             "fallbackRegion": ctx.fallback_region,
+            "executionRoleArn": (
+                f"arn:aws:iam::{ctx.account_id}:role/"
+                f"platform-tenant-{admin_tenant_id}-execution-role"
+            ),
             "monthly_budget_usd": Decimal("10000"),
             "monthlyBudgetUsd": Decimal("10000"),
         }

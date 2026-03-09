@@ -298,7 +298,9 @@ def error_response(status_code: int, code: str, message: str, request_id: str) -
     }
 
 
-def assume_tenant_role(tenant_id: str, account_id: str) -> dict[str, Any] | None:
+def assume_tenant_role(
+    tenant_id: str, account_id: str, role_arn: str | None = None
+) -> dict[str, Any] | None:
     """Assume the tenant's execution role via STS.
 
     Returns temporary credentials, or None if in local/mock mode.
@@ -306,7 +308,10 @@ def assume_tenant_role(tenant_id: str, account_id: str) -> dict[str, Any] | None
     if os.environ.get("MOCK_RUNTIME") == "true":
         return None
 
-    role_arn = f"arn:aws:iam::{account_id}:role/platform-tenant-{tenant_id}-role"
+    if not role_arn:
+        # Fallback to standard naming convention (fixed suffix mismatch: TASK-092)
+        role_arn = f"arn:aws:iam::{account_id}:role/platform-tenant-{tenant_id}-execution-role"
+
     try:
         sts = get_sts()
         response = sts.assume_role(
@@ -766,15 +771,25 @@ def invoke_real_runtime(
     if not tenant:
         return error_response(500, "INTERNAL_ERROR", "Tenant record not found", request_id)
 
-    account_id = tenant.get("account_id")
+    account_id = tenant.get("account_id") or tenant.get("accountId")
     if not account_id:
         return error_response(500, "INTERNAL_ERROR", "Tenant account_id not configured", request_id)
+
+    # Lookup execution role ARN (Phase 3 contract fix: TASK-092)
+    execution_role_arn = tenant.get("execution_role_arn") or tenant.get("executionRoleArn")
 
     # 2. Assume tenant role
     try:
         # returns credentials; will be used in Phase 3 to initialize SDK client
-        assume_tenant_role(tenant_context.tenant_id, account_id)
-        logger.info("Assumed tenant role", extra={"account_id": account_id, "region": region})
+        assume_tenant_role(tenant_context.tenant_id, str(account_id), role_arn=execution_role_arn)
+        logger.info(
+            "Assumed tenant role",
+            extra={
+                "account_id": account_id,
+                "region": region,
+                "role_arn": execution_role_arn or "constructed",
+            },
+        )
     except Exception:
         return error_response(500, "INTERNAL_ERROR", "Failed to assume tenant role", request_id)
 
