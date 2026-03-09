@@ -115,6 +115,7 @@ def setup_data(mock_aws_services):
 
 def test_handler_failover_on_503(setup_data):
     event = {
+        "path": "/v1/agents/echo-agent/invoke",
         "pathParameters": {"agentName": "echo-agent"},
         "requestContext": {
             "authorizer": {
@@ -171,6 +172,7 @@ def test_handler_failover_already_in_progress(setup_data):
     )
 
     event = {
+        "path": "/v1/agents/echo-agent/invoke",
         "pathParameters": {"agentName": "echo-agent"},
         "requestContext": {
             "authorizer": {

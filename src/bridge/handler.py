@@ -371,21 +371,21 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
     if method == "DELETE" and _coerce_optional_string(path_params.get("webhookId")):
         return delete_webhook(tenant_context, path_params, request_id)
 
-    # 3. Default to invoke route for backward compatibility.
+    # 3. Contracted invoke route: POST /v1/agents/{agentName}/invoke.
     if method != "POST":
         return error_response(404, "NOT_FOUND", "Route not found", request_id)
+
+    agent_name = _coerce_optional_string(path_params.get("agentName"))
+    if path and not _is_invoke_contract_path(path, agent_name):
+        return error_response(404, "NOT_FOUND", "Route not found", request_id)
+    if not agent_name:
+        return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
 
     # 4. Parse Request Body
     try:
         body = _parse_body(event)
     except ValueError:
         return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
-
-    agent_name = _coerce_optional_string(path_params.get("agentName")) or _coerce_optional_string(
-        body.get("agentName")
-    )
-    if not agent_name:
-        return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
 
     prompt = _coerce_optional_string(body.get("input"))
     if not prompt:
@@ -434,6 +434,24 @@ def _request_path(event: dict[str, Any]) -> str:
     if not path:
         return ""
     return str(path)
+
+
+def _is_invoke_contract_path(path: str, agent_name: str | None) -> bool:
+    normalized = str(path).rstrip("/")
+    if not normalized.endswith("/invoke"):
+        return False
+
+    # Accept optional stage prefixes and validate the right-most contract path.
+    segments = [segment for segment in normalized.split("/") if segment]
+    if len(segments) < 4:
+        return False
+    if segments[-4] != "v1" or segments[-3] != "agents" or segments[-1] != "invoke":
+        return False
+
+    route_agent_name = segments[-2].strip()
+    if not route_agent_name:
+        return False
+    return agent_name is None or route_agent_name == agent_name
 
 
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:

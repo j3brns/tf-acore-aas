@@ -75,6 +75,41 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('wires invoke route to /v1/agents/{agentName}/invoke and removes legacy /v1/invoke', () => {
+    const resources = template.findResources('AWS::ApiGateway::Resource');
+    const pathParts = Object.values(resources).map((resource) => {
+      const properties = (resource as { Properties?: { PathPart?: string } }).Properties;
+      return properties?.PathPart;
+    });
+
+    expect(pathParts).toContain('agents');
+    expect(pathParts).toContain('{agentName}');
+    expect(pathParts).toContain('invoke');
+
+    const stages = template.findResources('AWS::ApiGateway::Stage');
+    const methodSettings = Object.values(stages).flatMap((stage) => {
+      const properties = (stage as { Properties?: { MethodSettings?: Array<unknown> } }).Properties;
+      return properties?.MethodSettings ?? [];
+    });
+
+    expect(methodSettings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          HttpMethod: 'POST',
+          ResourcePath: '/~1v1~1agents~1{agentName}~1invoke',
+        }),
+      ]),
+    );
+    expect(methodSettings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          HttpMethod: 'POST',
+          ResourcePath: '/~1v1~1invoke',
+        }),
+      ]),
+    );
+  });
+
   test('creates bridge canary deployment group with error-rate auto-rollback alarm', () => {
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'platform-core-dev-error_rate_high',
