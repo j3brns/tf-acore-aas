@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -288,3 +289,111 @@ def test_cmd_worktree_next_skips_runnable_issue_with_existing_worktree(monkeypat
     selected_issue = created["issue"]
     assert isinstance(selected_issue, worktree_issues.Issue)
     assert selected_issue.number == 35
+
+
+def test_create_worktree_for_issue_attaches_existing_local_branch(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    base_dir = tmp_path / "worktrees"
+    issue = _issue(
+        number=25,
+        task_id="TASK-018",
+        seq=180,
+        labels=["type:task", "status:not-started"],
+    )
+    executed: list[list[str]] = []
+
+    def _run(cmd, **_kwargs):
+        executed.append(cmd)
+        if cmd[:3] == ["git", "show-ref", "--verify"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:3] == ["git", "worktree", "add"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(worktree_issues, "run", _run)
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda _path: None)
+
+    wt_path = worktree_issues.create_worktree_for_issue(
+        root=root,
+        repo="owner/repo",
+        issue=issue,
+        base_dir=base_dir,
+        base_ref=None,
+        scope="task",
+        slug="write-src-bridge-handler-py",
+        folder_name="wt25",
+        auto_claim=False,
+        preflight=False,
+        dry_run=False,
+    )
+
+    assert wt_path == (base_dir / "wt25").resolve()
+    assert [
+        "git",
+        "worktree",
+        "add",
+        str(wt_path),
+        "wt/task/25-write-src-bridge-handler-py",
+    ] in executed
+
+
+def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requirements(
+    monkeypatch, tmp_path
+):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    wt = tmp_path / "worktrees" / "wt53"
+    wt.mkdir(parents=True, exist_ok=True)
+
+    def _run_prompt(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, "wt/infra/53-explicit-dod\n", "")
+
+    monkeypatch.setattr(worktree_issues, "run", _run_prompt)
+    monkeypatch.setattr(worktree_issues, "worktree_issue_id", lambda _path: 53)
+    monkeypatch.setattr(
+        worktree_issues, "fetch_issue_labels_for_prompt", lambda _root, _repo, _issue: "type:task"
+    )
+
+    prompt = worktree_issues.build_agent_prompt_for_worktree(wt, root, "owner/repo")
+
+    assert "DoD: do not stop at code-complete." in prompt
+    assert "Merge conflicts are resolved and re-validated." in prompt
+    assert "make finish-worktree-close" in prompt
+    assert "git worktree prune" in prompt
+
+
+def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypatch, capsys):
+    root = Path("/tmp/repo")
+    primary = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/repo"),
+        head="abc123",
+        branch="main",
+        is_primary=True,
+    )
+    target = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/worktrees/wt53"),
+        head="def456",
+        branch="wt/infra/53-explicit-dod",
+        is_primary=False,
+    )
+
+    monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [primary, target])
+    monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
+    monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
+    monkeypatch.setattr(worktree_issues, "gh_repo_ready", lambda _root: (False, None))
+    monkeypatch.setattr(worktree_issues, "finish_stage", lambda *_args, **_kwargs: "merged")
+
+    def _run_summary(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, "## wt/infra/53-explicit-dod\n", "")
+
+    monkeypatch.setattr(worktree_issues, "run", _run_summary)
+
+    worktree_issues.finish_summary(root, path=target.path)
+    out = capsys.readouterr().out
+
+    assert "dod:      merged PR + closed issue + cleaned worktree/branch" in out
+    assert "next:     make finish-worktree-close" in out
+    assert "conflict: if merge/rebase conflicts appear:" in out
+    assert "cleanup:  git worktree remove <this-worktree-path>" in out
+    assert "git worktree prune" in out

@@ -1,0 +1,41 @@
+# AgentCore Multitenant Compliance Context
+Generated: 2026-03-03
+Repository: tf-acore-aas
+
+## External References
+- https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html
+- https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agent-runtime-versioning.html
+- https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-multitenant/introduction.html
+- https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-multitenant/agents-meet-multi-tenancy.html
+- https://docs.aws.amazon.com/prescriptive-guidance/latest/strategy-operationalizing-agentic-ai/focus-areas-multitenancy.html
+
+## Validated Findings
+1. Bridge real-runtime path is not implemented (returns 501).
+2. Invoke route in infra does not match OpenAPI contract.
+3. SigV4 machine auth path remains stubbed and denies all.
+4. Request interceptor file is docstring-only (no handler).
+5. Response interceptor file is docstring-only (no handler).
+6. BFF handler file is docstring-only (no handler).
+7. Bridge role-ARN naming does not match TenantStack role naming.
+8. Job isolation model allows weak tenant boundary enforcement via JOB# access pattern.
+9. Async job polling/webhook path is only partially implemented (tracked by open Phase 8 issues).
+
+## Issue Mapping
+- #23 (reopened): TASK-016 authoriser completion (SigV4 implementation gap)
+- #25 (reopened): TASK-018 bridge completion (real runtime path/session handling gap)
+- #43 (reopened): TASK-036 request interceptor implementation gap
+- #44 (reopened): TASK-037 response interceptor implementation gap
+- #45 (reopened): TASK-038 BFF handler implementation gap
+- #55 (open): TASK-048 jobs polling and webhook registration API completion
+- #91 (new): Align invoke route with OpenAPI contract
+- #92 (new): Fix tenant execution role ARN contract mismatch
+- #93 (new): Harden tenant isolation for job access paths
+
+## Queue Labeling Rule
+Use queue-managed labels only:
+- phase:*
+- status:not-started | status:in-progress | status:done | status:blocked
+- type:task
+- ready
+
+No additional ad-hoc labels should be applied to queued implementation issues.

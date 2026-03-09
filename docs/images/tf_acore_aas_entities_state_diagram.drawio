@@ -1,0 +1,136 @@
+<?xml version="1.0" ?>
+<mxfile host="app.diagrams.net" modified="2026-03-08T00:00:00.000Z" agent="Codex" version="26.0.0" compressed="false">
+  <diagram id="tf_acore_aas_entities_state_diagram" name="tf_acore_aas_entities_state_diagram">
+    <mxGraphModel dx="2200" dy="1400" grid="1" gridSize="8" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2900" pageHeight="2100" math="0" shadow="0" background="#F8FAFC">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="t" value="Entity State Diagram (Code + Schema Accurate)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#334155;strokeWidth=2;fontStyle=1;fontSize=20;align=left;spacingLeft=14;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="20" width="2852" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="s" value="Solid = implemented in handlers/scripts. Dashed = schema-only or inferred due missing transition guard." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#CBD5E1;fontSize=12;align=left;spacingLeft=14;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="92" width="2852" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="ten" value="TenantRecord.status" style="swimlane;startSize=30;rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontStyle=1;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="160" width="2852" height="290" as="geometry"/>
+        </mxCell>
+        <mxCell id="ta" value="ACTIVE" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#7F8DFF;gradientDirection=north;fillColor=#3F48CC;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ten">
+          <mxGeometry x="210" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="ts" value="SUSPENDED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#FBBF24;gradientDirection=north;fillColor=#D97706;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ten">
+          <mxGeometry x="550" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="td" value="DELETED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#F87171;gradientDirection=north;fillColor=#DC2626;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ten">
+          <mxGeometry x="920" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="job" value="JobRecord.status" style="swimlane;startSize=30;rounded=1;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=2;fontStyle=1;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="480" width="2852" height="370" as="geometry"/>
+        </mxCell>
+        <mxCell id="jp" value="PENDING" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#93C5FD;gradientDirection=north;fillColor=#3B82F6;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.step_functions;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="job">
+          <mxGeometry x="220" y="130" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="jr" value="RUNNING" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#34D399;gradientDirection=north;fillColor=#059669;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.step_functions;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="job">
+          <mxGeometry x="540" y="130" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="jc" value="COMPLETED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#86EFAC;gradientDirection=north;fillColor=#16A34A;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.step_functions;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="job">
+          <mxGeometry x="860" y="130" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="jf" value="FAILED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#FCA5A5;gradientDirection=north;fillColor=#DC2626;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.step_functions;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="job">
+          <mxGeometry x="1240" y="130" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="inv" value="InvocationRecord.status" style="swimlane;startSize=30;rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;strokeWidth=2;fontStyle=1;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="880" width="2852" height="300" as="geometry"/>
+        </mxCell>
+        <mxCell id="is" value="SUCCESS" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#86EFAC;gradientDirection=north;fillColor=#16A34A;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="inv">
+          <mxGeometry x="220" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="ie" value="ERROR" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#FCA5A5;gradientDirection=north;fillColor=#DC2626;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="inv">
+          <mxGeometry x="580" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="it" value="TIMEOUT" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#FBBF24;gradientDirection=north;fillColor=#D97706;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="inv">
+          <mxGeometry x="900" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="ih" value="THROTTLED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#F37AB0;gradientDirection=north;fillColor=#C72E6A;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="inv">
+          <mxGeometry x="1190" y="100" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="ses" value="SessionRecord + OpsLockRecord" style="swimlane;startSize=30;rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#334155;strokeWidth=2;fontStyle=1;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="1210" width="2852" height="560" as="geometry"/>
+        </mxCell>
+        <mxCell id="sa" value="Session ACTIVE" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#93C5FD;gradientDirection=north;fillColor=#3B82F6;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="210" y="110" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="sc" value="Session COMPLETED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#86EFAC;gradientDirection=north;fillColor=#16A34A;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="540" y="110" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="sx" value="Session EXPIRED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#FBBF24;gradientDirection=north;fillColor=#D97706;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="900" y="110" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="lf" value="Lock FREE" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#CBD5E1;gradientDirection=north;fillColor=#64748B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="210" y="310" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="la" value="Lock ACQUIRED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#60A5FA;gradientDirection=north;fillColor=#2563EB;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="500" y="310" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="lr" value="Lock RELEASED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#86EFAC;gradientDirection=north;fillColor=#16A34A;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="830" y="310" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="lx" value="Lock EXPIRED" style="sketch=0;outlineConnect=0;fontColor=#1f2937;gradientColor=#FCA5A5;gradientDirection=north;fillColor=#DC2626;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="ses">
+          <mxGeometry x="1160" y="310" width="92" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend" value="Legend: Blue=request/admin transition | Green=runtime healthy progression | Gray=implemented neutral | Amber dashed=inferred/schema-only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#334155;strokeWidth=2;align=center;verticalAlign=middle;fontFamily=Inter;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="24" y="1810" width="2852" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="admin update(status)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#2563EB;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="ta" target="ts" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="admin update(status)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#2563EB;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="ts" target="ta" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="delete tenant" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="ta" target="td" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="delete tenant" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="ts" target="td" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="possible update(status)
+(no guard)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;dashPattern=7 4;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#D97706;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="td" target="ta" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="create async job" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#2563EB;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="jp" target="jr" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="ping=Healthy" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#059669;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="jr" target="jc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="ping=Healthy
+(from pending)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#059669;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="jp" target="jc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="unexpected ping/error" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;dashPattern=7 4;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#D97706;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="jp" target="jf" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="runtime failure" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;dashPattern=7 4;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#D97706;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="jr" target="jf" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="schema lifecycle" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;dashPattern=7 4;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#D97706;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="sa" target="sc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="ttl expiry" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;dashPattern=7 4;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#D97706;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="sa" target="sx" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="acquire" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="lf" target="la" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" value="release" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="la" target="lr" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e15" value="cleanup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="lr" target="lf" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e16" value="ttl expiry" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;dashPattern=7 4;html=1;jettySize=auto;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#D97706;fontSize=11;fontFamily=Inter;fontColor=#0F172A;" edge="1" source="la" target="lx" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

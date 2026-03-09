@@ -1,9 +1,9 @@
 {
-  "semver": "0.1.0",
+  "semver": "0.1.1",
   "components": {
-    "python": "0.1.0",
-    "cdk": "0.1.0",
-    "spa": "0.1.0"
+    "python": "0.1.1",
+    "cdk": "0.1.1",
+    "spa": "0.1.1"
   },
   "commit": "085198b71506cea302db4db26e5cd08a667a1a21",
   "commit_short": "085198b",
