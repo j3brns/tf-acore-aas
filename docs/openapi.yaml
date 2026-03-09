@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Platform AaaS Northbound API
-  version: 0.1.0
+  version: 0.1.1
   summary: Multi-tenant Agent as a Service REST API
   description: >
     OpenAPI 3.1 contract for tenant-facing and operator-facing northbound routes.

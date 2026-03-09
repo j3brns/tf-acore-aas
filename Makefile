@@ -6,7 +6,7 @@
 .PHONY: help bootstrap ensure-tools validate-local validate-local-full
 .PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
-.PHONY: docs-sync-audit docs-sync-stamp
+.PHONY: docs-sync-audit docs-sync-stamp rules-sync-audit
 .PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
@@ -103,6 +103,7 @@ ensure-tools:
 ## Uses diff-only secret detection for speed. Run `make validate-local-full` for full repo secret scan.
 validate-local: validate-local-prereqs
 	@echo "==> Running local validation (fast)"
+	@$(MAKE) --no-print-directory rules-sync-audit
 	@$(MAKE) --no-print-directory validate-python
 	@$(MAKE) --no-print-directory validate-cdk
 	@$(MAKE) --no-print-directory validate-secrets-diff
@@ -111,6 +112,7 @@ validate-local: validate-local-prereqs
 ## validate-local-full: Full local validation including full-repo secret scan
 validate-local-full: validate-local-prereqs
 	@echo "==> Running local validation (full)"
+	@$(MAKE) --no-print-directory rules-sync-audit
 	@$(MAKE) --no-print-directory validate-python
 	@$(MAKE) --no-print-directory validate-cdk
 	@$(MAKE) --no-print-directory validate-secrets-full
@@ -125,6 +127,10 @@ docs-sync-audit:
 ## docs-sync-stamp: Refresh docs/DOCS_SYNC.json to current semver + commit
 docs-sync-stamp:
 	uv run python scripts/docs_sync_audit.py stamp
+
+## rules-sync-audit: Verify mirrored rules files are byte-identical
+rules-sync-audit:
+	./scripts/check_rules_sync.sh
 
 ## validate-pre-push: Pre-push validation (skips cdk synth; repo should already synth clean)
 validate-pre-push: validate-local-prereqs

@@ -626,6 +626,18 @@ def choose_base_ref(root: Path, required_main_branch: str = "main") -> str:
         return required_main_branch
 
 
+def local_branch_exists(root: Path, branch: str) -> bool:
+    try:
+        run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=root,
+            check=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def issue_by_number(issues: list[Issue], number: int) -> Issue:
     for issue in issues:
         if issue.number == number:
@@ -708,20 +720,16 @@ def create_worktree_for_issue(
         raise CliError(f"Worktree path already exists: {wt_path}")
 
     start_ref = base_ref or choose_base_ref(root)
-    # Ensure local branch doesn't already exist.
-    try:
-        run(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=root, check=True
-        )
-        raise CliError(f"Local branch already exists: {branch}")
-    except subprocess.CalledProcessError:
-        pass
+    branch_exists = local_branch_exists(root, branch)
 
     print("Create worktree")
     print(f"  issue:   #{issue.number} {issue.title}")
     print(f"  path:    {wt_path}")
     print(f"  branch:  {branch}")
-    print(f"  baseRef: {start_ref}")
+    if branch_exists:
+        print("  mode:    attach existing local branch")
+    else:
+        print(f"  baseRef: {start_ref}")
     if dry_run:
         return wt_path
 
@@ -736,7 +744,10 @@ def create_worktree_for_issue(
             else:
                 print(f"Claimed issue #{issue.number} (set in-progress; no ready label to remove)")
 
-        run(["git", "worktree", "add", str(wt_path), "-b", branch, start_ref], cwd=root)
+        if branch_exists:
+            run(["git", "worktree", "add", str(wt_path), branch], cwd=root)
+        else:
+            run(["git", "worktree", "add", str(wt_path), "-b", branch, start_ref], cwd=root)
         print(f"Created worktree at {wt_path}")
         ensure_uv_venv(wt_path)
     except Exception:
@@ -1068,7 +1079,12 @@ def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) ->
         "Required: run make preflight-session now and before commit/push; run "
         "make pre-validate-session before any push; include "
         "validation evidence in issue/PR. "
-        "Finish: open/merge PR and close the issue only after merge verification."
+        "DoD: do not stop at code-complete. "
+        "Done means all tests/validation pass and branch is pushed. "
+        "PR is opened and merged. Merge conflicts are resolved and re-validated. "
+        "Issue is closed via make finish-worktree-close, and worktree cleanup is complete "
+        "(git worktree remove <path>; git branch -d <branch>; git worktree prune). "
+        "Finish: if blocked by required permission/policy, report blocker plus exact next command."
     )
 
 
@@ -1255,6 +1271,25 @@ def finish_summary(root: Path, *, path: Path | None = None) -> None:
             print("  pr:       (unavailable)")
 
     print("  policy:   pushes must run preflight + validate-pre-push")
+    print("  dod:      merged PR + closed issue + cleaned worktree/branch")
+    if stage == "implementing":
+        print("  next:     complete implementation/tests; keep git status clean before push")
+    elif stage == "ready-to-push":
+        print("  next:     make worktree-push-issue")
+        if branch and branch != "(detached)":
+            print(f"  then:     gh pr create --fill --head {branch}")
+    elif stage in {"review", "pr-open"}:
+        print("  next:     merge PR; if conflicts appear, resolve in this worktree and re-validate")
+    elif stage == "merged":
+        print("  next:     make finish-worktree-close")
+    print("  conflict: if merge/rebase conflicts appear:")
+    print("            resolve files -> git add <files> -> complete merge/rebase")
+    print("            rerun: make preflight-session && make pre-validate-session")
+    print("            push conflict-resolution commits before merge")
+    print("  cleanup:  git worktree remove <this-worktree-path>")
+    if branch and WORKTREE_BRANCH_REGEX.fullmatch(branch):
+        print(f"            git branch -d {branch}")
+    print("            git worktree prune")
 
 
 def close_issue_done(root: Path, *, path: Path | None = None, force: bool = False) -> None:
