@@ -22,6 +22,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
@@ -73,6 +74,17 @@ export class PlatformStack extends cdk.Stack {
     this.vpc = props.vpc;
 
     const env = this.node.tryGetContext('env') as string;
+
+    // --- Secrets ---
+
+    const scopedTokenSigningKeySecret = new secretsmanager.Secret(this, 'ScopedTokenSigningKeySecret', {
+      secretName: `platform/${env}/gateway/scoped-token-signing-key`, // pragma: allowlist secret
+      description: 'Signing key for scoped act-on-behalf tokens issued by Gateway interceptor',
+      generateSecretString: {
+        passwordLength: 32,
+        excludePunctuation: true,
+      },
+    });
 
     // --- DynamoDB Tables (ADR-012) ---
 
@@ -276,8 +288,12 @@ export class PlatformStack extends cdk.Stack {
         ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
         SCOPED_TOKEN_ISSUER: 'platform-gateway',
         IDEMPOTENCY_TABLE: this.gatewayIdempotencyTable.tableName,
+        SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN: scopedTokenSigningKeySecret.secretArn,
+        PLATFORM_ENV: env,
       },
     });
+
+    scopedTokenSigningKeySecret.grantRead(this.requestInterceptorFn);
 
     this.responseInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),

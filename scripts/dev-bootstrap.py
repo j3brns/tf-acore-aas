@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import sys
 import urllib.error
 import urllib.request
@@ -347,6 +348,8 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
         "JWKS_URL=http://localhost:8766/.well-known/jwks.json",
         "API_AUDIENCE=api://platform-local",
         "API_ISSUER=http://localhost:8766",
+        "PLATFORM_ENV=local",
+        f"SCOPED_TOKEN_SIGNING_KEY={secrets.token_hex(32)}",
         "",
     ]
     if tokens:
