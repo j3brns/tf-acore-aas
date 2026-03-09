@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,10 @@ _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 _SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator"}
 _INVITE_EXPIRY_DAYS = 7
+_TENANT_ID_MIN_LENGTH = 3
+_TENANT_ID_MAX_LENGTH = 32
+_TENANT_ID_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
+_RESERVED_TENANT_IDS = frozenset({"admin", "root", "system", "stub"})
 
 
 @dataclass(frozen=True)
@@ -171,6 +176,23 @@ def _tenant_pk(tenant_id: str) -> str:
 
 def _tenant_key(tenant_id: str) -> dict[str, str]:
     return {"PK": _tenant_pk(tenant_id), "SK": "METADATA"}
+
+
+def _canonical_tenant_id(value: Any) -> str:
+    tenant_id = _str_or_none(value)
+    if tenant_id is None:
+        raise ValueError("tenantId is required")
+
+    normalized = tenant_id.lower()
+    if len(normalized) < _TENANT_ID_MIN_LENGTH or len(normalized) > _TENANT_ID_MAX_LENGTH:
+        raise ValueError("tenantId must be 3-32 characters")
+    if "--" in normalized:
+        raise ValueError("tenantId must not contain consecutive hyphens")
+    if normalized in _RESERVED_TENANT_IDS:
+        raise ValueError("tenantId is reserved")
+    if not _TENANT_ID_PATTERN.fullmatch(normalized):
+        raise ValueError("tenantId must match ^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
+    return normalized
 
 
 def _tenants_table_name() -> str:
@@ -402,7 +424,7 @@ def _handle_create(
     if missing:
         raise ValueError(f"Missing required field(s): {', '.join(missing)}")
 
-    tenant_id = str(body["tenantId"]).strip()
+    tenant_id = _canonical_tenant_id(body["tenantId"])
     app_id = str(body["appId"]).strip()
     now = _now_utc()
     tier = _normalize_tier(body.get("tier"))

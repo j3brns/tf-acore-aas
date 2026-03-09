@@ -284,4 +284,14 @@ describe('PlatformStack (TASK-023)', () => {
       ]),
     });
   });
+
+  test('does not synthesize a standalone async-runner lambda', () => {
+    const functions = template.findResources('AWS::Lambda::Function');
+    const names = Object.values(functions).map((resource) => {
+      const properties = (resource as { Properties?: { FunctionName?: string } }).Properties;
+      return String(properties?.FunctionName ?? '');
+    });
+
+    expect(names.some((name) => name.includes('async-runner'))).toBe(false);
+  });
 });

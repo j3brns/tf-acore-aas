@@ -38,3 +38,20 @@ def test_openapi_async_invoke_response_contract_points_to_jobs_polling() -> None
     assert "pollUrl" in required
     assert "mode" in required
     assert properties.get("mode", {}).get("enum") == ["async"]
+
+
+def test_openapi_tenant_id_contract_is_deterministic_and_env_safe() -> None:
+    spec = _load_openapi()
+    components = spec.get("components", {})
+
+    tenant_param = components.get("parameters", {}).get("TenantId", {})
+    tenant_param_schema = tenant_param.get("schema", {})
+    assert tenant_param_schema.get("minLength") == 3
+    assert tenant_param_schema.get("maxLength") == 32
+    assert tenant_param_schema.get("pattern") == "^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"
+
+    tenant_create_schema = (
+        components.get("schemas", {}).get("TenantCreateRequest", {}).get("properties", {})
+    )
+    tenant_id_schema = tenant_create_schema.get("tenantId", {})
+    assert tenant_id_schema.get("pattern") == "^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"

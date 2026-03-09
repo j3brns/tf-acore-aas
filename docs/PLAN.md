@@ -193,7 +193,7 @@ Auto-rollback tested and verified in staging.
 Results delivered via webhook or poll endpoint.
 
 **Deliverables**:
-- async-runner Lambda with HealthyBusy ping handling
+- Native AgentCore async lifecycle via `app.add_async_task` / `app.complete_async_task`
 - Webhook delivery Lambda with HMAC-SHA256 signing
 - Job polling API (GET /v1/jobs/{jobId})
 - Webhook registration API

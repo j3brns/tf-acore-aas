@@ -21,7 +21,6 @@ eu-west-2 London (HOME — owns everything)
 ├── Secrets Manager
 ├── SSM Parameter Store
 ├── EventBridge
-├── SQS (async job queue)
 ├── Bridge Lambda
 ├── Authoriser Lambda
 ├── Tenant API Lambda
@@ -89,6 +88,7 @@ Use for: chat interfaces, narrated reasoning.
 Bridge Lambda returns 202 with jobId. Agent code calls `app.add_async_task` to keep
 session HealthyBusy during background work. Calls `app.complete_async_task` when done.
 Client polls GET /v1/jobs/{jobId} or registers webhook.
+No standalone async-runner Lambda and no SQS routing for invocation execution.
 Use for: research agents, batch processing, multi-step workflows.
 
 ## Tenant Isolation Model
@@ -112,6 +112,11 @@ Layer 4: data-access-lib — TenantScopedDynamoDB raises TenantAccessViolation
   ownerEmail, ownerTeam, memoryStoreArn, runtimeRegion, fallbackRegion,
   apiKeySecretArn, monthlyBudgetUsd, accountId
 - Capacity: provisioned, auto-scaling, 5 RCU/WCU minimum
+- Tenant ID policy (create boundary):
+  - canonicalized to lowercase before persistence
+  - regex: `^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$` (3-32 chars)
+  - no consecutive hyphens, reserved IDs rejected (`admin`, `root`, `system`, `stub`)
+  - existing pre-policy tenant IDs remain valid; policy is enforced for new creates only
 
 **platform-agents** — agent registry
 - PK: AGENT#{agentName}, SK: VERSION#{semver}
@@ -129,7 +134,7 @@ Layer 4: data-access-lib — TenantScopedDynamoDB raises TenantAccessViolation
 - Hot partition protection: SK includes random jitter suffix for high-volume tenants
 
 **platform-jobs** — async job tracking
-- PK: JOB#{jobId}, SK: METADATA
+- PK: TENANT#{tenantId}, SK: JOB#{jobId}
 - Attributes: jobId, tenantId, agentName, status, createdAt, startedAt,
   completedAt, resultS3Key, errorMessage, webhookUrl, webhookDelivered
 - TTL: 7 days. Capacity: on-demand

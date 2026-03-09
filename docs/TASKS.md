@@ -442,14 +442,10 @@ sees results. Admin view shows platform health metrics.
 
 ## Phase 8 — Async and Long-Running Agents
 
-[ ] TASK-046  Write src/async_runner/handler.py
-              NOT SQS-triggered — this is a background task within Runtime session
-              Agent code uses app.add_async_task to start background work
-              Agent code uses app.complete_async_task when done
-              /ping returns HealthyBusy during background work
-              Bridge Lambda submits invocation and polls for session completion
-              Writes JOB record updates as status progresses
-              ADRs: ADR-010 | Tests: HealthyBusy ping, task completion
+[x] TASK-046  Retired: no standalone async-runner Lambda in deployable topology
+              Native AgentCore async is the single model: app.add_async_task /
+              app.complete_async_task in agent code, with Bridge + jobs polling/webhooks.
+              ADRs: ADR-010 | Decision aligned: 2026-03-09
 
 [ ] TASK-047  Write src/webhook_delivery/handler.py
               EventBridge rule on DynamoDB Stream for JOB table status=complete
