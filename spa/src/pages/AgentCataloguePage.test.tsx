@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
+import { createApiClientMock, createAuthContextValue } from "../test/mockFactories";
+import { catalogueMixedAgents } from "../test/testData";
 import { AgentCataloguePage } from "./AgentCataloguePage";
 
 vi.mock("../api/client", () => ({
@@ -19,27 +21,16 @@ vi.mock("../auth/useAuth", () => ({
 describe("AgentCataloguePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useAuth).mockReturnValue({
-      getAccessToken: vi.fn(),
+    vi.mocked(useAuth).mockReturnValue(createAuthContextValue({
       isAuthenticated: true,
-    } as never);
+    }) as never);
   });
 
   it("renders agents on success", async () => {
-    vi.mocked(getApiClient).mockReturnValue({
-      request: vi.fn().mockResolvedValue({
-        items: [
-          {
-            agentName: "echo-agent",
-            latestVersion: "1.0.0",
-            tierMinimum: "basic",
-            invocationMode: "sync",
-            streamingEnabled: true,
-            ownerTeam: "platform-team",
-          },
-        ],
-      }),
-    } as never);
+    const request = vi.fn().mockResolvedValue(catalogueMixedAgents);
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
+      request,
+    }) as never);
 
     render(
       <MemoryRouter>
@@ -50,13 +41,19 @@ describe("AgentCataloguePage", () => {
     await waitFor(() => {
       expect(screen.getByText("echo-agent")).toBeInTheDocument();
       expect(screen.getByText("Version 1.0.0 • sync")).toBeInTheDocument();
+      expect(screen.getByText("research-agent")).toBeInTheDocument();
+      expect(screen.getByText("Version 2.1.0 • async")).toBeInTheDocument();
+      expect(screen.getByText("ops-agent")).toBeInTheDocument();
+      expect(screen.getByText("Version 3.0.0 • streaming")).toBeInTheDocument();
+      expect(screen.getAllByText("Streaming")).toHaveLength(2);
     });
+    expect(request).toHaveBeenCalledWith("/v1/agents");
   });
 
   it("renders empty state when no agents are returned", async () => {
-    vi.mocked(getApiClient).mockReturnValue({
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
       request: vi.fn().mockResolvedValue({ items: [] }),
-    } as never);
+    }) as never);
 
     render(
       <MemoryRouter>
@@ -71,9 +68,9 @@ describe("AgentCataloguePage", () => {
 
   it("renders error state when request fails", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(getApiClient).mockReturnValue({
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
       request: vi.fn().mockRejectedValue(new Error("catalogue failed")),
-    } as never);
+    }) as never);
 
     render(
       <MemoryRouter>
@@ -85,5 +82,26 @@ describe("AgentCataloguePage", () => {
       expect(screen.getByText("catalogue failed")).toBeInTheDocument();
     });
     spy.mockRestore();
+  });
+
+  it("does not fetch catalogue when user is unauthenticated", async () => {
+    vi.mocked(useAuth).mockReturnValue(createAuthContextValue({
+      isAuthenticated: false,
+    }) as never);
+    const request = vi.fn();
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
+      request,
+    }) as never);
+
+    const { container } = render(
+      <MemoryRouter>
+        <AgentCataloguePage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".animate-spin")).toBeInTheDocument();
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 });

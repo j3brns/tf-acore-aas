@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -14,7 +15,8 @@ type OpenApiDoc = {
 };
 
 function loadOpenApiDoc(): OpenApiDoc {
-  const specPath = fileURLToPath(new URL("../../../docs/openapi.yaml", import.meta.url));
+  const currentFile = fileURLToPath(import.meta.url);
+  const specPath = path.resolve(path.dirname(currentFile), "../../../docs/openapi.yaml");
   const yaml = fs.readFileSync(specPath, "utf8");
   return YAML.parse(yaml) as OpenApiDoc;
 }
