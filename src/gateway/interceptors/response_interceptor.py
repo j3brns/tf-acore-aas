@@ -20,6 +20,7 @@ from typing import Any
 import boto3
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.typing import LambdaContext
+
 from data_access import TenantScopedDynamoDB
 from data_access.models import TenantContext, TenantTier
 

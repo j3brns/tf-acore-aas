@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from moto import mock_aws
 
-# Add project root and data-access-lib to path
+# Add project root and src to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "data-access-lib" / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from src.bridge.handler import assume_tenant_role, invoke_real_runtime
 

@@ -2,7 +2,7 @@
 tenant_api.handler — Tenant management REST API Lambda.
 
 Handles CRUD for tenants: create, read, update, soft-delete.
-Uses data-access-lib exclusively. Publishes EventBridge events on mutations.
+Uses data_access exclusively. Publishes EventBridge events on mutations.
 
 Implemented in TASK-017.
 ADRs: ADR-012
@@ -22,6 +22,7 @@ import boto3
 from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
+
 from data_access import TenantContext, TenantScopedDynamoDB
 from data_access.models import TenantStatus, TenantTier
 
@@ -533,14 +534,14 @@ def _handle_list(
         scan_kwargs["ExpressionAttributeNames"] = expr_names
         scan_kwargs["ExpressionAttributeValues"] = expr_values
 
-    # Scan the table using data-access-lib
+    # Scan the table using data_access
     items = db.scan(_tenants_table_name(), **scan_kwargs)
 
     return _response(
         200,
         {
             "items": [_serialize_tenant(item) for item in items],
-            "nextToken": None,  # TODO: Implement paged scan in data-access-lib
+            "nextToken": None,  # TODO: Implement paged scan in data_access
         },
     )
 

@@ -21,7 +21,6 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=6.0.0",
     "moto[dynamodb,s3]>=5.0.0",
-    "data-access-lib",
 ]
 
 [tool.ruff]
@@ -48,9 +47,7 @@ testpaths = ["tests", "src"]
 addopts = "--tb=short --import-mode=importlib"
 
 [tool.uv.workspace]
-members = [
-    "src/data-access-lib",
-]
+members = []
 
 [tool.uv.sources]
-data-access-lib = { workspace = true }
+

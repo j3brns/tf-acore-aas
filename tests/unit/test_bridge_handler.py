@@ -12,9 +12,9 @@ import pytest
 from boto3.dynamodb.conditions import Key
 from moto import mock_aws
 
-# Add project root and data-access-lib to path
+# Add project root and data_access to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "data-access-lib" / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from src.bridge.handler import handler
 
@@ -857,6 +857,7 @@ def test_handler_async_rejects_unknown_webhook_id(setup_data):
     )
 
     event = {
+        "httpMethod": "POST",
         "path": "/v1/agents/async-agent-missing-webhook/invoke",
         "pathParameters": {"agentName": "async-agent-missing-webhook"},
         "requestContext": {
@@ -876,3 +877,56 @@ def test_handler_async_rejects_unknown_webhook_id(setup_data):
     assert response["statusCode"] == 404
     body = json.loads(response["body"])
     assert body["error"]["code"] == "NOT_FOUND"
+
+
+def test_get_job_status_polls_runtime_when_active(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+    job_id = "job-poll-123"
+    jobs_table.put_item(
+        Item={
+            "PK": "TENANT#t-001",
+            "SK": f"JOB#{job_id}",
+            "job_id": job_id,
+            "tenant_id": "t-001",
+            "agent_name": "echo-agent",
+            "session_id": "session-123",
+            "status": "running",
+            "created_at": "2026-03-01T10:00:00Z",
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": f"/v1/jobs/{job_id}",
+        "pathParameters": {"jobId": job_id},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+            }
+        },
+    }
+
+    # Mock Runtime /ping response: Healthy (meaning complete)
+    with (
+        patch("src.bridge.handler._http_get_json") as mock_ping,
+        patch("src.bridge.handler.get_config") as mock_config,
+    ):
+        mock_config.return_value = {
+            "runtime_region": "eu-west-2",
+            "mock_runtime_url": "http://mock",
+        }
+        mock_ping.return_value = {"status": "Healthy"}
+
+        response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "completed"
+
+    # Verify DynamoDB was updated
+    job_item = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": f"JOB#{job_id}"})["Item"]
+    assert job_item["status"] == "completed"
+    assert "completed_at" in job_item

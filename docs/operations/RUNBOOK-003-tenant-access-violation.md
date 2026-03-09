@@ -20,7 +20,7 @@ make ops-security-events ENV=prod HOURS=1
 ### 2. Determine source
 The output will show which Lambda function raised TenantAccessViolation.
 Two possible causes:
-- **Internal Lambda bug**: the violation is in platform code (data-access-lib not used)
+- **Internal Lambda bug**: the violation is in platform code (data_access not used)
 - **External malicious caller**: a tenant is attempting to access another tenant's data
 
 ### 3. If external caller (malicious attempt)

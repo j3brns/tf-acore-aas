@@ -22,6 +22,7 @@ import boto3
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
+
 from data_access.client import TenantScopedDynamoDB
 from data_access.models import (
     BillingSummaryRecord,
@@ -96,7 +97,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
     logger.append_keys(tenantid=tenant_id, appid=app_id)
     logger.info(f"Processing billing for {tenant_id} on {date_to_process.date()}")
 
-    # Context for data-access-lib
+    # Context for data_access
     ctx = TenantContext(
         tenant_id=tenant_id,
         app_id=app_id,

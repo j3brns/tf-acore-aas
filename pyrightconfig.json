@@ -1,7 +1,6 @@
 {
   "include": [
     "src",
-    "gateway",
     "scripts"
   ],
   "exclude": [
@@ -18,6 +17,6 @@
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none",
   "extraPaths": [
-    "src/data-access-lib/src"
+    "src"
   ]
 }

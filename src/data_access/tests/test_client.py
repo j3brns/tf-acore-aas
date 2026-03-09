@@ -18,10 +18,11 @@ from unittest.mock import MagicMock
 
 import boto3
 import pytest
+from moto import mock_aws
+
 from data_access import TenantAccessViolation, TenantContext, TenantScopedDynamoDB, TenantScopedS3
 from data_access.client import _emit_tenant_violation_metric
 from data_access.models import TenantTier
-from moto import mock_aws
 
 # ---------------------------------------------------------------------------
 # Constants

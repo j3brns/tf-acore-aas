@@ -237,6 +237,8 @@ class JobRecord:
     error_message: str | None = None
     webhook_url: str | None = None
     webhook_delivered: bool = False
+    session_id: str | None = None
+    app_id: str | None = None
 
     @property
     def pk(self) -> str:

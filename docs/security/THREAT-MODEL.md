@@ -25,7 +25,7 @@ JWKS cache prevents replay via exp claim validation, usage plans prevent DoS
 ### 2. Cross-Tenant Data Access
 Threat: tenant A reads tenant B's data via API manipulation
 Mitigation: four-layer isolation (authoriser, bridge execution role, Gateway interceptor,
-data-access-lib TenantScopedDynamoDB). TenantAccessViolation raised and alerted on any breach.
+data_access TenantScopedDynamoDB). TenantAccessViolation raised and alerted on any breach.
 
 ### 3. JWT Manipulation
 Threat: attacker forges or modifies JWT to claim different tenant/tier/role
@@ -73,7 +73,7 @@ CloudTrail records all AWS API calls including Secrets Manager reads
 | Control                        | Threat(s) Addressed          | Where Implemented         |
 |--------------------------------|------------------------------|---------------------------|
 | JWT validation (sig, exp, aud) | 1, 3                         | Authoriser Lambda         |
-| TenantScopedDynamoDB           | 2                            | data-access-lib           |
+| TenantScopedDynamoDB           | 2                            | data_access           |
 | Act-on-behalf scoped tokens    | 4                            | REQUEST interceptor        |
 | KMS encryption at rest         | 2, 10                        | All DynamoDB + S3          |
 | HTTPS everywhere               | 8                            | CloudFront, API GW, VPC   |

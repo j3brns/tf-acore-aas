@@ -2,12 +2,6 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
-[manifest]
-members = [
-    "data-access-lib",
-    "platform-aas",
-]
-
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -445,37 +439,6 @@ wheels = [
 ]
 
 [[package]]
-name = "data-access-lib"
-version = "0.1.0"
-source = { editable = "src/data-access-lib" }
-dependencies = [
-    { name = "aws-lambda-powertools" },
-    { name = "boto3" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "boto3-stubs", extra = ["dynamodb", "s3"] },
-    { name = "moto", extra = ["dynamodb", "s3"] },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aws-lambda-powertools", specifier = ">=3.3.0" },
-    { name = "boto3", specifier = ">=1.37.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "boto3-stubs", extras = ["dynamodb", "s3"], specifier = ">=1.37.0" },
-    { name = "moto", extras = ["dynamodb", "s3"], specifier = ">=5.0.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", specifier = ">=6.0.0" },
-]
-
-[[package]]
 name = "detect-secrets"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -878,7 +841,6 @@ dev = [
     { name = "bedrock-agentcore" },
     { name = "boto3" },
     { name = "boto3-stubs", extra = ["dynamodb", "essential", "events", "lambda", "s3", "secretsmanager", "sqs", "ssm", "sts"] },
-    { name = "data-access-lib" },
     { name = "detect-secrets" },
     { name = "moto", extra = ["dynamodb", "s3"] },
     { name = "mypy" },
@@ -900,7 +862,6 @@ dev = [
     { name = "bedrock-agentcore", specifier = ">=0.1.4" },
     { name = "boto3", specifier = ">=1.37.0" },
     { name = "boto3-stubs", extras = ["essential", "lambda", "dynamodb", "s3", "ssm", "secretsmanager", "sts", "sqs", "events"], specifier = ">=1.37.0" },
-    { name = "data-access-lib", editable = "src/data-access-lib" },
     { name = "detect-secrets", specifier = ">=1.5.0" },
     { name = "moto", extras = ["dynamodb", "s3"], specifier = ">=5.0.0" },
     { name = "mypy", specifier = ">=1.15.0" },
