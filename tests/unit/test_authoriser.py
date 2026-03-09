@@ -120,6 +120,10 @@ def test_generate_policy():
         ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/PATCH/v1/tenants/t-001", True),
         ("arn:aws:execute-api:eu-west-2:123456789012:api/dev/DELETE/v1/tenants/t-001", True),
         (
+            "arn:aws:execute-api:eu-west-2:123456789012:api/dev/POST/v1/tenants/t-001/api-key/rotate",
+            False,
+        ),
+        (
             "arn:aws:execute-api:eu-west-2:123456789012:api/dev/GET/v1/tenants/t-001/audit-export",
             True,
         ),

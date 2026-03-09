@@ -16,6 +16,8 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as codedeploy from 'aws-cdk-lib/aws-codedeploy';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -60,6 +62,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly tenantApiFn: lambda.Function;
   public readonly requestInterceptorFn: lambda.Function;
   public readonly responseInterceptorFn: lambda.Function;
+  public readonly billingFn: lambda.Function;
 
   public readonly apiWebAcl: wafv2.CfnWebACL;
   public readonly spaDistribution: cloudfront.CfnDistribution;
@@ -212,7 +215,11 @@ export class PlatformStack extends cdk.Stack {
     this.tenantsTable.grantReadWriteData(this.tenantApiFn);
     this.tenantApiFn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
+        actions: [
+          'secretsmanager:CreateSecret',
+          'secretsmanager:TagResource',
+          'secretsmanager:PutSecretValue',
+        ],
         resources: [
           `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/tenants/*`,
         ],
@@ -297,6 +304,43 @@ export class PlatformStack extends cdk.Stack {
       environment: {
         POWERTOOLS_SERVICE_NAME: 'gateway-response-interceptor',
       },
+    });
+
+    this.billingFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/billing'),
+      handler: 'handler.lambda_handler',
+      functionNameSuffix: 'billing',
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'billing',
+        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        INVOCATIONS_TABLE_NAME: this.invocationsTable.tableName,
+        EVENT_BUS_NAME: 'default',
+      },
+    });
+
+    this.tenantsTable.grantReadWriteData(this.billingFn);
+    this.invocationsTable.grantReadData(this.billingFn);
+    this.billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/platform/billing/pricing/*`,
+        ],
+      }),
+    );
+    this.billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+
+    // Daily billing schedule (midnight UTC)
+    new events.Rule(this, 'DailyBillingRule', {
+      schedule: events.Schedule.cron({ hour: '0', minute: '0' }),
+      targets: [new targets.LambdaFunction(this.billingFn)],
     });
 
     this.toolsTable.grantReadData(this.requestInterceptorFn);
@@ -515,6 +559,11 @@ export class PlatformStack extends cdk.Stack {
             throttlingBurstLimit: 100,
             metricsEnabled: true,
           },
+          '/v1/agents/{agentName}/invoke/POST': {
+            throttlingRateLimit: 50,
+            throttlingBurstLimit: 100,
+            metricsEnabled: true,
+          },
           '/v1/jobs/{jobId}/GET': {
             throttlingRateLimit: 100,
             throttlingBurstLimit: 200,
@@ -535,6 +584,11 @@ export class PlatformStack extends cdk.Stack {
     });
 
     const v1 = this.api.root.addResource('v1');
+    const health = v1.addResource('health');
+    const sessions = v1.addResource('sessions');
+    const agents = v1.addResource('agents');
+    const agentByName = agents.addResource('{agentName}');
+    const agentInvoke = agentByName.addResource('invoke');
     const invoke = v1.addResource('invoke');
     const jobs = v1.addResource('jobs');
     const jobById = jobs.addResource('{jobId}');
@@ -547,6 +601,10 @@ export class PlatformStack extends cdk.Stack {
     const tenants = v1.addResource('tenants');
     const tenantById = tenants.addResource('{tenantId}');
     const auditExport = tenantById.addResource('audit-export');
+    const tenantApiKey = tenantById.addResource('api-key');
+    const tenantApiKeyRotate = tenantApiKey.addResource('rotate');
+    const tenantUsers = tenantById.addResource('users');
+    const tenantUsersInvite = tenantUsers.addResource('invite');
     const platform = v1.addResource('platform');
     const failover = platform.addResource('failover');
     const quota = platform.addResource('quota');
@@ -579,7 +637,10 @@ export class PlatformStack extends cdk.Stack {
     };
 
     const tenantApiIntegration = new apigateway.LambdaIntegration(this.tenantApiFn, { proxy: true });
+    const bridgeIntegration = new apigateway.LambdaIntegration(bridgeAlias, { proxy: true });
 
+    health.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    sessions.addMethod('GET', tenantApiIntegration, securedMethodOptions);
     tenants.addMethod('POST', tenantApiIntegration, securedMethodOptions);
     tenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
 
@@ -588,6 +649,8 @@ export class PlatformStack extends cdk.Stack {
     tenantById.addMethod('DELETE', tenantApiIntegration, securedMethodOptions);
 
     auditExport.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    tenantApiKeyRotate.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    tenantUsersInvite.addMethod('POST', tenantApiIntegration, securedMethodOptions);
 
     failover.addMethod('POST', tenantApiIntegration, securedMethodOptions);
     quota.addMethod('GET', tenantApiIntegration, securedMethodOptions);
@@ -604,24 +667,27 @@ export class PlatformStack extends cdk.Stack {
     opsTenantById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
     opsJobById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
 
+    agents.addMethod('GET', bridgeIntegration, securedMethodOptions);
+    agentByName.addMethod('GET', bridgeIntegration, securedMethodOptions);
+    agentInvoke.addMethod('POST', bridgeIntegration, securedMethodOptions);
     invoke.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     jobById.addMethod(
       'GET',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     webhooks.addMethod(
       'POST',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     webhookById.addMethod(
       'DELETE',
-      new apigateway.LambdaIntegration(bridgeAlias, { proxy: true }),
+      bridgeIntegration,
       securedMethodOptions,
     );
     tokenRefresh.addMethod(

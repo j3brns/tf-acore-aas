@@ -102,7 +102,7 @@ def test_read_agent_deps_missing_agent() -> None:
 
 @mock_aws
 def test_get_ssm_hash_returns_none_when_parameter_absent() -> None:
-    result = hl.get_ssm_hash("echo-agent", _REGION)
+    result = hl.get_ssm_hash("echo-agent", "dev", _REGION)
     assert result is None
 
 
@@ -110,11 +110,11 @@ def test_get_ssm_hash_returns_none_when_parameter_absent() -> None:
 def test_get_ssm_hash_returns_stored_value() -> None:
     ssm = boto3.client("ssm", region_name=_REGION)
     ssm.put_parameter(
-        Name="/platform/layers/echo-agent/hash",
+        Name="/platform/layers/dev/echo-agent/hash",
         Value="abcd1234efgh5678",
         Type="String",
     )
-    result = hl.get_ssm_hash("echo-agent", _REGION)
+    result = hl.get_ssm_hash("echo-agent", "dev", _REGION)
     assert result == "abcd1234efgh5678"
 
 
@@ -126,7 +126,7 @@ def test_get_ssm_hash_returns_stored_value() -> None:
 @mock_aws
 def test_run_returns_1_when_no_ssm_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_REGION", _REGION)
-    exit_code = hl.run("echo-agent")
+    exit_code = hl.run("echo-agent", "dev")
     assert exit_code == 1
 
 
@@ -139,12 +139,12 @@ def test_run_returns_0_when_hash_matches(monkeypatch: pytest.MonkeyPatch) -> Non
 
     ssm = boto3.client("ssm", region_name=_REGION)
     ssm.put_parameter(
-        Name="/platform/layers/echo-agent/hash",
+        Name="/platform/layers/dev/echo-agent/hash",
         Value=computed,
         Type="String",
     )
 
-    exit_code = hl.run("echo-agent")
+    exit_code = hl.run("echo-agent", "dev")
     assert exit_code == 0
 
 
@@ -154,12 +154,12 @@ def test_run_returns_1_when_hash_mismatches(monkeypatch: pytest.MonkeyPatch) -> 
 
     ssm = boto3.client("ssm", region_name=_REGION)
     ssm.put_parameter(
-        Name="/platform/layers/echo-agent/hash",
+        Name="/platform/layers/dev/echo-agent/hash",
         Value="stale0000stale00",
         Type="String",
     )
 
-    exit_code = hl.run("echo-agent")
+    exit_code = hl.run("echo-agent", "dev")
     assert exit_code == 1
 
 

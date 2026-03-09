@@ -18,7 +18,8 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger("deploy_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = REPO_ROOT / ".build"
 
 
 def require_aws_region() -> str:
@@ -46,10 +47,8 @@ def get_ssm_param(ssm, name: str) -> str | None:
         raise
 
 
-def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bool:
+def deploy_agent(agent_name: str, env: str) -> bool:
     aws_region = require_aws_region()
-    root = repo_root or _REPO_ROOT
-    build_dir = root / ".build"
 
     # Resolve bucket (same as build_layer)
     from build_layer import resolve_layer_bucket
@@ -59,18 +58,20 @@ def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bo
     # Read version from pyproject.toml
     import tomllib
 
-    toml_path = root / "agents" / agent_name / "pyproject.toml"
+    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
     with open(toml_path, "rb") as f:
         data = tomllib.load(f)
     version = data.get("project", {}).get("version", "1.0.0")
 
     ssm = boto3.client("ssm", region_name=aws_region)
-    deps_key = get_ssm_param(ssm, f"/platform/layers/{agent_name}/s3-key")
+    deps_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
     if not deps_key:
-        logger.error(f"Deps not found in SSM for agent '{agent_name}'. Run build_layer first.")
+        logger.error(
+            f"Deps not found in SSM for agent '{agent_name}' in env '{env}'. Run build_layer first."
+        )
         return False
 
-    code_zip = build_dir / f"{agent_name}-code.zip"
+    code_zip = BUILD_DIR / f"{agent_name}-code.zip"
     if not code_zip.exists():
         logger.error(f"Agent code zip not found: {code_zip}. Run package_agent first.")
         return False
@@ -80,9 +81,9 @@ def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bo
     logger.info(f"Uploading agent code to s3://{bucket}/{script_key}")
     s3.upload_file(str(code_zip), bucket, script_key)
 
-    # Update SSM with new script key
+    # Update script-s3-key in SSM (essential for register_agent)
     ssm.put_parameter(
-        Name=f"/platform/agents/{agent_name}/script-s3-key",
+        Name=f"/platform/agents/{env}/{agent_name}/script-s3-key",
         Value=script_key,
         Type="String",
         Overwrite=True,
@@ -90,10 +91,10 @@ def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bo
 
     # In mock/test environment, we also ensure runtime-arn exists for tests
     try:
-        ssm.get_parameter(Name=f"/platform/agents/{agent_name}/runtime-arn")
+        ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/runtime-arn")
     except ClientError:
         ssm.put_parameter(
-            Name=f"/platform/agents/{agent_name}/runtime-arn",
+            Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
             Value=f"arn:aws:bedrock:eu-west-2:123456789012:runtime/{agent_name}",
             Type="String",
         )
@@ -103,7 +104,7 @@ def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bo
     try:
         acore = boto3.client("bedrock-agentcore", region_name=aws_region)
         logger.info(f"Updating AgentCore Runtime for '{agent_name}'")
-        acore.update_agent_code(
+        response = acore.update_agent_code(
             agentName=agent_name,
             code={
                 "s3Bucket": bucket,
@@ -111,6 +112,14 @@ def deploy_agent(agent_name: str, env: str, repo_root: Path | None = None) -> bo
                 "scriptKey": script_key,
             },
         )
+        runtime_arn = response.get("agentArn")
+        if runtime_arn:
+            ssm.put_parameter(
+                Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
+                Value=runtime_arn,
+                Type="String",
+                Overwrite=True,
+            )
     except Exception as e:
         logger.warning(f"Failed to call AgentCore Runtime API (might be expected in mock env): {e}")
         # In mock environment or during early phase, we might not have the actual API

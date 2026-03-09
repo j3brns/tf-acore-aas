@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from "react";
+import {
+    HealthResponseDto,
+    PlatformQuotaResponseDto,
+    TenantAdminRow,
+    TenantsListResponseDto,
+    toTenantAdminRow,
+} from "../api/contracts";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 
 export const AdminPage: React.FC = () => {
-    const [health, setHealth] = useState<any>(null);
-    const [tenants, setTenants] = useState<any[]>([]);
-    const [quota, setQuota] = useState<any[]>([]);
+    const [health, setHealth] = useState<HealthResponseDto | null>(null);
+    const [tenants, setTenants] = useState<TenantAdminRow[]>([]);
+    const [quota, setQuota] = useState<PlatformQuotaResponseDto["utilisation"]>([]);
     const [loading, setLoading] = useState(true);
     const [_error, setError] = useState<string | null>(null);
     const { getAccessToken, account, isAuthenticated } = useAuth();
@@ -24,13 +31,13 @@ export const AdminPage: React.FC = () => {
                 const client = getApiClient(getAccessToken);
 
                 const [healthData, tenantsData, quotaData] = await Promise.all([
-                    client.request<any>("/v1/health"),
-                    client.request<{ items: any[] }>("/v1/tenants"),
-                    client.request<any>("/v1/platform/quota").catch(() => ({ utilisation: [] }))
+                    client.request<HealthResponseDto>("/v1/health"),
+                    client.request<TenantsListResponseDto>("/v1/tenants"),
+                    client.request<PlatformQuotaResponseDto>("/v1/platform/quota").catch(() => ({ utilisation: [] }))
                 ]);
 
                 setHealth(healthData);
-                setTenants(tenantsData.items || []);
+                setTenants((tenantsData.items || []).map(toTenantAdminRow));
                 setQuota(quotaData.utilisation || []);
             } catch (err: any) {
                 setError(err.message);
@@ -53,6 +60,14 @@ export const AdminPage: React.FC = () => {
                         <p className="text-sm text-red-700">Access Denied: Platform.Operator role required.</p>
                     </div>
                 </div>
+            </div>
+        );
+    }
+
+    if (_error) {
+        return (
+            <div className="bg-red-50 border-l-4 border-red-400 p-4">
+                <p className="text-sm text-red-700">{_error}</p>
             </div>
         );
     }
@@ -86,7 +101,7 @@ export const AdminPage: React.FC = () => {
                 </div>
                 <div className="px-4 py-5 sm:p-6">
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        {quota.map((q: any) => (
+                        {quota.map((q) => (
                             <div key={q.region} className="border rounded-md p-4">
                                 <div className="flex justify-between mb-1">
                                     <span className="text-sm font-medium text-gray-700">{q.region} - {q.quotaName}</span>
@@ -142,7 +157,7 @@ export const AdminPage: React.FC = () => {
                                             {tenant.status}
                                         </span>
                                     </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{tenant.runtimeRegion || "N/A"}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{tenant.runtimeRegion ?? "N/A"}</td>
                                 </tr>
                             ))}
                         </tbody>

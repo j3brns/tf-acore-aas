@@ -345,6 +345,39 @@ class OpsLockRecord:
 
 
 # ---------------------------------------------------------------------------
+# Table: platform-billing (or BILLING# items in platform-tenants)
+# PK: TENANT#{tenantId}  SK: BILLING#{yearMonth}
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BillingSummaryRecord:
+    """Monthly billing summary for a tenant.
+
+    year_month: ISO format e.g. "2026-03"
+    total_input_tokens: cumulative for the month
+    total_output_tokens: cumulative for the month
+    total_cost_usd: cumulative for the month
+    last_updated: ISO 8601 UTC
+    """
+
+    tenant_id: str
+    year_month: str
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+    last_updated: str
+
+    @property
+    def pk(self) -> str:
+        return f"TENANT#{self.tenant_id}"
+
+    @property
+    def sk(self) -> str:
+        return f"BILLING#{self.year_month}"
+
+
+# ---------------------------------------------------------------------------
 # TenantContext — runtime identity injected by the Authoriser Lambda
 # ---------------------------------------------------------------------------
 

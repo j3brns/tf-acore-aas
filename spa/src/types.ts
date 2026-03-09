@@ -31,15 +31,17 @@ export interface Invocation {
 }
 
 export interface Job {
-    job_id: string;
-    tenant_id: string;
-    agent_name: string;
+    jobId: string;
+    tenantId: string;
+    agentName: string;
     status: JobStatus;
-    created_at: string;
-    started_at?: string;
-    completed_at?: string;
-    error_message?: string;
-    result_url?: string;
+    createdAt: string;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    errorMessage?: string | null;
+    resultUrl?: string | null;
+    webhookDelivered?: boolean;
+    webhookUrl?: string | null;
 }
 
 export interface Session {
@@ -50,3 +52,29 @@ export interface Session {
     last_activity_at: string;
     status: SessionStatus;
 }
+
+export interface AgentInvokeSyncResponse {
+    invocationId: string;
+    agentName: string;
+    agentVersion?: string;
+    mode: Exclude<InvocationMode, "async">;
+    status: InvocationStatus;
+    output: string;
+    sessionId?: string | null;
+    timestamp: string;
+    usage?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        latencyMs?: number;
+    };
+}
+
+export interface AgentInvokeAsyncAccepted {
+    jobId: string;
+    status: "accepted";
+    mode: "async";
+    pollUrl: string;
+    webhookDelivery?: "registered" | "not_registered";
+}
+
+export type AgentInvokeResponse = AgentInvokeSyncResponse | AgentInvokeAsyncAccepted;

@@ -4,6 +4,7 @@ import { AgentCataloguePage } from "./pages/AgentCataloguePage";
 import { InvokePage } from "./pages/InvokePage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { AdminPage } from "./pages/AdminPage";
+import { TenantPortalPage } from "./pages/TenantPortalPage";
 import { useAuth } from "./auth/useAuth";
 
 function App() {
@@ -40,6 +41,7 @@ function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<AgentCataloguePage />} />
+          <Route path="/tenant" element={<TenantPortalPage />} />
           <Route path="/invoke/:agentName" element={<InvokePage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/admin" element={<AdminPage />} />

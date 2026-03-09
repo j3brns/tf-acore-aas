@@ -1,0 +1,170 @@
+export type AgentSummaryDto = {
+  agentName: string;
+  latestVersion: string;
+  tierMinimum: "basic" | "standard" | "premium";
+  invocationMode: "sync" | "streaming" | "async";
+  streamingEnabled: boolean;
+  estimatedDurationSeconds?: number | null;
+  ownerTeam?: string;
+};
+
+export type AgentsListResponseDto = {
+  items: AgentSummaryDto[];
+};
+
+export type AgentCatalogueItem = {
+  agentName: string;
+  version: string;
+  tier: "basic" | "standard" | "premium";
+  invocationMode: "sync" | "streaming" | "async";
+  streamingEnabled: boolean;
+  ownerTeam: string;
+};
+
+export function toAgentCatalogueItem(dto: AgentSummaryDto): AgentCatalogueItem {
+  return {
+    agentName: dto.agentName,
+    version: dto.latestVersion,
+    tier: dto.tierMinimum,
+    invocationMode: dto.invocationMode,
+    streamingEnabled: dto.streamingEnabled,
+    ownerTeam: dto.ownerTeam ?? "unknown",
+  };
+}
+
+export type SessionSummaryDto = {
+  sessionId: string;
+  agentName: string;
+  startedAt: string;
+  lastActivityAt: string;
+  status: "active" | "completed" | "expired";
+};
+
+export type SessionsListResponseDto = {
+  items: SessionSummaryDto[];
+};
+
+export type SessionRow = {
+  sessionId: string;
+  agentName: string;
+  startedAt: string;
+  lastActivityAt: string;
+  status: "active" | "completed" | "expired";
+};
+
+export function toSessionRow(dto: SessionSummaryDto): SessionRow {
+  return {
+    sessionId: dto.sessionId,
+    agentName: dto.agentName,
+    startedAt: dto.startedAt,
+    lastActivityAt: dto.lastActivityAt,
+    status: dto.status,
+  };
+}
+
+export type TenantDto = {
+  tenantId: string;
+  appId: string;
+  displayName: string;
+  tier: "basic" | "standard" | "premium";
+  status: "active" | "suspended" | "deleted";
+  runtimeRegion?: string | null;
+};
+
+export type TenantsListResponseDto = {
+  items: TenantDto[];
+  nextToken?: string | null;
+};
+
+export type TenantAdminRow = {
+  tenantId: string;
+  displayName: string;
+  tier: "basic" | "standard" | "premium";
+  status: "active" | "suspended" | "deleted";
+  runtimeRegion: string | null;
+};
+
+export function toTenantAdminRow(dto: TenantDto): TenantAdminRow {
+  return {
+    tenantId: dto.tenantId,
+    displayName: dto.displayName,
+    tier: dto.tier,
+    status: dto.status,
+    runtimeRegion: dto.runtimeRegion ?? null,
+  };
+}
+
+export type PlatformQuotaEntryDto = {
+  region: string;
+  quotaName: string;
+  currentValue: number;
+  limit: number;
+  utilisationPercentage: number;
+};
+
+export type PlatformQuotaResponseDto = {
+  utilisation: PlatformQuotaEntryDto[];
+};
+
+export type HealthResponseDto = {
+  status: "ok" | "degraded" | "fail";
+  version: string;
+  timestamp: string;
+};
+
+export type OpenApiContractExpectation = {
+  name: string;
+  path: string;
+  method: "get" | "post" | "patch" | "delete";
+  statusCode: string;
+  collectionProperty?: string;
+  requiredFields: string[];
+};
+
+export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
+  {
+    name: "catalogueAgents",
+    path: "/v1/agents",
+    method: "get",
+    statusCode: "200",
+    collectionProperty: "items",
+    requiredFields: [
+      "agentName",
+      "latestVersion",
+      "tierMinimum",
+      "invocationMode",
+      "streamingEnabled",
+    ],
+  },
+  {
+    name: "sessions",
+    path: "/v1/sessions",
+    method: "get",
+    statusCode: "200",
+    collectionProperty: "items",
+    requiredFields: ["sessionId", "agentName", "startedAt", "lastActivityAt", "status"],
+  },
+  {
+    name: "tenants",
+    path: "/v1/tenants",
+    method: "get",
+    statusCode: "200",
+    collectionProperty: "items",
+    requiredFields: ["tenantId", "displayName", "tier", "status"],
+  },
+  {
+    name: "quota",
+    path: "/v1/platform/quota",
+    method: "get",
+    statusCode: "200",
+    collectionProperty: "utilisation",
+    requiredFields: ["region", "quotaName", "currentValue", "limit", "utilisationPercentage"],
+  },
+  {
+    name: "health",
+    path: "/v1/health",
+    method: "get",
+    statusCode: "200",
+    requiredFields: ["status", "version", "timestamp"],
+  },
+];

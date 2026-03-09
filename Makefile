@@ -10,7 +10,7 @@
 .PHONY: dev dev-stop dev-logs dev-invoke
 .PHONY: test-unit test-int test-agent test-all
 .PHONY: worktree-create worktree-list worktree-clean
-.PHONY: infra-synth infra-diff infra-deploy infra-destroy
+.PHONY: infra-synth infra-diff infra-deploy infra-deploy-prod-ci infra-destroy
 .PHONY: infra-rollback-lambda infra-set-runtime-region
 .PHONY: failover-lock-acquire failover-lock-release
 .PHONY: bootstrap-cdk bootstrap-secrets bootstrap-gitlab-oidc
@@ -338,6 +338,17 @@ infra-diff:
 infra-deploy:
 	@test "$(ENV)" != "prod" || (echo "ERROR: Use GitLab pipeline for prod deploys" && exit 1)
 	cd infra/cdk && npx cdk deploy --all --context env=$(ENV) --require-approval never
+
+## infra-deploy-prod-ci: Deploy CDK stacks to prod from CI only
+## Usage: make infra-deploy-prod-ci
+infra-deploy-prod-ci:
+	@test "$(CI)" = "true" || (echo "ERROR: infra-deploy-prod-ci is CI-only" && exit 1)
+	@test "$$GITLAB_CI" = "true" || (echo "ERROR: infra-deploy-prod-ci requires GitLab CI context" && exit 1)
+	@test -n "$$AWS_REGION" || (echo "ERROR: AWS_REGION must be set" && exit 1)
+	@test -n "$$AWS_ROLE_ARN_DEPLOY_PROD" || (echo "ERROR: AWS_ROLE_ARN_DEPLOY_PROD must be set" && exit 1)
+	@test -n "$$AWS_ROLE_ARN" || (echo "ERROR: AWS_ROLE_ARN must be set" && exit 1)
+	@test "$$AWS_ROLE_ARN" = "$$AWS_ROLE_ARN_DEPLOY_PROD" || (echo "ERROR: AWS_ROLE_ARN must match AWS_ROLE_ARN_DEPLOY_PROD for prod deploy" && exit 1)
+	cd infra/cdk && npx cdk deploy --all --context env=prod --require-approval never
 
 ## infra-destroy: Destroy all CDK stacks (dev only)
 infra-destroy:
