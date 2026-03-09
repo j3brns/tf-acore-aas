@@ -20,6 +20,7 @@ from typing import Any
 
 import boto3
 from aws_lambda_powertools import Logger
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from data_access import TenantContext, TenantScopedDynamoDB
 from data_access.models import TenantStatus, TenantTier
@@ -31,6 +32,8 @@ _EVENT_BUS_ENV = "EVENT_BUS_NAME"
 _API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"  # pragma: allowlist secret
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
+_SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator"}
+_INVITE_EXPIRY_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,7 @@ class CallerIdentity:
 class TenantApiDependencies:
     secretsmanager: Any
     events: Any
+    dynamodb: Any
     usage_client: Any
     memory_provisioner: Any
 
@@ -187,6 +191,7 @@ def _dependencies() -> TenantApiDependencies:
     return TenantApiDependencies(
         secretsmanager=session.client("secretsmanager"),
         events=session.client("events"),
+        dynamodb=session.resource("dynamodb"),
         usage_client=_NoopUsageClient(),
         memory_provisioner=_NoopMemoryProvisioner(),
     )
@@ -271,6 +276,14 @@ def _require_admin(caller: CallerIdentity) -> None:
 
 def _can_read_tenant(caller: CallerIdentity, tenant_id: str) -> bool:
     return caller.is_admin or caller.tenant_id == tenant_id
+
+
+def _is_self_service_admin(caller: CallerIdentity) -> bool:
+    return bool(caller.roles & _SELF_SERVICE_ADMIN_ROLES)
+
+
+def _can_manage_tenant_self_service(caller: CallerIdentity, tenant_id: str) -> bool:
+    return _is_self_service_admin(caller) or caller.tenant_id == tenant_id
 
 
 def _ddb_value(value: Any) -> Any:
@@ -657,6 +670,124 @@ def _handle_delete(
     return _response(200, {"tenant": _serialize_tenant(item)})
 
 
+def _handle_rotate_api_key(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    if not _can_manage_tenant_self_service(caller, tenant_id):
+        raise PermissionError(
+            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
+        )
+
+    existing = _read_tenant_record(tenant_id=tenant_id, caller=caller)
+    if existing is None:
+        return _error(404, "NOT_FOUND", "Tenant not found")
+
+    app_id = _str_or_none(existing.get("appId"))
+    secret_arn = _str_or_none(existing.get("apiKeySecretArn"))
+    if app_id is None or secret_arn is None:
+        return _error(
+            409,
+            "CONFLICT",
+            "Tenant is missing API key secret metadata",
+        )
+
+    rotated_at = _now_utc()
+    secret_value = {
+        "tenantId": tenant_id,
+        "appId": app_id,
+        "apiKey": secrets.token_urlsafe(32),
+        "rotatedAt": _iso(rotated_at),
+    }
+    put_response = deps.secretsmanager.put_secret_value(
+        SecretId=secret_arn,
+        SecretString=json.dumps(secret_value),
+    )
+
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    update_expression, expr_names, expr_values = _build_update_expression(
+        {"updatedAt": _iso(rotated_at)}
+    )
+    db.update_item(
+        _tenants_table_name(),
+        key=_tenant_key(tenant_id),
+        update_expression=update_expression,
+        expression_attribute_values=expr_values,
+        expression_attribute_names=expr_names,
+        condition_expression="attribute_exists(PK) AND attribute_exists(SK)",
+    )
+
+    _put_event(
+        deps,
+        detail_type="tenant.api_key_rotated",
+        detail={
+            "tenantId": tenant_id,
+            "appId": app_id,
+            "actorSub": caller.sub,
+            "secretArn": secret_arn,
+        },
+    )
+    return _response(
+        200,
+        {
+            "tenantId": tenant_id,
+            "apiKeySecretArn": secret_arn,
+            "rotatedAt": _iso(rotated_at),
+            "versionId": _str_or_none(put_response.get("VersionId")),
+        },
+    )
+
+
+def _handle_invite_user(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    if not _can_manage_tenant_self_service(caller, tenant_id):
+        raise PermissionError(
+            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
+        )
+
+    existing = _read_tenant_record(tenant_id=tenant_id, caller=caller)
+    if existing is None:
+        return _error(404, "NOT_FOUND", "Tenant not found")
+
+    body = _require_json_body(event)
+    email = _str_or_none(body.get("email"))
+    if email is None or "@" not in email:
+        raise ValueError("email is required and must be a valid email address")
+
+    role = _str_or_none(body.get("role")) or "Agent.Invoke"
+    display_name = _str_or_none(body.get("displayName"))
+    app_id = _str_or_none(existing.get("appId"))
+
+    invite_id = f"invite-{secrets.token_hex(8)}"
+    expires_at = _now_utc() + timedelta(days=_INVITE_EXPIRY_DAYS)
+    invite = {
+        "inviteId": invite_id,
+        "tenantId": tenant_id,
+        "email": email.lower(),
+        "role": role,
+        "displayName": display_name,
+        "status": "pending",
+        "expiresAt": _iso(expires_at),
+    }
+    _put_event(
+        deps,
+        detail_type="tenant.user_invited",
+        detail={
+            **invite,
+            "actorSub": caller.sub,
+            "appId": app_id,
+        },
+    )
+    return _response(202, {"invite": invite})
+
+
 def _handle_audit_export(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
@@ -705,6 +836,34 @@ def _handle_platform_failover(
     )
 
     return _response(200, {"status": "initiated", "region": target_region})
+
+
+def _handle_health() -> dict[str, Any]:
+    return _response(
+        200,
+        {
+            "status": "ok",
+            "version": os.environ.get("SERVICE_VERSION", "0.1.0"),
+            "timestamp": _iso(_now_utc()),
+            "checks": {"tenantApi": {"status": "ok"}},
+        },
+    )
+
+
+def _handle_sessions(event: dict[str, Any], caller: CallerIdentity) -> dict[str, Any]:
+    if caller.tenant_id is None:
+        return _error(400, "BAD_REQUEST", "tenant context missing")
+
+    query = event.get("queryStringParameters") or {}
+    limit_raw = query.get("limit", 50)
+    try:
+        limit = max(1, min(int(limit_raw), 100))
+    except (TypeError, ValueError):
+        return _error(400, "BAD_REQUEST", "limit must be an integer between 1 and 100")
+
+    # Session tracking table wiring is pending. Keep schema-compatible list shape for SPA consumers.
+    _ = limit
+    return _response(200, {"items": []})
 
 
 def _handle_platform_quota(
@@ -792,14 +951,31 @@ def _handle_platform_billing_status(
     deps: TenantApiDependencies,
 ) -> dict[str, Any]:
     _require_admin(caller)
+
+    # We aggregate global status across all tenants for the current month
+    year_month = datetime.now(UTC).strftime("%Y-%m")
+
+    table = deps.dynamodb.Table(_tenants_table_name())
+    # This is an admin scan for metrics
+    response = table.scan(FilterExpression=Key("SK").eq(f"BILLING#{year_month}"))
+    summaries = response.get("Items", [])
+
+    total_cost = sum(float(s.get("total_cost_usd", 0.0)) for s in summaries)
+    total_input = sum(int(s.get("total_input_tokens", 0)) for s in summaries)
+    total_output = sum(int(s.get("total_output_tokens", 0)) for s in summaries)
+
+    # Get some info about the billing Lambda last run from CloudWatch if we want,
+    # but for now let's just return aggregated month-to-date.
+
     return _response(
         200,
         {
             "status": "active",
-            "lastRun": _iso(_now_utc() - timedelta(minutes=15)),
-            "nextRun": _iso(_now_utc() + timedelta(minutes=45)),
-            "processedCount": 142,
-            "errorCount": 0,
+            "yearMonth": year_month,
+            "tenantCount": len(summaries),
+            "totalCostUsd": round(total_cost, 2),
+            "totalTokens": total_input + total_output,
+            "lastUpdated": _iso(_now_utc()),
         },
     )
 
@@ -987,6 +1163,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     path = _request_path(event)
 
     try:
+        if path == "/v1/health" and method == "GET":
+            return _handle_health()
+        if path == "/v1/sessions" and method == "GET":
+            return _handle_sessions(event, caller)
+
         # Platform management routes
         if path == "/v1/platform/failover" and method == "POST":
             return _handle_platform_failover(event, caller, deps)
@@ -1072,6 +1253,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 return _handle_list(event, caller, deps)
 
         if tenant_id is not None:
+            if path.endswith("/api-key/rotate") and method == "POST":
+                return _handle_rotate_api_key(caller, deps, tenant_id=tenant_id)
+            if path.endswith("/users/invite") and method == "POST":
+                return _handle_invite_user(event, caller, deps, tenant_id=tenant_id)
             if path.endswith("/audit-export") and method == "GET":
                 return _handle_audit_export(caller, deps, tenant_id=tenant_id)
 

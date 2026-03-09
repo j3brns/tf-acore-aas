@@ -30,6 +30,7 @@ from aws_lambda_powertools.utilities.idempotency import (
     IdempotencyConfig,
     idempotent_function,
 )
+from aws_lambda_powertools.utilities.parameters import get_secret
 from jwt import PyJWKClient
 
 logger = Logger(service="gateway-request-interceptor")
@@ -47,6 +48,9 @@ _dynamodb_resource: Any | None = None
 _warned_fallback_signing_key = False
 _idempotency_handler: Callable[..., dict[str, Any]] | None = None
 _idempotency_handler_table: str | None = None
+
+_scoped_token_signing_key_cache: str | None = None
+_scoped_token_signing_key_expiry: float = 0
 
 
 def _scoped_token_ttl_seconds() -> int:
@@ -220,12 +224,43 @@ def _validate_bearer_token(token: str) -> dict[str, Any] | None:
 
 def _get_scoped_token_signing_key() -> str:
     global _warned_fallback_signing_key
+    global _scoped_token_signing_key_cache
+    global _scoped_token_signing_key_expiry
+
+    platform_env = os.environ.get("PLATFORM_ENV", "prod")
+
+    # 1. Check for explicit environment variable (Local/Tests precedence)
     explicit = os.environ.get("SCOPED_TOKEN_SIGNING_KEY")
     if explicit:
+        if len(explicit) < 32:
+            logger.warning("SCOPED_TOKEN_SIGNING_KEY is too short (min 32 bytes recommended)")
         return explicit
 
-    # Deterministic fallback for local/dev environments where no key is configured.
-    # Production should provide SCOPED_TOKEN_SIGNING_KEY via secret-backed injection.
+    # 2. Check for Secret ARN (Production standard)
+    secret_arn = os.environ.get("SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN")
+    if secret_arn:
+        now = time.time()
+        if _scoped_token_signing_key_cache and now < _scoped_token_signing_key_expiry:
+            return _scoped_token_signing_key_cache
+
+        try:
+            # 5-minute cache in parameters utility (plus our own local cache)
+            val = get_secret(secret_arn, max_age=300)
+            if val and isinstance(val, str):
+                _scoped_token_signing_key_cache = val
+                _scoped_token_signing_key_expiry = now + 300
+                return val
+        except Exception:
+            logger.exception("Failed to fetch scoped token signing key from Secrets Manager")
+            # Fall through if we can't get the secret
+
+    # 3. Deterministic fallback for local/dev ONLY.
+    if platform_env != "local":
+        raise RuntimeError(
+            "SCOPED_TOKEN_SIGNING_KEY or SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN "
+            "must be configured in production"
+        )
+    # Local fallback (deprecated, will be removed once all environments are seeded)
     seed = "|".join(
         [
             os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "gateway-request-interceptor"),

@@ -146,6 +146,92 @@ def test_handler_sync_success(setup_data):
         assert "invocationId" in body
 
 
+def test_list_agents_returns_openapi_shape_and_tier_filtered(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#premium-agent",
+            "SK": "VERSION#2.0.0",
+            "agent_name": "premium-agent",
+            "version": "2.0.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "premium",
+            "layer_hash": "1111",
+            "layer_s3_key": "k2",
+            "script_s3_key": "s2",
+            "deployed_at": "2026-01-02T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/agents",
+        "pathParameters": {},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert "items" in body
+    assert len(body["items"]) == 1
+    assert body["items"][0]["agentName"] == "echo-agent"
+    assert body["items"][0]["latestVersion"] == "1.0.0"
+
+
+def test_get_agent_detail_returns_latest_version_and_versions(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.1.0",
+            "agent_name": "echo-agent",
+            "version": "1.1.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "2222",
+            "layer_s3_key": "k3",
+            "script_s3_key": "s3",
+            "deployed_at": "2026-01-03T00:00:00Z",
+            "invocation_mode": "streaming",
+            "streaming_enabled": True,
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/agents/echo-agent",
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["agentName"] == "echo-agent"
+    assert body["latestVersion"] == "1.1.0"
+    assert len(body["versions"]) == 2
+    assert body["versions"][0]["version"] == "1.1.0"
+
+
 def test_handler_rejects_legacy_invoke_route(setup_data):
     event = {
         "path": "/v1/invoke",
@@ -220,6 +306,27 @@ def test_handler_agent_not_found(setup_data):
             }
         },
         "body": json.dumps({"input": "Hello"}),
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+def test_get_agent_detail_not_found(setup_data):
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/agents/missing-agent",
+        "pathParameters": {"agentName": "missing-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
     }
 
     response = handler(event, FakeLambdaContext())

@@ -26,6 +26,7 @@ def _load_module(name: str) -> Any:
 
 
 package_agent = _load_module("package_agent")
+build_layer = _load_module("build_layer")
 deploy_agent = _load_module("deploy_agent")
 register_agent = _load_module("register_agent")
 
@@ -100,12 +101,24 @@ def test_deploy_agent_zip(tmp_path, monkeypatch):
         Type="String",
     )
 
+    # Create fake pyproject.toml
+    agent_dir = tmp_path / "agents" / agent_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore.deployment]
+type = "zip"
+""")
+
     deploy_agent.deploy_agent(agent_name, env)
 
     # Verify S3 upload
     response = s3.list_objects_v2(Bucket=bucket_name)
     keys = [obj["Key"] for obj in response.get("Contents", [])]
-    expected_script_key = f"agents/{agent_name}/code.zip"
+    expected_script_key = f"scripts/{agent_name}/1.2.3.zip"
     assert expected_script_key in keys
 
     # Verify SSM parameters (environment-scoped)

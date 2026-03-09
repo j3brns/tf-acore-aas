@@ -15,6 +15,8 @@ tags:
     description: Health and readiness endpoints
   - name: Agents
     description: Agent discovery and invocation routes
+  - name: Sessions
+    description: Active session discovery routes
   - name: Tenants
     description: Tenant management APIs
   - name: Jobs
@@ -167,6 +169,35 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+
+  /v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List active sessions
+      description: >
+        Returns active sessions for the caller's tenant.
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /v1/tenants:
     post:
@@ -378,6 +409,72 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuditExportResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/tenants/{tenantId}/api-key/rotate:
+    post:
+      tags: [Tenants]
+      operationId: rotateTenantApiKey
+      summary: Rotate tenant API key
+      description: >
+        Rotates the tenant API key secret value for the specified tenant.
+        Allowed for own-tenant callers and platform admin/operator roles.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: API key rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantApiKeyRotateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/tenants/{tenantId}/users/invite:
+    post:
+      tags: [Tenants]
+      operationId: inviteTenantUser
+      summary: Invite tenant user
+      description: >
+        Creates a tenant user invitation request. Allowed for own-tenant callers
+        and platform admin/operator roles.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantUserInviteRequest"
+      responses:
+        "202":
+          description: Invite accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantUserInviteAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -839,6 +936,9 @@ components:
     JobStatus:
       type: string
       enum: [pending, running, completed, failed]
+    SessionState:
+      type: string
+      enum: [active, completed, expired]
     UtcTimestamp:
       type: string
       format: date-time
@@ -1028,6 +1128,21 @@ components:
           type: string
           enum: [registered, not_registered]
 
+    SessionSummary:
+      type: object
+      required: [sessionId, agentName, startedAt, lastActivityAt, status]
+      properties:
+        sessionId:
+          type: string
+        agentName:
+          type: string
+        startedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        lastActivityAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        status:
+          $ref: "#/components/schemas/SessionState"
+
     Tenant:
       type: object
       required:
@@ -1151,6 +1266,58 @@ components:
           format: uri
         expiresAt:
           $ref: "#/components/schemas/UtcTimestamp"
+
+    TenantApiKeyRotateResponse:
+      type: object
+      required: [tenantId, apiKeySecretArn, rotatedAt]
+      properties:
+        tenantId:
+          type: string
+        apiKeySecretArn:
+          type: string
+        rotatedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        versionId:
+          type: [string, "null"]
+
+    TenantUserInviteRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          default: Agent.Invoke
+        displayName:
+          type: string
+      additionalProperties: false
+
+    TenantUserInviteAccepted:
+      type: object
+      required: [invite]
+      properties:
+        invite:
+          type: object
+          required: [inviteId, tenantId, email, role, status, expiresAt]
+          properties:
+            inviteId:
+              type: string
+            tenantId:
+              type: string
+            email:
+              type: string
+              format: email
+            role:
+              type: string
+            displayName:
+              type: [string, "null"]
+            status:
+              type: string
+              enum: [pending]
+            expiresAt:
+              $ref: "#/components/schemas/UtcTimestamp"
 
     JobStatusResponse:
       type: object

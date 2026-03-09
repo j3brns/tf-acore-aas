@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import sys
 import urllib.error
 import urllib.request
@@ -228,6 +229,9 @@ def _ssm_parameters(*, mock_jwks_url: str, localstack_endpoint: str) -> list[tup
         ("/platform/config/mock-runtime-url", "http://localhost:8765"),
         ("/platform/config/localstack-endpoint", localstack_endpoint),
         ("/platform/gateway/pii-patterns/default", pii_patterns),
+        ("/platform/billing/pricing/basic", json.dumps({"input_1k": 0.01, "output_1k": 0.03})),
+        ("/platform/billing/pricing/standard", json.dumps({"input_1k": 0.005, "output_1k": 0.015})),
+        ("/platform/billing/pricing/premium", json.dumps({"input_1k": 0.002, "output_1k": 0.006})),
     ]
 
 
@@ -344,6 +348,8 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
         "JWKS_URL=http://localhost:8766/.well-known/jwks.json",
         "API_AUDIENCE=api://platform-local",
         "API_ISSUER=http://localhost:8766",
+        "PLATFORM_ENV=local",
+        f"SCOPED_TOKEN_SIGNING_KEY={secrets.token_hex(32)}",
         "",
     ]
     if tokens:

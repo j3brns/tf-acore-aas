@@ -366,6 +366,14 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
     # 2. Route non-invocation APIs implemented in TASK-048.
     if method == "GET" and _coerce_optional_string(path_params.get("jobId")):
         return get_job_status(tenant_context, path_params, request_id)
+    if method == "GET" and path.endswith("/v1/agents"):
+        return list_agents(tenant_context)
+    if (
+        method == "GET"
+        and _coerce_optional_string(path_params.get("agentName"))
+        and not path.endswith("/invoke")
+    ):
+        return get_agent_detail(path_params, request_id)
     if method == "POST" and path.endswith("/v1/webhooks"):
         return register_webhook(event, tenant_context, request_id)
     if method == "DELETE" and _coerce_optional_string(path_params.get("webhookId")):
@@ -482,6 +490,98 @@ def _job_key(job_id: str) -> dict[str, str]:
 
 def _webhook_key(webhook_id: str) -> dict[str, str]:
     return {"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"}
+
+
+def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "agentName": str(item.get("agent_name", "")),
+        "latestVersion": str(item.get("version", "")),
+        "tierMinimum": str(item.get("tier_minimum", TenantTier.BASIC.value)),
+        "invocationMode": str(item.get("invocation_mode", InvocationMode.SYNC.value)),
+        "streamingEnabled": bool(item.get("streaming_enabled", False)),
+        "estimatedDurationSeconds": item.get("estimated_duration_seconds"),
+        "ownerTeam": str(item.get("owner_team", "")),
+    }
+
+
+def _is_newer_agent_record(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    candidate_deployed_at = str(candidate.get("deployed_at", ""))
+    current_deployed_at = str(current.get("deployed_at", ""))
+    if candidate_deployed_at != current_deployed_at:
+        return candidate_deployed_at > current_deployed_at
+    return str(candidate.get("version", "")) > str(current.get("version", ""))
+
+
+def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
+    ddb = get_dynamodb()
+    table = ddb.Table(AGENTS_TABLE)
+    items = table.scan().get("Items", [])
+
+    latest_by_name: dict[str, dict[str, Any]] = {}
+    for item in items:
+        agent_name = _coerce_optional_string(item.get("agent_name"))
+        if agent_name is None:
+            continue
+        existing = latest_by_name.get(agent_name)
+        if existing is None or _is_newer_agent_record(item, existing):
+            latest_by_name[agent_name] = item
+
+    tier_order = {TenantTier.BASIC: 0, TenantTier.STANDARD: 1, TenantTier.PREMIUM: 2}
+    caller_tier_rank = tier_order.get(tenant_context.tier, 0)
+
+    summaries: list[dict[str, Any]] = []
+    for item in latest_by_name.values():
+        tier_minimum_text = str(item.get("tier_minimum", TenantTier.BASIC.value)).lower()
+        try:
+            tier_minimum = TenantTier(tier_minimum_text)
+        except ValueError:
+            tier_minimum = TenantTier.BASIC
+        if caller_tier_rank < tier_order[tier_minimum]:
+            continue
+        summaries.append(_agent_summary_from_item(item))
+
+    summaries.sort(key=lambda summary: str(summary["agentName"]))
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({"items": summaries}),
+    }
+
+
+def get_agent_detail(path_params: dict[str, Any], request_id: str) -> dict[str, Any]:
+    agent_name = _coerce_optional_string(path_params.get("agentName"))
+    if not agent_name:
+        return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
+
+    ddb = get_dynamodb()
+    table = ddb.Table(AGENTS_TABLE)
+    response = table.query(KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"))
+    items = response.get("Items", [])
+    if not items:
+        return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
+
+    sorted_items = sorted(
+        items,
+        key=lambda item: (str(item.get("deployed_at", "")), str(item.get("version", ""))),
+        reverse=True,
+    )
+    latest = sorted_items[0]
+    detail = _agent_summary_from_item(latest)
+    detail["versions"] = [
+        {
+            "version": str(item.get("version", "")),
+            "deployedAt": str(item.get("deployed_at", "")),
+            "invocationMode": str(item.get("invocation_mode", InvocationMode.SYNC.value)),
+            "streamingEnabled": bool(item.get("streaming_enabled", False)),
+        }
+        for item in sorted_items
+    ]
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(detail),
+    }
 
 
 def get_job_status(

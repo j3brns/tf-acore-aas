@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_aws_region() -> str:
+
     region = os.environ.get("AWS_REGION", "").strip()
     if not region:
         raise RuntimeError("AWS_REGION must be set")
@@ -115,7 +116,7 @@ def register_agent(agent_name: str, env: str) -> bool:
             return False
         logger.info("Continuing anyway because CI is set (might be using mock)")
 
-    logger.info(f"Agent '{agent_name}' registered successfully.")
+    logger.info(f"Agent '{agent_name}' registered successfully")
     return True
 
 

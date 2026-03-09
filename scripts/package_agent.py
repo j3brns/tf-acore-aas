@@ -56,8 +56,9 @@ def package_agent(agent_name: str) -> bool:
         logger.error(f"Agent directory not found: {agent_dir}")
         return False
 
-    BUILD_DIR.mkdir(exist_ok=True)
-    zip_path = BUILD_DIR / f"{agent_name}-code.zip"
+    build_dir = REPO_ROOT / ".build"
+    build_dir.mkdir(exist_ok=True)
+    zip_path = build_dir / f"{agent_name}-code.zip"
 
     logger.info(f"Packaging agent '{agent_name}' to {zip_path}")
 

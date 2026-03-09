@@ -83,10 +83,15 @@ class FakeScopedDb:
 class FakeSecretsManager:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.rotate_calls: list[dict[str, Any]] = []
 
     def create_secret(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         return {"ARN": f"arn:aws:secretsmanager:eu-west-2:111111111111:secret:{kwargs['Name']}"}
+
+    def put_secret_value(self, **kwargs: Any) -> dict[str, Any]:
+        self.rotate_calls.append(kwargs)
+        return {"ARN": str(kwargs.get("SecretId", "")), "VersionId": "ver-rotated-001"}
 
 
 class FakeEvents:
@@ -423,6 +428,40 @@ def test_platform_failover_requires_lock_and_admin(fake_state: dict[str, Any]) -
     assert response["statusCode"] == 403
 
 
+def test_health_route_returns_openapi_shape(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET")
+    event["path"] = "/v1/health"
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body["status"] == "ok"
+    assert "version" in body
+    assert "timestamp" in body
+
+
+def test_sessions_route_returns_items_list(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET", roles=[], caller_tenant_id="t-001", app_id="app-001")
+    event["path"] = "/v1/sessions"
+    event["queryStringParameters"] = {"limit": "5"}
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body == {"items": []}
+
+
+def test_sessions_route_rejects_invalid_limit(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET", roles=[], caller_tenant_id="t-001", app_id="app-001")
+    event["path"] = "/v1/sessions"
+    event["queryStringParameters"] = {"limit": "abc"}
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+
+
 def test_platform_quota_report(fake_state: dict[str, Any]) -> None:
     event = _event(method="GET")
     event["path"] = "/v1/platform/quota"
@@ -478,3 +517,124 @@ def test_create_tenant_allows_json_encoded_admin_roles(fake_state: dict[str, Any
     )
 
     assert response["statusCode"] == 201
+
+
+def test_rotate_api_key_for_own_tenant_succeeds_and_emits_event(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-rotate", "METADATA")] = {
+        "PK": "TENANT#t-rotate",
+        "SK": "METADATA",
+        "tenantId": "t-rotate",
+        "appId": "app-rotate",
+        "displayName": "Rotate",
+        "tier": "standard",
+        "status": "active",
+        "createdAt": "2026-02-25T12:00:00Z",
+        "updatedAt": "2026-02-25T12:00:00Z",
+        "ownerEmail": "r@example.com",
+        "ownerTeam": "team-r",
+        "accountId": "123456789012",
+        "apiKeySecretArn": (
+            "arn:aws:secretsmanager:eu-west-2:111111111111:secret:platform/tenants/t-rotate/api-key"
+        ),
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-rotate",
+        caller_tenant_id="t-rotate",
+        roles=[],
+        app_id="app-rotate",
+    )
+    event["path"] = "/v1/tenants/t-rotate/api-key/rotate"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body["tenantId"] == "t-rotate"
+    assert body["versionId"] == "ver-rotated-001"
+    rotate_calls = fake_state["deps"].secretsmanager.rotate_calls
+    assert len(rotate_calls) == 1
+    assert rotate_calls[0]["SecretId"].endswith("/t-rotate/api-key")
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "tenant.api_key_rotated"
+    assert detail["tenantId"] == "t-rotate"
+
+
+def test_rotate_api_key_cross_tenant_forbidden(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-owner", "METADATA")] = {
+        "PK": "TENANT#t-owner",
+        "SK": "METADATA",
+        "tenantId": "t-owner",
+        "appId": "app-owner",
+        "status": "active",
+        "apiKeySecretArn": (
+            "arn:aws:secretsmanager:eu-west-2:111111111111:secret:platform/tenants/t-owner/api-key"
+        ),
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-owner",
+        caller_tenant_id="t-attacker",
+        roles=[],
+        app_id="app-attacker",
+    )
+    event["path"] = "/v1/tenants/t-owner/api-key/rotate"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 403
+    assert _body(response)["error"]["code"] == "FORBIDDEN"
+
+
+def test_invite_user_for_own_tenant_succeeds(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-invite", "METADATA")] = {
+        "PK": "TENANT#t-invite",
+        "SK": "METADATA",
+        "tenantId": "t-invite",
+        "appId": "app-invite",
+        "status": "active",
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-invite",
+        caller_tenant_id="t-invite",
+        roles=[],
+        app_id="app-invite",
+        body={"email": "new.user@example.com", "role": "Agent.Invoke"},
+    )
+    event["path"] = "/v1/tenants/t-invite/users/invite"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 202
+    invite = _body(response)["invite"]
+    assert invite["tenantId"] == "t-invite"
+    assert invite["email"] == "new.user@example.com"
+    assert invite["status"] == "pending"
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "tenant.user_invited"
+    assert detail["tenantId"] == "t-invite"
+
+
+def test_invite_user_requires_valid_email(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-invite-2", "METADATA")] = {
+        "PK": "TENANT#t-invite-2",
+        "SK": "METADATA",
+        "tenantId": "t-invite-2",
+        "appId": "app-invite-2",
+        "status": "active",
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-invite-2",
+        caller_tenant_id="t-invite-2",
+        roles=[],
+        app_id="app-invite-2",
+        body={"email": "not-an-email"},
+    )
+    event["path"] = "/v1/tenants/t-invite-2/users/invite"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    assert _body(response)["error"]["code"] == "BAD_REQUEST"
