@@ -49,12 +49,13 @@ JOBS_TABLE = os.environ.get("JOBS_TABLE", "platform-jobs")
 OPS_LOCKS_TABLE = os.environ.get("OPS_LOCKS_TABLE", "platform-ops-locks")
 JOB_RESULTS_BUCKET = os.environ.get("JOB_RESULTS_BUCKET")
 
+PLATFORM_ENV = os.environ.get("PLATFORM_ENV", "dev")
 RUNTIME_REGION_PARAM = os.environ.get("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
 MOCK_RUNTIME_URL_PARAM = os.environ.get(
     "MOCK_RUNTIME_URL_PARAM", "/platform/config/mock-runtime-url"
 )
 TENANT_EXECUTION_ROLE_PARAM_TEMPLATE = os.environ.get(
-    "TENANT_EXECUTION_ROLE_PARAM_TEMPLATE", "/platform/tenants/{tenant_id}/execution-role-arn"
+    "TENANT_EXECUTION_ROLE_PARAM_TEMPLATE", "/platform/tenants/{tenant_id}/{env}/execution-role-arn"
 )
 JOB_RESULT_URL_EXPIRY_SECONDS = int(os.environ.get("JOB_RESULT_URL_EXPIRY_SECONDS", "3600"))
 IAM_ROLE_ARN_PATTERN = re.compile(
@@ -307,7 +308,7 @@ def error_response(status_code: int, code: str, message: str, request_id: str) -
 
 
 def _tenant_execution_role_param_name(tenant_id: str) -> str:
-    return TENANT_EXECUTION_ROLE_PARAM_TEMPLATE.format(tenant_id=tenant_id)
+    return TENANT_EXECUTION_ROLE_PARAM_TEMPLATE.format(tenant_id=tenant_id, env=PLATFORM_ENV)
 
 
 def _get_execution_role_arn_from_ssm(tenant_id: str) -> str | None:

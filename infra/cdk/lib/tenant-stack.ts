@@ -61,8 +61,8 @@ export class TenantStack extends cdk.Stack {
     // 2. Tenant Execution Role (Layer 2 Isolation)
     // This role is assumed by the Bridge Lambda to act on behalf of the tenant.
     const executionRole = new iam.Role(this, 'TenantExecutionRole', {
-      roleName: `platform-tenant-${tenantId}-execution-role`,
-      description: `Execution role for tenant ${tenantId} (${tier} tier)`,
+      roleName: `platform-tenant-${tenantId}-execution-role-${env}`,
+      description: `Execution role for tenant ${tenantId} (${tier} tier) in ${env} environment`,
       assumedBy: new iam.ArnPrincipal(bridgeLambdaRoleArn),
     });
 
@@ -119,8 +119,9 @@ export class TenantStack extends cdk.Stack {
     // 3. AgentCore Memory Store (Provisioned per-tenant)
     // Memory store requires its own service role for consolidation.
     const memoryServiceRole = new iam.Role(this, 'MemoryServiceRole', {
+      roleName: `platform-memory-${tenantId}-service-role-${env}`,
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
-      description: `Service role for tenant ${tenantId} memory store`,
+      description: `Service role for tenant ${tenantId} memory store in ${env} environment`,
     });
     // Add required permissions for memory consolidation (placeholder until exact actions confirmed)
     memoryServiceRole.addToPolicy(
@@ -133,8 +134,8 @@ export class TenantStack extends cdk.Stack {
     const memoryStore = new cdk.CfnResource(this, 'TenantMemoryStore', {
       type: 'AWS::BedrockAgentCore::Memory',
       properties: {
-        Name: `platform-memory-${tenantId}`,
-        Description: `Memory store for tenant ${tenantId}`,
+        Name: `platform-memory-${tenantId}-${env}`,
+        Description: `Memory store for tenant ${tenantId} in ${env} environment`,
         EncryptionKeyArn: tenantDataKeyArn,
         EventExpiryDuration: 30,
         MemoryExecutionRoleArn: memoryServiceRole.roleArn,
@@ -142,14 +143,15 @@ export class TenantStack extends cdk.Stack {
         Tags: {
           TenantId: tenantId,
           Tier: tier,
+          Environment: env,
         },
       },
     });
 
     // 4. API Gateway API Key for the tenant
     const apiKey = new apigateway.ApiKey(this, 'TenantApiKey', {
-      apiKeyName: `platform-tenant-${tenantId}`, // pragma: allowlist secret
-      description: `API key for tenant ${tenantId} (${tier} tier)`,
+      apiKeyName: `platform-tenant-${tenantId}-${env}`, // pragma: allowlist secret
+      description: `API key for tenant ${tenantId} (${tier} tier) in ${env} environment`,
       enabled: true,
     });
 
@@ -158,21 +160,21 @@ export class TenantStack extends cdk.Stack {
 
     // 5. SSM Parameters for tenant configuration (used by Bridge/Authoriser)
     new ssm.StringParameter(this, 'TenantExecutionRoleArnParam', {
-      parameterName: `/platform/tenants/${tenantId}/execution-role-arn`,
+      parameterName: `/platform/tenants/${tenantId}/${env}/execution-role-arn`,
       stringValue: executionRole.roleArn,
-      description: `Execution role ARN for tenant ${tenantId}`,
+      description: `Execution role ARN for tenant ${tenantId} in ${env}`,
     });
 
     new ssm.StringParameter(this, 'TenantMemoryStoreArnParam', {
-      parameterName: `/platform/tenants/${tenantId}/memory-store-arn`,
+      parameterName: `/platform/tenants/${tenantId}/${env}/memory-store-arn`,
       stringValue: memoryStore.getAtt('Arn').toString(),
-      description: `Memory store ARN for tenant ${tenantId}`,
+      description: `Memory store ARN for tenant ${tenantId} in ${env}`,
     });
 
     new ssm.StringParameter(this, 'TenantApiKeyIdParam', {
-      parameterName: `/platform/tenants/${tenantId}/api-key-id`,
+      parameterName: `/platform/tenants/${tenantId}/${env}/api-key-id`,
       stringValue: apiKey.keyId,
-      description: `API key ID for tenant ${tenantId}`,
+      description: `API key ID for tenant ${tenantId} in ${env}`,
     });
 
     // 6. Outputs

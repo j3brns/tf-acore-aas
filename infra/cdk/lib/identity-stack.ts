@@ -63,7 +63,7 @@ export class IdentityStack extends cdk.Stack {
       },
       deployDev: {
         id: 'PipelineDeployDevRole',
-        roleName: 'platform-pipeline-deploy-dev',
+        roleName: `platform-pipeline-deploy-dev-${envName}`,
         allowedSubPatterns: [
           `project_path:${gitlabProjectPath}:ref_type:branch:ref:${deployBranch}`,
         ],
@@ -76,7 +76,7 @@ export class IdentityStack extends cdk.Stack {
       },
       deployStaging: {
         id: 'PipelineDeployStagingRole',
-        roleName: 'platform-pipeline-deploy-staging',
+        roleName: `platform-pipeline-deploy-staging-${envName}`,
         allowedSubPatterns: [
           `project_path:${gitlabProjectPath}:ref_type:branch:ref:${deployBranch}`,
         ],
@@ -89,7 +89,7 @@ export class IdentityStack extends cdk.Stack {
       },
       deployProd: {
         id: 'PipelineDeployProdRole',
-        roleName: 'platform-pipeline-deploy-prod',
+        roleName: `platform-pipeline-deploy-prod-${envName}`,
         allowedSubPatterns: [
           `project_path:${gitlabProjectPath}:ref_type:branch:ref:${deployBranch}`,
         ],

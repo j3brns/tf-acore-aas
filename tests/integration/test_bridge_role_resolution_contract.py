@@ -142,7 +142,7 @@ def test_handler_assume_role_uses_ssm_arn_when_tenant_record_missing_field(mock_
         }
     )
     ssm.put_parameter(
-        Name="/platform/tenants/t-001/execution-role-arn",
+        Name="/platform/tenants/t-001/dev/execution-role-arn",
         Value="arn:aws:iam::123456789012:role/custom-ssm-role",
         Type="String",
     )

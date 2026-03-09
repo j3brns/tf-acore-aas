@@ -18,7 +18,8 @@ ROLE_ARN_PATTERN = re.compile(
     r"^arn:(?:aws|aws-us-gov|aws-cn):iam::(?P<account_id>\d{12}):role/(?P<role_name>[\w+=,.@\-_/]+)$"
 )
 DEFAULT_TABLE_NAME = "platform-tenants"
-DEFAULT_PARAM_TEMPLATE = "/platform/tenants/{tenant_id}/execution-role-arn"
+PLATFORM_ENV = os.environ.get("PLATFORM_ENV", "dev")
+DEFAULT_PARAM_TEMPLATE = "/platform/tenants/{tenant_id}/{env}/execution-role-arn"
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ def _validate_role_arn(role_arn: str, account_id: str) -> str | None:
 
 
 def _read_execution_role_from_ssm(ssm: Any, *, tenant_id: str, param_template: str) -> str | None:
-    parameter_name = param_template.format(tenant_id=tenant_id)
+    parameter_name = param_template.format(tenant_id=tenant_id, env=PLATFORM_ENV)
     try:
         response = ssm.get_parameter(Name=parameter_name)
     except ClientError as exc:

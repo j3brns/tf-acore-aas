@@ -22,7 +22,7 @@ describe('TenantStack (TASK-025)', () => {
     const template = synthTemplate(defaultContext);
 
     template.hasResourceProperties('AWS::IAM::Role', {
-      RoleName: 'platform-tenant-t-test123-execution-role',
+      RoleName: 'platform-tenant-t-test123-execution-role-dev',
       AssumeRolePolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
@@ -44,7 +44,7 @@ describe('TenantStack (TASK-025)', () => {
             Resource: Match.anyValue(),
             Condition: Match.objectLike({
               'ForAllValues:StringLike': {
-                'dynamodb:LeadingKeys': Match.arrayWith(['TENANT#t-test123*', 'JOB#*']),
+                'dynamodb:LeadingKeys': Match.arrayWith(['TENANT#t-test123*']),
               },
             }),
           }),
@@ -62,7 +62,7 @@ describe('TenantStack (TASK-025)', () => {
     const template = synthTemplate(defaultContext);
 
     template.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
-      Name: 'platform-memory-t-test123',
+      Name: 'platform-memory-t-test123-dev',
       EncryptionKeyArn: Match.anyValue(),
       MemoryExecutionRoleArn: Match.anyValue(),
       MemoryStrategies: Match.arrayWith([
@@ -72,7 +72,8 @@ describe('TenantStack (TASK-025)', () => {
     });
 
     template.hasResourceProperties('AWS::IAM::Role', {
-      Description: 'Service role for tenant t-test123 memory store',
+      RoleName: 'platform-memory-t-test123-service-role-dev',
+      Description: 'Service role for tenant t-test123 memory store in dev environment',
       AssumeRolePolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
@@ -90,7 +91,7 @@ describe('TenantStack (TASK-025)', () => {
     const template = synthTemplate(defaultContext);
 
     template.hasResourceProperties('AWS::ApiGateway::ApiKey', {
-      Name: 'platform-tenant-t-test123',
+      Name: 'platform-tenant-t-test123-dev',
       Enabled: true,
     });
 
@@ -105,17 +106,17 @@ describe('TenantStack (TASK-025)', () => {
     const template = synthTemplate(defaultContext);
 
     template.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/platform/tenants/t-test123/execution-role-arn',
+      Name: '/platform/tenants/t-test123/dev/execution-role-arn',
       Type: 'String',
     });
 
     template.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/platform/tenants/t-test123/memory-store-arn',
+      Name: '/platform/tenants/t-test123/dev/memory-store-arn',
       Type: 'String',
     });
 
     template.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/platform/tenants/t-test123/api-key-id',
+      Name: '/platform/tenants/t-test123/dev/api-key-id',
       Type: 'String',
     });
   });

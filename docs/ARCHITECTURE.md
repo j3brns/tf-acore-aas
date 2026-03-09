@@ -57,7 +57,7 @@ Client
       Returns usageIdentifierKey for usage plan enforcement
   → Bridge Lambda eu-west-2
       Reads invocation_mode from DynamoDB agent registry
-      Resolves executionRoleArn from tenant metadata (fallback: SSM /platform/tenants/{tenantId}/execution-role-arn)
+      Resolves executionRoleArn from tenant metadata (fallback: SSM /platform/tenants/{tenantId}/{env}/execution-role-arn)
       Validates IAM role ARN/account match, then assumes tenant execution role via STS
       Reads active runtime region from SSM (cached 60s)
       Invokes AgentCore Runtime eu-west-1 via bedrock-agentcore SDK

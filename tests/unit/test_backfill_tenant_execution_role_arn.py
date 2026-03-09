@@ -60,7 +60,7 @@ def test_backfill_apply_sets_execution_role_fields(mock_aws_services):
         }
     )
     ssm.put_parameter(
-        Name="/platform/tenants/t-001/execution-role-arn",
+        Name="/platform/tenants/t-001/dev/execution-role-arn",
         Value="arn:aws:iam::123456789012:role/tenant-custom-role",
         Type="String",
     )
@@ -69,7 +69,7 @@ def test_backfill_apply_sets_execution_role_fields(mock_aws_services):
         argparse.Namespace(
             region="eu-west-2",
             table_name="platform-tenants",
-            param_template="/platform/tenants/{tenant_id}/execution-role-arn",
+            param_template="/platform/tenants/{tenant_id}/{env}/execution-role-arn",
             tenant_id=None,
             apply=True,
         )
@@ -100,7 +100,7 @@ def test_backfill_fails_on_account_mismatch(mock_aws_services):
         argparse.Namespace(
             region="eu-west-2",
             table_name="platform-tenants",
-            param_template="/platform/tenants/{tenant_id}/execution-role-arn",
+            param_template="/platform/tenants/{tenant_id}/{env}/execution-role-arn",
             tenant_id=None,
             apply=False,
         )
