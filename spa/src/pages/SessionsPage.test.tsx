@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
+import { createApiClientMock, createAuthContextValue } from "../test/mockFactories";
+import { sessionsList } from "../test/testData";
 import { SessionsPage } from "./SessionsPage";
 
 vi.mock("../api/client", () => ({
@@ -18,39 +20,32 @@ vi.mock("../auth/useAuth", () => ({
 describe("SessionsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useAuth).mockReturnValue({
-      getAccessToken: vi.fn(),
+    vi.mocked(useAuth).mockReturnValue(createAuthContextValue({
       isAuthenticated: true,
-    } as never);
+    }) as never);
   });
 
   it("renders sessions when API returns items", async () => {
-    vi.mocked(getApiClient).mockReturnValue({
-      request: vi.fn().mockResolvedValue({
-        items: [
-          {
-            sessionId: "sess-12345678",
-            agentName: "echo-agent",
-            startedAt: "2026-03-01T09:00:00Z",
-            lastActivityAt: "2026-03-01T09:05:00Z",
-            status: "active",
-          },
-        ],
-      }),
-    } as never);
+    const request = vi.fn().mockResolvedValue(sessionsList);
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
+      request,
+    }) as never);
 
     render(<SessionsPage />);
 
     await waitFor(() => {
       expect(screen.getByText("echo-agent")).toBeInTheDocument();
       expect(screen.getByText("active")).toBeInTheDocument();
+      expect(screen.getByText("research-agent")).toBeInTheDocument();
+      expect(screen.getByText("completed")).toBeInTheDocument();
     });
+    expect(request).toHaveBeenCalledWith("/v1/sessions");
   });
 
   it("renders empty state when no sessions are returned", async () => {
-    vi.mocked(getApiClient).mockReturnValue({
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
       request: vi.fn().mockResolvedValue({ items: [] }),
-    } as never);
+    }) as never);
 
     render(<SessionsPage />);
 
@@ -60,14 +55,31 @@ describe("SessionsPage", () => {
   });
 
   it("renders error state when sessions request fails", async () => {
-    vi.mocked(getApiClient).mockReturnValue({
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
       request: vi.fn().mockRejectedValue(new Error("sessions failed")),
-    } as never);
+    }) as never);
 
     render(<SessionsPage />);
 
     await waitFor(() => {
       expect(screen.getByText("sessions failed")).toBeInTheDocument();
     });
+  });
+
+  it("does not fetch sessions when user is unauthenticated", async () => {
+    vi.mocked(useAuth).mockReturnValue(createAuthContextValue({
+      isAuthenticated: false,
+    }) as never);
+    const request = vi.fn();
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
+      request,
+    }) as never);
+
+    render(<SessionsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Loading sessions...")).toBeInTheDocument();
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 });

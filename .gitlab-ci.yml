@@ -127,6 +127,17 @@ test-cdk:
   script:
     - cd infra/cdk && npm test -- --runInBand
 
+test-spa:
+  extends: .test_job_base
+  script:
+    - cd spa
+    - npm ci
+    - npm test
+  artifacts:
+    when: always
+    paths:
+      - spa/coverage/
+
 # --- PLAN STAGE ---
 
 plan-infra:

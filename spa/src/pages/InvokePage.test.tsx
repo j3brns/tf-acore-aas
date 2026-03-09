@@ -2,18 +2,22 @@ import React from "react";
 import TestRenderer, { act } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createAuthContextValue } from "../test/mockFactories";
+import { asyncAccepted, buildAgent } from "../test/testData";
 import { InvokePage } from "./InvokePage";
 
-const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamMock, useJobPollingMock } =
+const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamMock, useAuthMock, useJobPollingMock } =
     vi.hoisted(() => {
         const request = vi.fn();
         const stream = vi.fn();
+        const useAuth = vi.fn();
         return {
             getApiClientMock: vi.fn(() => ({ request, stream })),
             getAccessTokenMock: vi.fn(async () => "token"),
             navigateMock: vi.fn(),
             requestMock: request,
             streamMock: stream,
+            useAuthMock: useAuth,
             useJobPollingMock: vi.fn(() => ({ status: null, loading: false, error: null })),
         };
     });
@@ -27,10 +31,7 @@ vi.mock("../api/client", async () => {
 });
 
 vi.mock("../auth/useAuth", () => ({
-    useAuth: () => ({
-        getAccessToken: getAccessTokenMock,
-        isAuthenticated: true,
-    }),
+    useAuth: useAuthMock,
 }));
 
 vi.mock("../hooks/useJobPolling", () => ({
@@ -46,21 +47,6 @@ vi.mock("react-router-dom", async () => {
         useParams: () => ({ agentName: "echo-agent" }),
     };
 });
-
-type AgentMode = "sync" | "streaming" | "async";
-
-function buildAgent(invocationMode: AgentMode) {
-    return {
-        agent_name: "echo-agent",
-        version: "1.0.0",
-        owner_team: "platform",
-        tier_minimum: "basic" as const,
-        deployed_at: "2026-03-08T00:00:00Z",
-        invocation_mode: invocationMode,
-        streaming_enabled: invocationMode === "streaming",
-        estimated_duration_seconds: 5,
-    };
-}
 
 async function flushMicrotasks(): Promise<void> {
     await act(async () => {
@@ -80,6 +66,10 @@ function getInvokeBody(): Record<string, unknown> {
 describe("InvokePage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        useAuthMock.mockReturnValue(createAuthContextValue({
+            isAuthenticated: true,
+            getAccessToken: getAccessTokenMock,
+        }));
     });
 
     it("sends sync invoke requests with contract-compatible input payload", async () => {
@@ -149,12 +139,7 @@ describe("InvokePage", () => {
     });
 
     it("handles async accepted responses and starts polling with jobId", async () => {
-        requestMock.mockResolvedValueOnce(buildAgent("async")).mockResolvedValueOnce({
-            jobId: "job-777",
-            status: "accepted",
-            mode: "async",
-            pollUrl: "/v1/jobs/job-777",
-        });
+        requestMock.mockResolvedValueOnce(buildAgent("async")).mockResolvedValueOnce(asyncAccepted);
 
         let renderer: TestRenderer.ReactTestRenderer;
         await act(async () => {
@@ -175,5 +160,135 @@ describe("InvokePage", () => {
 
         expect(getInvokeBody()).toEqual({ input: "run async" });
         expect(useJobPollingMock).toHaveBeenLastCalledWith("job-777", getAccessTokenMock);
+    });
+
+    it("surfaces async contract error when accepted response has no job id", async () => {
+        requestMock.mockResolvedValueOnce(buildAgent("async")).mockResolvedValueOnce({
+            jobId: "",
+            status: "accepted",
+            mode: "async",
+            pollUrl: "",
+        });
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const textarea = renderer!.root.findByType("textarea");
+        act(() => {
+            textarea.props.onChange({ target: { value: "run async without id" } });
+        });
+
+        const form = renderer!.root.findByType("form");
+        await act(async () => {
+            await form.props.onSubmit({ preventDefault: () => undefined });
+        });
+
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("Async invoke response missing jobId");
+    });
+
+    it("does not fetch agent details when unauthenticated", async () => {
+        useAuthMock.mockReturnValue(createAuthContextValue({
+            isAuthenticated: false,
+            getAccessToken: getAccessTokenMock,
+        }));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        expect(requestMock).not.toHaveBeenCalled();
+        expect(JSON.stringify(renderer!.toJSON())).toContain("Loading...");
+    });
+
+    it("shows fetch error when initial agent lookup fails", async () => {
+        requestMock.mockRejectedValueOnce(new Error("agent lookup failed"));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        expect(JSON.stringify(renderer!.toJSON())).toContain("agent lookup failed");
+    });
+
+    it("renders async completion link and polling error details", async () => {
+        useJobPollingMock.mockReturnValue({
+            status: {
+                jobId: "job-777",
+                tenantId: "tenant-1",
+                agentName: "echo-agent",
+                status: "completed",
+                createdAt: "2026-03-08T00:00:00Z",
+                completedAt: "2026-03-08T00:00:10Z",
+                resultUrl: "https://example.test/result",
+            },
+            loading: false,
+            error: "polling warning",
+        });
+        requestMock.mockResolvedValueOnce(buildAgent("async")).mockResolvedValueOnce(asyncAccepted);
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const textarea = renderer!.root.findByType("textarea");
+        act(() => {
+            textarea.props.onChange({ target: { value: "complete async" } });
+        });
+
+        const form = renderer!.root.findByType("form");
+        await act(async () => {
+            await form.props.onSubmit({ preventDefault: () => undefined });
+        });
+
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("View Results");
+        expect(pageText).toContain("polling warning");
+    });
+
+    it("navigates back to catalogue when back button is clicked", async () => {
+        requestMock.mockResolvedValueOnce(buildAgent("sync"));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const backButton = renderer!
+            .root
+            .findAllByType("button")
+            .find((node) => {
+                const children = node.props.children;
+                if (typeof children === "string") {
+                    return children.includes("Back to Catalogue");
+                }
+                if (Array.isArray(children)) {
+                    return children.join("").includes("Back to Catalogue");
+                }
+                return false;
+            });
+        if (!backButton) {
+            throw new Error("Back button not found");
+        }
+        act(() => {
+            backButton.props.onClick();
+        });
+
+        expect(navigateMock).toHaveBeenCalledWith("/");
     });
 });
