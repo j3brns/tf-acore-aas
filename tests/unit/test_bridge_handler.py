@@ -554,6 +554,76 @@ def test_get_job_status_returns_job_payload(setup_data):
     assert body["resultUrl"] is None
 
 
+def test_get_job_status_rejects_non_contract_route_with_job_id_path_param(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+    jobs_table.put_item(
+        Item={
+            "PK": "TENANT#t-001",
+            "SK": "JOB#job-123",
+            "job_id": "job-123",
+            "tenant_id": "t-001",
+            "agent_name": "echo-agent",
+            "status": "running",
+            "created_at": "2026-03-01T10:00:00Z",
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/platform/ops/jobs/job-123",
+        "pathParameters": {"jobId": "job-123"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+def test_get_job_status_accepts_stage_prefixed_contract_route(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    jobs_table = ddb.Table("platform-jobs")
+    jobs_table.put_item(
+        Item={
+            "PK": "TENANT#t-001",
+            "SK": "JOB#job-123",
+            "job_id": "job-123",
+            "tenant_id": "t-001",
+            "agent_name": "echo-agent",
+            "status": "running",
+            "created_at": "2026-03-01T10:00:00Z",
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/prod/v1/jobs/job-123",
+        "pathParameters": {"jobId": "job-123"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["jobId"] == "job-123"
+
+
 def test_get_job_status_generates_presigned_result_url_with_expected_expiry(setup_data):
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
     jobs_table = ddb.Table("platform-jobs")

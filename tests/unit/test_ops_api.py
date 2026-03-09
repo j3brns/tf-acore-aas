@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.tenant_api import handler as tenant_api_handler
 from tests.unit.test_tenant_api_handler import (
+    FakeDynamoDbResource,
     FakeEvents,
     FakeMemoryProvisioner,
     FakeScopedDb,
@@ -33,6 +34,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     deps = tenant_api_handler.TenantApiDependencies(
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
+        dynamodb=FakeDynamoDbResource(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
     )

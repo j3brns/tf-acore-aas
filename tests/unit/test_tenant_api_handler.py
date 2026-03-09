@@ -121,6 +121,25 @@ class FakeMemoryProvisioner:
         return {"memoryStoreArn": f"arn:aws:memory:eu-west-2::store/{tenant_id}"}
 
 
+class FakeDynamoDbTable:
+    def __init__(self) -> None:
+        self.scan_calls: list[dict[str, Any]] = []
+
+    def scan(self, **kwargs: Any) -> dict[str, Any]:
+        self.scan_calls.append(dict(kwargs))
+        return {"Items": []}
+
+
+class FakeDynamoDbResource:
+    def __init__(self) -> None:
+        self.tables: dict[str, FakeDynamoDbTable] = {}
+
+    def Table(self, name: str) -> FakeDynamoDbTable:  # noqa: N802 - boto3 compatibility
+        if name not in self.tables:
+            self.tables[name] = FakeDynamoDbTable()
+        return self.tables[name]
+
+
 class FakeLambdaContext:
     function_name = "tenant-api"
     memory_limit_in_mb = 256
@@ -139,6 +158,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     deps = tenant_api_handler.TenantApiDependencies(
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
+        dynamodb=FakeDynamoDbResource(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
     )

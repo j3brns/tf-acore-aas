@@ -4,7 +4,7 @@
 # =============================================================================
 
 .PHONY: help bootstrap ensure-tools validate-local validate-local-full
-.PHONY: validate-local-prereqs validate-python validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
+.PHONY: validate-local-prereqs validate-python validate-openapi validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
 .PHONY: docs-sync-audit docs-sync-stamp rules-sync-audit
 .PHONY: dev dev-stop dev-logs dev-invoke
@@ -152,6 +152,11 @@ validate-python:
 	uv run ruff check .
 	uv run ruff format --check .
 	cd infra/cdk && npx --no-install pyright --project ../../pyrightconfig.json
+	@$(MAKE) --no-print-directory validate-openapi
+
+## validate-openapi: Validate canonical OpenAPI route contract
+validate-openapi:
+	uv run pytest tests/unit/test_openapi_contract_routes.py
 
 ## validate-agent-manifest: Validate agent pyproject.toml [tool.agentcore] section
 validate-agent-manifest:
