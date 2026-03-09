@@ -30,10 +30,27 @@ default:
 
 .aws_oidc_base:
   before_script:
-    - apt-get update && apt-get install -y curl nodejs npm unzip jq
+    - |
+      if command -v apt-get >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then
+        apt-get update && apt-get install -y curl nodejs npm unzip jq
+      else
+        echo "Skipping apt bootstrap (non-privileged runner or apt-get unavailable); using existing/user-space tools."
+      fi
     - curl -Ls https://astral.sh/uv/install.sh | sh
     - export PATH="$HOME/.local/bin:$PATH"
     - make ensure-tools
+    - |
+      export PATH="$HOME/.local/bin:$PATH"
+      if ! command -v aws >/dev/null 2>&1; then
+        echo "AWS CLI not found; installing user-scoped awscli with uv."
+        uv tool install --force awscli
+      fi
+      if ! command -v aws >/dev/null 2>&1; then
+        echo "ERROR: AWS CLI required for OIDC bootstrap is unavailable."
+        echo "Install aws in the runner image or allow uv package downloads."
+        exit 1
+      fi
+      aws --version
     - |
       KST=($(aws sts assume-role-with-web-identity \
         --role-arn ${AWS_ROLE_ARN} \
