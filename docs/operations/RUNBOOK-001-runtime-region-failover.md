@@ -71,8 +71,8 @@ make failover-lock-release ENV=prod
 ## Post-Incident
 - File incident report within 24 hours
 - Check Frankfurt quota headroom after failover (higher latency = longer sessions = more quota)
-- Confirm all DLQ messages from during failover have been processed:
-  make ops-dlq-inspect QUEUE=platform-async-dlq-prod ENV=prod
+- Confirm bridge/webhook DLQ messages from during failover have been processed:
+  `make ops-dlq-inspect QUEUE=platform-bridge-dlq-prod ENV=prod`
 
 ## Notes
 - Frankfurt adds ~25ms RTT vs Dublin's ~12ms — visible in P99 latency metrics

@@ -22,7 +22,7 @@
 .PHONY: ops-security-events ops-dlq-inspect ops-dlq-redrive ops-error-rate
 .PHONY: ops-notify-tenant ops-service-health ops-billing-status
 .PHONY: ops-update-tenant-budget ops-fail-job ops-audit-export ops-page-security ops-backfill-tenant-role-arn
-.PHONY: logs-bridge logs-authoriser logs-tenant-api logs-async-runner logs-bff
+.PHONY: logs-bridge logs-authoriser logs-tenant-api logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
 .PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
@@ -611,15 +611,6 @@ logs-tenant-api:
 		aws logs tail /platform/tenant-api/$(ENV) --since $(MINUTES)m; \
 	else \
 		aws logs tail /platform/tenant-api/$(ENV) --follow; \
-	fi
-
-## logs-async-runner: Tail async runner Lambda logs
-## Usage: make logs-async-runner [ENV=prod] [MINUTES=30]
-logs-async-runner:
-	@if [ -n "$(MINUTES)" ]; then \
-		aws logs tail /platform/async-runner/$(ENV) --since $(MINUTES)m; \
-	else \
-		aws logs tail /platform/async-runner/$(ENV) --follow; \
 	fi
 
 ## logs-bff: Tail BFF Lambda logs

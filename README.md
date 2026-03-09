@@ -59,7 +59,6 @@ platform/
 │   ├── bridge/                Agent invocation bridge
 │   ├── bff/                   Token refresh and session keepalive
 │   ├── tenant-api/            Tenant CRUD API
-│   ├── async-runner/          Long-running agent job processor
 │   ├── webhook-delivery/      Async job result delivery
 │   └── data-access-lib/       Tenant-scoped DynamoDB/S3 library
 ├── spa/                       React SPA frontend

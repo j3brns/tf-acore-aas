@@ -260,6 +260,104 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     assert detail["tenantId"] == "t-001"
 
 
+def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, Any]) -> None:
+    response = _invoke(
+        _event(
+            method="POST",
+            body={
+                "tenantId": "Tenant-Acme-001",
+                "appId": "app-001",
+                "displayName": "Acme Ltd",
+                "tier": "standard",
+                "ownerEmail": "owner@example.com",
+                "ownerTeam": "team-acme",
+                "accountId": "123456789012",
+            },
+        )
+    )
+
+    assert response["statusCode"] == 201
+    body = _body(response)
+    assert body["tenant"]["tenantId"] == "tenant-acme-001"
+    assert fake_state["deps"].memory_provisioner.calls == [
+        {"tenant_id": "tenant-acme-001", "app_id": "app-001"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "expected_error"),
+    [
+        ("ab", "tenantId must be 3-32 characters"),
+        ("a" * 33, "tenantId must be 3-32 characters"),
+        ("tenant--one", "tenantId must not contain consecutive hyphens"),
+        ("tenant_one", "tenantId must match ^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"),
+        ("stub", "tenantId is reserved"),
+    ],
+)
+def test_create_tenant_rejects_invalid_tenant_id_values(
+    fake_state: dict[str, Any], tenant_id: str, expected_error: str
+) -> None:
+    response = _invoke(
+        _event(
+            method="POST",
+            body={
+                "tenantId": tenant_id,
+                "appId": "app-001",
+                "displayName": "Acme Ltd",
+                "tier": "standard",
+                "ownerEmail": "owner@example.com",
+                "ownerTeam": "team-acme",
+                "accountId": "123456789012",
+            },
+        )
+    )
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"] == expected_error
+
+
+def test_create_tenant_detects_collision_after_tenant_id_normalization(
+    fake_state: dict[str, Any],
+) -> None:
+    first = _invoke(
+        _event(
+            method="POST",
+            body={
+                "tenantId": "tenant-collision-001",
+                "appId": "app-001",
+                "displayName": "Acme Ltd",
+                "tier": "standard",
+                "ownerEmail": "owner@example.com",
+                "ownerTeam": "team-acme",
+                "accountId": "123456789012",
+            },
+        )
+    )
+    assert first["statusCode"] == 201
+
+    second = _invoke(
+        _event(
+            method="POST",
+            body={
+                "tenantId": "TENANT-COLLISION-001",
+                "appId": "app-001",
+                "displayName": "Acme Ltd 2",
+                "tier": "standard",
+                "ownerEmail": "owner2@example.com",
+                "ownerTeam": "team-acme",
+                "accountId": "123456789012",
+            },
+        )
+    )
+
+    assert second["statusCode"] == 409
+    error = _body(second)["error"]
+    assert error["code"] == "CONFLICT"
+    assert error["message"] == "Tenant already exists"
+
+
 def test_read_own_tenant_allowed_and_enriched_with_usage(fake_state: dict[str, Any]) -> None:
     fake_state["db"].items[("TENANT#t-002", "METADATA")] = {
         "PK": "TENANT#t-002",

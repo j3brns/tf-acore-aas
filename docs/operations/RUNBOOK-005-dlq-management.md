@@ -44,11 +44,9 @@ make ops-error-rate ENV=prod MINUTES=10
 # Confirm error rate is recovering
 ```
 
-## Async Job DLQ (platform-async-dlq-{env})
-Messages here are jobs where the agent failed 3 times.
-Each message has a jobId. Update the JOB record manually after investigation:
-```bash
-make ops-fail-job JOB={jobId} REASON="agent_error_after_retries" ENV=prod
-# This marks the job as failed and notifies the tenant if webhook registered
-```
-SLA: async jobs must complete or fail within 8 hours of submission.
+## Native Async Note
+There is no dedicated async-runner DLQ in the native AgentCore async model.
+Async lifecycle failures surface through:
+- bridge DLQ (submission/dispatch path)
+- webhook DLQ (delivery path)
+- job status polling (`GET /v1/jobs/{jobId}`) for terminal failure metadata
