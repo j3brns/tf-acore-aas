@@ -22,6 +22,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -551,10 +552,21 @@ export class PlatformStack extends cdk.Stack {
 
     const spaAllowedOrigin = cdk.Fn.join('', ['https://', this.spaDistribution.attrDomainName]);
 
+    // API Access Log Group (TASK-165)
+    const apiAccessLogGroup = new logs.LogGroup(this, 'ApiAccessLogGroup', {
+      logGroupName: `/aws/apigateway/${this.stackName}-rest-api-access-logs`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     this.api = new apigateway.RestApi(this, 'PlatformRestApi', {
       restApiName: `${this.stackName}-rest-api`,
       description: 'Platform northbound REST API (ADR-003)',
       apiKeySourceType: apigateway.ApiKeySourceType.AUTHORIZER,
+      cloudWatchRole: true,
+      endpointConfiguration: {
+        types: [apigateway.EndpointType.REGIONAL],
+      },
       defaultCorsPreflightOptions: {
         allowOrigins: [spaAllowedOrigin],
         allowMethods: apigateway.Cors.ALL_METHODS,
@@ -571,6 +583,28 @@ export class PlatformStack extends cdk.Stack {
         stageName: 'prod',
         tracingEnabled: true,
         metricsEnabled: true,
+        throttlingRateLimit: 100,
+        throttlingBurstLimit: 200,
+        accessLogDestination: new apigateway.LogGroupLogDestination(apiAccessLogGroup),
+        accessLogFormat: apigateway.AccessLogFormat.custom(JSON.stringify({
+          requestId: '$context.requestId',
+          extendedRequestId: '$context.extendedRequestId',
+          ip: '$context.identity.sourceIp',
+          caller: '$context.identity.caller',
+          user: '$context.identity.user',
+          requestTime: '$context.requestTime',
+          httpMethod: '$context.httpMethod',
+          resourcePath: '$context.resourcePath',
+          status: '$context.status',
+          protocol: '$context.protocol',
+          responseLength: '$context.responseLength',
+          tenantId: '$context.authorizer.tenantid',
+          appId: '$context.authorizer.appid',
+          sub: '$context.authorizer.sub',
+          tier: '$context.authorizer.tier',
+        })),
+        dataTraceEnabled: false,
+        loggingLevel: apigateway.MethodLoggingLevel.INFO,
         methodOptions: {
           '/v1/agents/{agentName}/invoke/POST': {
             throttlingRateLimit: 50,
@@ -593,6 +627,56 @@ export class PlatformStack extends cdk.Stack {
             metricsEnabled: true,
           },
         },
+      },
+    });
+
+    // Add Gateway Responses for CORS and custom errors (TASK-165)
+    // We use quotes for the header values as they are passed to CloudFormation
+    this.api.addGatewayResponse('Default4xxResponse', {
+      type: apigateway.ResponseType.DEFAULT_4XX,
+      responseHeaders: {
+        'gatewayresponses.header.Access-Control-Allow-Origin': `'${spaAllowedOrigin}'`,
+        'gatewayresponses.header.Access-Control-Allow-Credentials': "'true'",
+        'gatewayresponses.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+        'gatewayresponses.header.Access-Control-Allow-Methods': "'GET,POST,OPTIONS'",
+      },
+      templates: {
+        'application/json': '{"message":$context.error.messageString,"requestId":"$context.requestId"}',
+      },
+    });
+
+    this.api.addGatewayResponse('Default5xxResponse', {
+      type: apigateway.ResponseType.DEFAULT_5XX,
+      responseHeaders: {
+        'gatewayresponses.header.Access-Control-Allow-Origin': `'${spaAllowedOrigin}'`,
+        'gatewayresponses.header.Access-Control-Allow-Credentials': "'true'",
+        'gatewayresponses.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+        'gatewayresponses.header.Access-Control-Allow-Methods': "'GET,POST,OPTIONS'",
+      },
+      templates: {
+        'application/json': '{"message":"Internal server error","requestId":"$context.requestId"}',
+      },
+    });
+
+    this.api.addGatewayResponse('UnauthorizedResponse', {
+      type: apigateway.ResponseType.UNAUTHORIZED,
+      responseHeaders: {
+        'gatewayresponses.header.Access-Control-Allow-Origin': `'${spaAllowedOrigin}'`,
+        'gatewayresponses.header.Access-Control-Allow-Credentials': "'true'",
+      },
+      templates: {
+        'application/json': '{"message":"Unauthorized","requestId":"$context.requestId"}',
+      },
+    });
+
+    this.api.addGatewayResponse('AccessDeniedResponse', {
+      type: apigateway.ResponseType.ACCESS_DENIED,
+      responseHeaders: {
+        'gatewayresponses.header.Access-Control-Allow-Origin': `'${spaAllowedOrigin}'`,
+        'gatewayresponses.header.Access-Control-Allow-Credentials': "'true'",
+      },
+      templates: {
+        'application/json': '{"message":"Access denied","requestId":"$context.requestId"}',
       },
     });
 
