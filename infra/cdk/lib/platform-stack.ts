@@ -650,6 +650,10 @@ export class PlatformStack extends cdk.Stack {
 
     const tenantApiIntegration = new apigateway.LambdaIntegration(this.tenantApiFn, { proxy: true });
     const bridgeIntegration = new apigateway.LambdaIntegration(bridgeAlias, { proxy: true });
+    const bridgeStreamingIntegration = new apigateway.LambdaIntegration(bridgeAlias, {
+      proxy: true,
+      responseTransferMode: apigateway.ResponseTransferMode.STREAM,
+    });
 
     health.addMethod('GET', tenantApiIntegration, securedMethodOptions);
     sessions.addMethod('GET', tenantApiIntegration, securedMethodOptions);
@@ -681,7 +685,7 @@ export class PlatformStack extends cdk.Stack {
 
     agents.addMethod('GET', bridgeIntegration, securedMethodOptions);
     agentByName.addMethod('GET', bridgeIntegration, securedMethodOptions);
-    agentInvoke.addMethod('POST', bridgeIntegration, securedMethodOptions);
+    agentInvoke.addMethod('POST', bridgeStreamingIntegration, securedMethodOptions);
     jobById.addMethod(
       'GET',
       bridgeIntegration,
