@@ -394,14 +394,15 @@ paths:
       operationId: exportTenantAudit
       summary: Export tenant audit data
       description: >
-        Returns a presigned URL for a tenant audit export (data subject rights /
-        admin export workflow). Included in the northbound contract for future
-        implementation.
+        Generates a tenant audit export from the invocation log and returns a
+        presigned download URL for the exported artifact.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
       parameters:
         - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/AuditExportStart"
+        - $ref: "#/components/parameters/AuditExportEnd"
       responses:
         "200":
           description: Presigned audit export URL
@@ -812,6 +813,20 @@ components:
         minLength: 3
         maxLength: 32
         pattern: "^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"
+    AuditExportStart:
+      in: query
+      name: start
+      required: false
+      description: Optional inclusive UTC timestamp lower bound for invocation export.
+      schema:
+        $ref: "#/components/schemas/UtcTimestamp"
+    AuditExportEnd:
+      in: query
+      name: end
+      required: false
+      description: Optional inclusive UTC timestamp upper bound for invocation export.
+      schema:
+        $ref: "#/components/schemas/UtcTimestamp"
     JobId:
       in: path
       name: jobId

@@ -152,6 +152,40 @@ class FakeMemoryProvisioner:
         return {"memoryStoreArn": f"arn:aws:memory:eu-west-2::store/{tenant_id}"}
 
 
+class FakeTenantScopedS3:
+    def __init__(self) -> None:
+        self.put_calls: list[dict[str, Any]] = []
+        self.presign_calls: list[dict[str, Any]] = []
+
+    def put_object(self, bucket: str, key: str, body: bytes, **kwargs: Any) -> None:
+        self.put_calls.append(
+            {
+                "bucket": bucket,
+                "key": key,
+                "body": body,
+                "kwargs": dict(kwargs),
+            }
+        )
+
+    def generate_presigned_url(
+        self,
+        bucket: str,
+        key: str,
+        *,
+        expires_in: int = 3600,
+        client_method: str = "get_object",
+    ) -> str:
+        self.presign_calls.append(
+            {
+                "bucket": bucket,
+                "key": key,
+                "expires_in": expires_in,
+                "client_method": client_method,
+            }
+        )
+        return f"https://example.com/download/{key}?expires={expires_in}"
+
+
 class FakeDynamoDbTable:
     def __init__(self) -> None:
         self.scan_calls: list[dict[str, Any]] = []
@@ -215,7 +249,10 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     )
     monkeypatch.setenv("AWS_REGION", "eu-west-2")
     monkeypatch.setenv("TENANTS_TABLE_NAME", "platform-tenants")
+    monkeypatch.setenv("INVOCATIONS_TABLE_NAME", "platform-invocations")
     monkeypatch.setenv("EVENT_BUS_NAME", "platform-bus")
+    monkeypatch.setenv("AUDIT_EXPORT_BUCKET", "platform-audit-exports")
+    monkeypatch.setenv("AUDIT_EXPORT_URL_EXPIRY_SECONDS", "1800")
     monkeypatch.setenv("TENANT_API_KEY_SECRET_PREFIX", "platform/tenants")
     monkeypatch.setenv("OPS_LOCKS_TABLE", "platform-ops-locks")
     monkeypatch.setenv("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
@@ -687,22 +724,126 @@ def test_list_tenants_admin_only(fake_state: dict[str, Any]) -> None:
     assert items[0]["tenantId"] == "t-1"
 
 
-def test_audit_export_returns_presigned_url_stub(fake_state: dict[str, Any]) -> None:
+def test_audit_export_writes_real_s3_export_and_returns_presigned_url(
+    fake_state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_state["db"].items[("TENANT#t-005", "METADATA")] = {
         "PK": "TENANT#t-005",
         "SK": "METADATA",
         "tenantId": "t-005",
         "status": "active",
+        "appId": "app-005",
     }
+    fake_state["db"].items[("TENANT#t-005", "INV#2026-02-25T10:00:00Z#inv-001")] = {
+        "PK": "TENANT#t-005",
+        "SK": "INV#2026-02-25T10:00:00Z#inv-001",
+        "tenantId": "t-005",
+        "appId": "app-005",
+        "invocationId": "inv-001",
+        "timestamp": "2026-02-25T10:00:00Z",
+        "status": "success",
+    }
+    fake_state["db"].items[("TENANT#t-005", "INV#2026-02-25T13:00:00Z#inv-002")] = {
+        "PK": "TENANT#t-005",
+        "SK": "INV#2026-02-25T13:00:00Z#inv-002",
+        "tenantId": "t-005",
+        "appId": "app-005",
+        "invocationId": "inv-002",
+        "timestamp": "2026-02-25T13:00:00Z",
+        "status": "success",
+    }
+
+    fake_s3 = FakeTenantScopedS3()
+    monkeypatch.setattr(tenant_api_handler.secrets, "token_hex", lambda _n: "feedfacecafebeef")
+    monkeypatch.setattr(tenant_api_handler, "_tenant_s3_for_scope", lambda **_kwargs: fake_s3)
 
     event = _event(method="GET", tenant_id="t-005")
     event["path"] = "/v1/tenants/t-005/audit-export"
+    event["queryStringParameters"] = {
+        "start": "2026-02-25T09:00:00Z",
+        "end": "2026-02-25T11:00:00Z",
+    }
     response = _invoke(event)
 
     assert response["statusCode"] == 200
     body = _body(response)
-    assert "downloadUrl" in body
     assert body["tenantId"] == "t-005"
+    assert body["downloadUrl"].startswith("https://example.com/download/")
+    assert body["expiresAt"] == "2026-02-25T12:30:00Z"
+
+    assert len(fake_s3.put_calls) == 1
+    put_call = fake_s3.put_calls[0]
+    assert put_call["bucket"] == "platform-audit-exports"
+    assert (
+        put_call["key"]
+        == "tenants/t-005/audit-exports/audit-export-20260225T120000Z-feedfacecafebeef.json"
+    )
+    assert put_call["kwargs"]["ContentType"] == "application/json"
+
+    exported_payload = json.loads(put_call["body"].decode("utf-8"))
+    assert exported_payload["tenantId"] == "t-005"
+    assert exported_payload["recordCount"] == 1
+    assert exported_payload["windowStart"] == "2026-02-25T09:00:00Z"
+    assert exported_payload["windowEnd"] == "2026-02-25T11:00:00Z"
+    assert exported_payload["records"][0]["invocationId"] == "inv-001"
+
+    assert fake_s3.presign_calls == [
+        {
+            "bucket": "platform-audit-exports",
+            "key": (
+                "tenants/t-005/audit-exports/audit-export-20260225T120000Z-feedfacecafebeef.json"
+            ),
+            "expires_in": 1800,
+            "client_method": "get_object",
+        }
+    ]
+
+
+def test_audit_export_rejects_invalid_time_window(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-005", "METADATA")] = {
+        "PK": "TENANT#t-005",
+        "SK": "METADATA",
+        "tenantId": "t-005",
+        "status": "active",
+        "appId": "app-005",
+    }
+
+    event = _event(method="GET", tenant_id="t-005")
+    event["path"] = "/v1/tenants/t-005/audit-export"
+    event["queryStringParameters"] = {
+        "start": "2026-02-25T12:00:00Z",
+        "end": "2026-02-25T11:00:00Z",
+    }
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"] == "start must be less than or equal to end"
+
+
+def test_audit_export_requires_bucket_configuration(
+    fake_state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_state["db"].items[("TENANT#t-005", "METADATA")] = {
+        "PK": "TENANT#t-005",
+        "SK": "METADATA",
+        "tenantId": "t-005",
+        "status": "active",
+        "appId": "app-005",
+    }
+    monkeypatch.delenv("AUDIT_EXPORT_BUCKET")
+
+    event = _event(method="GET", tenant_id="t-005")
+    event["path"] = "/v1/tenants/t-005/audit-export"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 500
+    error = _body(response)["error"]
+    assert error["code"] == "INTERNAL_ERROR"
+    assert error["message"] == "Audit export bucket is not configured"
 
 
 def test_platform_failover_updates_runtime_region_when_lock_is_valid(
