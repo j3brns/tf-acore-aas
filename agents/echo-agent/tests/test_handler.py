@@ -28,7 +28,7 @@ if str(_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(_AGENT_ROOT))
 
 import handler as agent_handler  # noqa: E402  (must be after sys.path modification)
-from handler import _async_echo, _stream_echo, _sync_echo, invoke  # noqa: E402
+from handler import _async_echo, _parse_a2a_targets, _stream_echo, _sync_echo, invoke  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -75,6 +75,55 @@ class TestSyncEcho:
         inp = case["input"]
         result = _sync_echo(inp["prompt"], inp["appid"], inp["tenantId"])
         assert result == case["expected"]
+
+    def test_sync_a2a_orchestration_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A2A orchestration returns deterministic aggregated output."""
+        monkeypatch.setenv(
+            "A2A_AGENT_ENDPOINTS_JSON",
+            json.dumps(
+                {
+                    "retriever": "https://retriever.example",
+                    "planner": "https://planner.example",
+                }
+            ),
+        )
+
+        with (
+            patch("handler._fetch_agent_card") as mock_card,
+            patch("handler._invoke_a2a_target") as mock_invoke,
+        ):
+            mock_card.side_effect = [
+                {"name": "retriever"},
+                {"name": "planner"},
+            ]
+            mock_invoke.side_effect = ["docs found", "plan ready"]
+
+            result = _sync_echo(
+                "hello",
+                "app-a2a",
+                "tenant-a2a",
+                a2a_targets=["retriever", "planner"],
+            )
+
+        assert result["mode"] == "sync"
+        assert result["orchestration"] == "a2a"
+        assert result["output"] == "retriever=docs found | planner=plan ready"
+        assert len(result["delegates"]) == 2
+        assert result["delegates"][0]["agentCardName"] == "retriever"
+
+    def test_sync_a2a_missing_target_mapping_returns_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing target mapping returns a structured orchestration failure."""
+        monkeypatch.setenv(
+            "A2A_AGENT_ENDPOINTS_JSON", json.dumps({"known": "https://known.example"})
+        )
+
+        result = _sync_echo("hello", "app-a2a", "tenant-a2a", a2a_targets=["unknown"])
+
+        assert result["code"] == "A2A_ORCHESTRATION_FAILED"
+        assert result["mode"] == "sync"
+        assert result["tenantId"] == "tenant-a2a"
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +317,21 @@ class TestHandlerDispatch:
         assert isinstance(result, dict)
         assert result["accepted"] is True
         mock_add.assert_called_once()
+
+    def test_dispatch_rejects_a2a_for_streaming_mode(self) -> None:
+        """A2A orchestration is only valid for sync mode."""
+        payload: dict[str, Any] = {
+            "prompt": "stream me",
+            "mode": "streaming",
+            "a2aTargets": ["planner"],
+        }
+        result = agent_handler.handler(payload, self._make_context())
+        assert isinstance(result, dict)
+        assert result["code"] == "INVALID_A2A_CONFIGURATION"
+
+
+def test_parse_a2a_targets_normalizes_and_dedupes() -> None:
+    assert _parse_a2a_targets([" retriever ", "", "retriever", None, "planner"]) == [
+        "retriever",
+        "planner",
+    ]
