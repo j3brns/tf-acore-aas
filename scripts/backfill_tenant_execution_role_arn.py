@@ -98,9 +98,10 @@ def _scan_tenant_rows(table: Any, *, tenant_id: str | None) -> list[TenantRow]:
             row = _tenant_row(item)
             if row is not None:
                 rows.append(row)
-        if "LastEvaluatedKey" not in response:
+        last_evaluated_key = response.get("LastEvaluatedKey")
+        if not last_evaluated_key:
             break
-        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        scan_kwargs["ExclusiveStartKey"] = last_evaluated_key
     return rows
 
 
@@ -135,68 +136,80 @@ def run(args: argparse.Namespace) -> int:
         print("No tenant rows found")
         return 1
 
-    verified = 0
+    already_valid = 0
+    ready_from_ssm = 0
+    repaired = 0
     backfilled = 0
     unresolved = 0
-    malformed = 0
+    invalid_record = 0
+    invalid_ssm = 0
 
     for row in rows:
         current = row.execution_role_arn
-        if current:
-            validation_error = _validate_role_arn(current, row.account_id)
-            if validation_error is None:
-                verified += 1
-                print(f"[verified] tenant={row.tenant_id} source=record roleArn={current}")
-                continue
-            malformed += 1
+        record_error = _validate_role_arn(current, row.account_id) if current else None
+        if current and record_error is None:
+            already_valid += 1
+            print(f"[verified] tenant={row.tenant_id} source=record roleArn={current}")
+            continue
+        if current and record_error is not None:
+            invalid_record += 1
             print(
-                "[invalid] "
+                "[invalid-record] "
                 f"tenant={row.tenant_id} "
                 "source=record "
-                f"error={validation_error} "
+                f"error={record_error} "
                 f"roleArn={current}"
             )
-            continue
 
         resolved = _read_execution_role_from_ssm(
             ssm,
             tenant_id=row.tenant_id,
             param_template=args.param_template,
         )
+        reason = "record-invalid" if current else "record-missing"
         if not resolved:
             unresolved += 1
-            print(f"[missing] tenant={row.tenant_id} source=ssm")
+            print(f"[unresolved] tenant={row.tenant_id} source=ssm reason={reason}")
             continue
 
         validation_error = _validate_role_arn(resolved, row.account_id)
         if validation_error is not None:
-            malformed += 1
+            invalid_ssm += 1
             print(
-                "[invalid] "
+                "[invalid-ssm] "
                 f"tenant={row.tenant_id} "
                 "source=ssm "
+                f"reason={reason} "
                 f"error={validation_error} "
                 f"roleArn={resolved}"
             )
             continue
 
-        verified += 1
+        if current:
+            repaired += 1
+        else:
+            ready_from_ssm += 1
         if args.apply:
             _apply_backfill(table, row=row, execution_role_arn=resolved)
             backfilled += 1
-            print(f"[backfilled] tenant={row.tenant_id} roleArn={resolved}")
+            print(
+                f"[backfilled] tenant={row.tenant_id} source=ssm reason={reason} roleArn={resolved}"
+            )
         else:
-            print(f"[ready] tenant={row.tenant_id} roleArn={resolved}")
+            print(f"[ready] tenant={row.tenant_id} source=ssm reason={reason} roleArn={resolved}")
 
     print(
         "Summary:",
         f"scanned={len(rows)}",
-        f"verified={verified}",
+        f"already_valid={already_valid}",
+        f"ready_from_ssm={ready_from_ssm}",
+        f"repaired={repaired}",
         f"backfilled={backfilled}",
         f"unresolved={unresolved}",
-        f"invalid={malformed}",
+        f"invalid_record={invalid_record}",
+        f"invalid_ssm={invalid_ssm}",
     )
-    if unresolved > 0 or malformed > 0:
+    if unresolved > 0 or invalid_ssm > 0:
         return 1
     return 0
 
