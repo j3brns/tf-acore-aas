@@ -104,4 +104,5 @@ new AgentCoreStack(app, `platform-agentcore-${env}`, {
   env: runtimeEnv,
   description: `Platform AgentCore configuration (${PRIMARY_RUNTIME_REGION}) — ${env}`,
   homeRegion: HOME_REGION,
+  runtimeNetworkPosture: 'PUBLIC_WITH_COMPENSATING_CONTROLS',
 });

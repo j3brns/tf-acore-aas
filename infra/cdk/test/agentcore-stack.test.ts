@@ -15,6 +15,7 @@ describe('AgentCoreStack (TASK-024)', () => {
     const stack = new AgentCoreStack(app, 'platform-agentcore-dev', {
       env: { region: 'eu-west-1' },
       homeRegion: 'eu-west-2',
+      runtimeNetworkPosture: 'PUBLIC_WITH_COMPENSATING_CONTROLS',
     });
 
     return Template.fromStack(stack);
@@ -41,6 +42,27 @@ describe('AgentCoreStack (TASK-024)', () => {
       },
       RequestHeaderConfiguration: {
         RequestHeaderAllowlist: ['authorization', 'x-tenant-id', 'x-app-id'],
+      },
+    });
+  });
+
+  test('records the public runtime posture as an explicit, reviewable exception', () => {
+    template.hasResource('AWS::BedrockAgentCore::Runtime', {
+      Metadata: {
+        RuntimeNetworkPosture: {
+          Decision: 'PUBLIC_WITH_COMPENSATING_CONTROLS',
+          Justification: 'ADR-009_NO_RUNTIME_REGION_VPC',
+          RevisitTrigger: Match.stringLikeRegexp('NetworkMode=VPC'),
+        },
+      },
+      Properties: {
+        NetworkConfiguration: {
+          NetworkMode: 'PUBLIC',
+        },
+        Tags: Match.objectLike({
+          networkMode: 'PUBLIC',
+          networkPosture: 'PUBLIC_WITH_COMPENSATING_CONTROLS',
+        }),
       },
     });
   });
@@ -86,6 +108,12 @@ describe('AgentCoreStack (TASK-024)', () => {
   test('exports runtime region and memory template parameter name', () => {
     template.hasOutput('AgentCoreRuntimeRegion', {
       Value: 'eu-west-1',
+    });
+    template.hasOutput('AgentCoreRuntimeNetworkMode', {
+      Value: 'PUBLIC',
+    });
+    template.hasOutput('AgentCoreRuntimeNetworkPostureDecision', {
+      Value: 'PUBLIC_WITH_COMPENSATING_CONTROLS',
     });
 
     template.hasOutput('TenantMemoryTemplateParameterName', {

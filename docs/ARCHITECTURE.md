@@ -57,6 +57,15 @@ but this platform continues to use the ADR-009 London-home / Dublin-runtime topo
 That deployment policy remains in force pending an explicit architecture review and
 controlled migration plan.
 
+Current runtime network posture: `AWS::BedrockAgentCore::Runtime` remains in
+`NetworkMode: PUBLIC` by explicit exception, not by omission. The reason is structural:
+the approved ADR-009 deployment path places Runtime in eu-west-1, while this repository
+currently provisions VPC infrastructure only in eu-west-2. Moving Runtime to `VPC`
+requires a dedicated eu-west-1 VPC design covering subnets, security groups, required
+service endpoints, and egress policy. Until that exists and a successor ADR approves
+the migration, the runtime stack records the exception in CloudFormation metadata and
+tests/guard rules enforce that `PUBLIC` cannot remain an undocumented default.
+
 Policy in AgentCore is GA and baseline Cedar enforcement is now wired into the
 platform. Additional policy tuning remains an ongoing platform task.
 
@@ -90,6 +99,7 @@ Client
       Writes INVOCATION record to DynamoDB on completion
   → AgentCore Runtime eu-west-1
       Firecracker microVM isolation per session
+      NetworkMode PUBLIC by explicit exception until runtime-region VPC exists
       Calls tools via AgentCore Gateway eu-west-2
       Gateway policy engine: Cedar evaluation (LOG_ONLY in dev/staging, ENFORCE in prod)
       Gateway REQUEST interceptor: issues scoped act-on-behalf token
