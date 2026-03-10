@@ -3,13 +3,32 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { TenantStack } from '../lib/tenant-stack';
 
 describe('TenantStack (TASK-025)', () => {
-  const synthTemplate = (context: Record<string, string>) => {
+  const synthTemplate = (
+    context: Record<string, string>,
+    authorizedRuntimeRegions = ['eu-west-1', 'eu-central-1'],
+  ) => {
     const app = new cdk.App({ context });
     const stack = new TenantStack(app, 'platform-tenant-test', {
       env: { region: 'eu-west-2' },
+      authorizedRuntimeRegions,
     });
     return Template.fromStack(stack);
   };
+
+  const runtimeAccessStatement = (template: Template) => {
+    const policies = template.findResources('AWS::IAM::Policy') as Record<
+      string,
+      { Properties?: { PolicyDocument?: { Statement?: Array<Record<string, unknown>> } } }
+    >;
+    const statement = Object.values(policies)
+      .flatMap((policy) => policy.Properties?.PolicyDocument?.Statement ?? [])
+      .find((candidate) => candidate.Sid === 'AgentCoreRuntimeAccess');
+
+    expect(statement).toBeDefined();
+    return statement as { Action: string[]; Resource: string[]; Sid: string };
+  };
+
+  const asArray = (value: string | string[]) => (Array.isArray(value) ? value : [value]);
 
   const defaultContext = {
     env: 'dev',
@@ -44,7 +63,7 @@ describe('TenantStack (TASK-025)', () => {
             Resource: Match.anyValue(),
             Condition: Match.objectLike({
               'ForAllValues:StringLike': {
-                'dynamodb:LeadingKeys': Match.arrayWith(['TENANT#t-test123*', 'JOB#*']),
+                'dynamodb:LeadingKeys': ['TENANT#t-test123*'],
               },
             }),
           }),
@@ -118,6 +137,29 @@ describe('TenantStack (TASK-025)', () => {
       Name: '/platform/tenants/t-test123/api-key-id',
       Type: 'String',
     });
+  });
+
+  test('limits runtime invocation permissions to the approved primary and failover regions', () => {
+    const template = synthTemplate(defaultContext);
+    const statement = runtimeAccessStatement(template);
+
+    expect(asArray(statement.Action)).toEqual(['bedrock-agentcore:InvokeRuntime']);
+    expect(asArray(statement.Resource)).toEqual([
+      'arn:aws:bedrock-agentcore:eu-west-1:123456789012:runtime/*',
+      'arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/*',
+    ]);
+    expect(asArray(statement.Resource)).not.toContain(
+      'arn:aws:bedrock-agentcore:*:123456789012:runtime/*',
+    );
+  });
+
+  test('supports explicit runtime allowlists without widening beyond the configured regions', () => {
+    const template = synthTemplate(defaultContext, ['eu-west-1']);
+    const statement = runtimeAccessStatement(template);
+
+    expect(asArray(statement.Resource)).toEqual([
+      'arn:aws:bedrock-agentcore:eu-west-1:123456789012:runtime/*',
+    ]);
   });
 
   test('fails if context is missing', () => {

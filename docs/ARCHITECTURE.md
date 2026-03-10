@@ -82,6 +82,8 @@ Client
       Resolves executionRoleArn from tenant metadata
         (fallback: SSM /platform/tenants/{tenantId}/execution-role-arn)
       Validates IAM role ARN/account match, then assumes tenant execution role via STS
+        Role policy authorises AgentCore runtime invocation only in the approved
+        runtime region set (current primary eu-west-1, failover eu-central-1)
       Reads active runtime region from SSM (cached 60s)
       Invokes AgentCore Runtime in the active runtime region (default eu-west-1)
         via bedrock-agentcore SDK

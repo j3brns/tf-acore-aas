@@ -21,8 +21,29 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
+export interface TenantStackProps extends cdk.StackProps {
+  readonly authorizedRuntimeRegions?: readonly string[];
+}
+
+const DEFAULT_AUTHORIZED_RUNTIME_REGIONS = ['eu-west-1', 'eu-central-1'] as const;
+
+function resolveAuthorizedRuntimeRegions(
+  configuredRegions?: readonly string[],
+): string[] {
+  const regions = (configuredRegions ?? DEFAULT_AUTHORIZED_RUNTIME_REGIONS)
+    .map((region) => region.trim())
+    .filter((region) => region.length > 0);
+
+  const uniqueRegions = Array.from(new Set(regions));
+  if (uniqueRegions.length === 0) {
+    throw new Error('authorizedRuntimeRegions must include at least one region');
+  }
+
+  return uniqueRegions;
+}
+
 export class TenantStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: TenantStackProps) {
     super(scope, id, props);
 
     const env = this.node.tryGetContext('env');
@@ -33,6 +54,9 @@ export class TenantStack extends cdk.Stack {
     const tenantId = this.node.tryGetContext('tenantId') || 'stub';
     const tier = this.node.tryGetContext('tier') || 'basic';
     const accountId = this.node.tryGetContext('accountId') || cdk.Aws.ACCOUNT_ID;
+    const authorizedRuntimeRegions = resolveAuthorizedRuntimeRegions(
+      props?.authorizedRuntimeRegions,
+    );
 
     const isStub = tenantId === 'stub';
 
@@ -106,13 +130,15 @@ export class TenantStack extends cdk.Stack {
       }),
     );
 
-    // Permission to invoke AgentCore Runtime in eu-west-1
+    // Permission to invoke AgentCore Runtime only in the approved primary/failover regions.
     executionRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'AgentCoreRuntimeAccess',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock-agentcore:InvokeRuntime'],
-        resources: [`arn:aws:bedrock-agentcore:eu-west-1:${accountId}:runtime/*`],
+        resources: authorizedRuntimeRegions.map(
+          (region) => `arn:aws:bedrock-agentcore:${region}:${accountId}:runtime/*`,
+        ),
       }),
     );
 
