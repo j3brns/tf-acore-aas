@@ -3,14 +3,20 @@
 ## Status: Accepted
 ## Date: 2026-02-24
 
+## Status Note (2026-03-10)
+AWS now offers AgentCore Runtime and Policy in eu-west-2 (London). This ADR remains
+the active platform deployment policy until a successor ADR explicitly approves a
+migration away from the current London-home / Dublin-runtime zigzag topology.
+
 ## Context
-AgentCore Runtime is not available in eu-west-2 (London) at GA. All data must remain
-in the EU. Compliance requires data residency in the UK/EU.
+At the time of this decision, AgentCore Runtime was not available in eu-west-2
+(London). All data had to remain in the EU, and compliance required UK/EU data
+residency.
 
 ## Decision
 eu-west-2 London: home region for all data, control plane, and application services.
 eu-west-1 Dublin: AgentCore Runtime compute (12ms RTT from London).
-eu-central-1 Frankfurt: AgentCore Evaluations and Policy (only European options).
+eu-central-1 Frankfurt: AgentCore Evaluations and runtime failover target.
 
 Runtime failover path: Dublin (primary) → Frankfurt (fallback).
 Failover controlled by SSM /platform/config/runtime-region.
@@ -21,6 +27,8 @@ Distributed lock in DynamoDB prevents multiple bridge Lambda instances racing on
 - All data remains in London — GDPR/UK ICO compliance maintained
 - Dual-region operational complexity managed by bridge Lambda and runbooks
 - Failover is application-level (SSM parameter), not DNS-level
+- When London Runtime support changes, topology changes still require an explicit
+  architecture review rather than silent drift in docs or deployment defaults
 
 ## Alternatives Rejected
 - Everything in Frankfurt: data residency concerns for UK tenants post-Brexit

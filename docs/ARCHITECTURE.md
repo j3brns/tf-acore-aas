@@ -1,5 +1,7 @@
 # Architecture
 
+> See also: [Diagram Catalog](README.md#diagram-catalog) | [Threat Model](security/THREAT-MODEL.md) | [ADR Index](README.md#architecture-decision-records)
+
 ## System Context
 
 The platform exposes a REST API over which B2B tenants invoke AI agents. Each tenant
@@ -7,13 +9,13 @@ is a business customer with their own isolated data, memory, and tool access. In
 agent developer teams push specialised agents to the platform independently of platform
 infrastructure releases. Platform operators monitor, scale, and respond to incidents.
 
-## Architecture Visuals
+## Architecture Overview
 
-- Standard architecture: [`images/tf_acore_aas_architecture.drawio.svg`](images/tf_acore_aas_architecture.drawio.svg)
-- Engineer architecture: [`images/tf_acore_aas_architecture_engineer.drawio.svg`](images/tf_acore_aas_architecture_engineer.drawio.svg)
-- Executive architecture: [`images/tf_acore_aas_architecture_exec.drawio.svg`](images/tf_acore_aas_architecture_exec.drawio.svg)
-- Engineer request lifecycle: [`images/tf_acore_aas_request_lifecycle_engineer.drawio.svg`](images/tf_acore_aas_request_lifecycle_engineer.drawio.svg)
-- Entity lifecycle/state: [`images/tf_acore_aas_entities_state_diagram.drawio.svg`](images/tf_acore_aas_entities_state_diagram.drawio.svg)
+![Platform architecture: eu-west-2 control plane, eu-west-1 AgentCore compute, eu-central-1 evaluation](images/tf_acore_aas_architecture.drawio.png)
+
+**Audience-specific views:**
+- [Engineer architecture](images/tf_acore_aas_architecture_engineer.drawio.png) — explicit service interactions and data flows
+- [Executive architecture](images/tf_acore_aas_architecture_exec.drawio.png) — business-risk controls and compliance boundaries
 
 ## Region Topology
 
@@ -37,22 +39,33 @@ eu-west-2 London (HOME — owns everything)
 ├── CloudWatch (aggregated)
 └── KMS keys
 
-eu-west-1 Dublin (COMPUTE — runtime only)
+eu-west-1 Dublin (COMPUTE — current primary runtime region by platform policy)
 ├── AgentCore Runtime (arm64 Firecracker microVM)
 ├── AgentCore Observability (traces forwarded to London)
 ├── AgentCore Browser
 └── AgentCore Code Interpreter
 
-eu-central-1 Frankfurt (EVALUATION — async, non-real-time)
+eu-central-1 Frankfurt (EVALUATION + failover)
 ├── AgentCore Evaluations
-└── AgentCore Policy (preview — currently Bedrock Guardrails in prod)
+└── Runtime failover target
 ```
 
-All data remains in the EU. The zigzag to Dublin adds ~12ms RTT.
-Failover: Dublin → Frankfurt on ServiceUnavailableException.
-Failover controlled by SSM /platform/config/runtime-region with DynamoDB distributed lock.
+All data remains in the EU. The current approved zigzag to Dublin adds ~12ms RTT.
+AWS now supports AgentCore Runtime and Policy in additional EU regions, including London,
+but this platform continues to use the ADR-009 London-home / Dublin-runtime topology.
+That deployment policy remains in force pending an explicit architecture review and
+controlled migration plan.
+
+Policy in AgentCore is GA, but the platform currently keeps Bedrock Guardrails in
+production until policy adoption is explicitly prioritized.
+
+Failover: Dublin → Frankfurt on `ServiceUnavailableException`
+([RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md)).
+Failover controlled by SSM `/platform/config/runtime-region` with DynamoDB distributed lock.
 
 ## Request Lifecycle (Synchronous)
+
+![Request lifecycle: client through CloudFront, API Gateway, Authoriser, Bridge, AgentCore Runtime, Gateway interceptors, Tool Lambdas, and response stream](images/tf_acore_aas_request_lifecycle_engineer.drawio.png)
 
 ```
 Client
@@ -65,10 +78,12 @@ Client
       Returns usageIdentifierKey for usage plan enforcement
   → Bridge Lambda eu-west-2
       Reads invocation_mode from DynamoDB agent registry
-      Resolves executionRoleArn from tenant metadata (fallback: SSM /platform/tenants/{tenantId}/execution-role-arn)
+      Resolves executionRoleArn from tenant metadata
+        (fallback: SSM /platform/tenants/{tenantId}/execution-role-arn)
       Validates IAM role ARN/account match, then assumes tenant execution role via STS
       Reads active runtime region from SSM (cached 60s)
-      Invokes AgentCore Runtime eu-west-1 via bedrock-agentcore SDK
+      Invokes AgentCore Runtime in the active runtime region (default eu-west-1)
+        via bedrock-agentcore SDK
       Writes INVOCATION record to DynamoDB on completion
   → AgentCore Runtime eu-west-1
       Firecracker microVM isolation per session
@@ -81,61 +96,64 @@ Client
 
 ## Invocation Modes
 
-Three modes, declared in agent pyproject.toml [tool.agentcore.invocation_mode].
+Three modes, declared in agent `pyproject.toml` under `[tool.agentcore.invocation_mode]`.
 Never inferred. Bridge Lambda routes based on declared mode.
+See [ADR-005](decisions/ADR-005-declared-invocation-mode.md).
 
-**sync** — max 15 minutes, direct response
-Bridge Lambda waits for Runtime completion. Returns full response.
-Use for: interactive queries, classification, tool lookups.
+| Mode | Timeout | Response | Use for |
+|------|---------|----------|---------|
+| **sync** | 15 min | Direct full response | Interactive queries, classification, tool lookups |
+| **streaming** | 15 min | SSE chunked via Lambda response streaming | Chat interfaces, narrated reasoning |
+| **async** | 8 hours | 202 Accepted + jobId; poll or webhook | Research agents, batch processing, multi-step workflows |
 
-**streaming** — max 15 minutes, SSE chunked
-Bridge Lambda relays SSE chunks as they arrive via Lambda response streaming.
-SPA uses Fetch + ReadableStream (not EventSource — cannot carry Authorization header).
-Use for: chat interfaces, narrated reasoning.
-
-**async** — max 8 hours, 202 Accepted immediately
-Bridge Lambda returns 202 with jobId. Agent code calls `app.add_async_task` to keep
-session HealthyBusy during background work. Calls `app.complete_async_task` when done.
-Client polls GET /v1/jobs/{jobId} or registers webhook.
-No standalone async-runner Lambda and no SQS routing for invocation execution.
-Use for: research agents, batch processing, multi-step workflows.
+**Async detail:** Agent code calls `app.add_async_task` to keep session HealthyBusy during
+background work, then `app.complete_async_task` when done. Client polls
+`GET /v1/jobs/{jobId}` or registers a webhook. No standalone async-runner Lambda;
+no SQS routing for invocation execution. See [ADR-010](decisions/ADR-010-async-agentcore-native.md).
 
 ## Tenant Isolation Model
 
 Isolation enforced at four independent layers. A single-layer breach does not
-compromise tenant data.
+compromise tenant data. See [Threat Model](security/THREAT-MODEL.md) for attack surface analysis.
 
-```
-Layer 1: REST API authoriser — validates JWT, rejects invalid/suspended tenants
-Layer 2: Bridge Lambda — assumes tenant execution role (tenant owns their data)
-Layer 3: Gateway interceptors — scoped act-on-behalf token, tier-filtered tools
-Layer 4: data-access-lib — TenantScopedDynamoDB raises TenantAccessViolation
-         if any operation accesses outside the caller's tenant partition
-```
+| Layer | Component | Enforcement |
+|-------|-----------|-------------|
+| 1 | REST API Authoriser | Validates JWT, rejects invalid/suspended tenants |
+| 2 | Bridge Lambda | Assumes tenant-specific IAM execution role via STS |
+| 3 | Gateway Interceptors | Issues scoped act-on-behalf token; tier-filtered tool access |
+| 4 | data-access-lib | `TenantScopedDynamoDB` raises `TenantAccessViolation` on cross-tenant access |
+
+See [ADR-004](decisions/ADR-004-act-on-behalf-identity.md) for the identity propagation design.
+
+## Entity Lifecycle
+
+![Entity state diagram: tenant, agent, invocation, job, and session lifecycle states and transitions](images/tf_acore_aas_entities_state_diagram.drawio.png)
 
 ## Data Model (DynamoDB Tables)
 
+See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rationale.
+
 **platform-tenants** — tenant registry
-- PK: TENANT#{tenantId}, SK: METADATA
+- PK: `TENANT#{tenantId}`, SK: `METADATA`
 - Attributes: tenantId, appId, displayName, tier, status, createdAt, updatedAt,
   ownerEmail, ownerTeam, memoryStoreArn, runtimeRegion, fallbackRegion,
   apiKeySecretArn, monthlyBudgetUsd, accountId
 - Capacity: provisioned, auto-scaling, 5 RCU/WCU minimum
 - Tenant ID policy (create boundary):
-  - canonicalized to lowercase before persistence
-  - regex: `^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$` (3-32 chars)
-  - no consecutive hyphens, reserved IDs rejected (`admin`, `root`, `system`, `stub`)
-  - existing pre-policy tenant IDs remain valid; policy is enforced for new creates only
+  - Canonicalized to lowercase before persistence
+  - Regex: `^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$` (3–32 chars)
+  - No consecutive hyphens; reserved IDs rejected (`admin`, `root`, `system`, `stub`)
+  - Existing pre-policy tenant IDs remain valid; policy enforced for new creates only
 
 **platform-agents** — agent registry
-- PK: AGENT#{agentName}, SK: VERSION#{semver}
+- PK: `AGENT#{agentName}`, SK: `VERSION#{semver}`
 - Attributes: agentName, version, ownerTeam, tierMinimum, layerHash,
   layerS3Key, scriptS3Key, runtimeArn, deployedAt, invocationMode,
   streamingEnabled, estimatedDurationSeconds
 - Capacity: provisioned, auto-scaling
 
 **platform-invocations** — invocation audit log
-- PK: TENANT#{tenantId}, SK: INV#{timestamp}#{invocationId}
+- PK: `TENANT#{tenantId}`, SK: `INV#{timestamp}#{invocationId}`
 - Attributes: invocationId, tenantId, appId, agentName, agentVersion,
   sessionId, inputTokens, outputTokens, latencyMs, status, errorCode,
   runtimeRegion, invocationMode, jobId
@@ -143,54 +161,39 @@ Layer 4: data-access-lib — TenantScopedDynamoDB raises TenantAccessViolation
 - Hot partition protection: SK includes random jitter suffix for high-volume tenants
 
 **platform-jobs** — async job tracking
-- PK: TENANT#{tenantId}, SK: JOB#{jobId}
+- PK: `TENANT#{tenantId}`, SK: `JOB#{jobId}`
 - Attributes: jobId, tenantId, agentName, status, createdAt, startedAt,
   completedAt, resultS3Key, errorMessage, webhookUrl, webhookDelivered
 - TTL: 7 days. Capacity: on-demand
 
 **platform-sessions** — active session tracking
-- PK: TENANT#{tenantId}, SK: SESSION#{sessionId}
+- PK: `TENANT#{tenantId}`, SK: `SESSION#{sessionId}`
 - Attributes: sessionId, runtimeSessionId, agentName, startedAt, lastActivityAt, status
 - TTL: 24 hours after last activity
 
 **platform-tools** — Gateway tool registry
-- PK: TOOL#{toolName}, SK: TENANT#{tenantId} or GLOBAL
+- PK: `TOOL#{toolName}`, SK: `TENANT#{tenantId}` or `GLOBAL`
 - Attributes: toolName, tierMinimum, lambdaArn, gatewayTargetId, enabled
 
 **platform-ops-locks** — distributed operation locks
-- PK: LOCK#{lockName}, SK: METADATA
+- PK: `LOCK#{lockName}`, SK: `METADATA`
 - Attributes: lockId, acquiredBy, acquiredAt, ttl (5-minute auto-expire)
 - Used for: region failover, account scaling transitions
 
 ## Scaling Model
 
 Five independent scaling layers. Each layer has a monitoring threshold and a
-documented response in the runbooks.
+documented response in the [operator runbooks](README.md#operator-runbooks).
 
-```
-Layer 1 — REST API usage plans: per-tenant rate limits enforced natively by API Gateway
-  basic:    10 rps, 100 burst, 1000 req/day
-  standard: 50 rps, 500 burst, 10000 req/day
-  premium:  500 rps, 2000 burst, unlimited
+| Layer | Mechanism | Limits | Monitoring / Response |
+|-------|-----------|--------|----------------------|
+| 1 | REST API usage plans | basic: 10 rps / 1K/day, standard: 50 rps / 10K/day, premium: 500 rps / unlimited | Native API Gateway 429 |
+| 2 | Bridge Lambda concurrency | 200 prod, 50 staging | Alert at 80%; provisioned concurrency 10 on authoriser |
+| 3 | AgentCore Runtime | Auto-scales, per-account quota | 70%: [RUNBOOK-002](operations/RUNBOOK-002-quota-monitoring.md); 90%: [RUNBOOK-004](operations/RUNBOOK-004-quota-increase.md) |
+| 4 | DynamoDB | On-demand for invocations, provisioned for config | Jitter suffix on high-volume tenant SKs |
+| 5 | Account topology | Option A (single) → B (tier-split) → C (per-tenant) | Escalate when quota thresholds require |
 
-Layer 2 — Bridge Lambda: reserved concurrency 200 prod, 50 staging
-  Alert at 80% utilisation. Provisioned concurrency 10 on authoriser.
-
-Layer 3 — AgentCore Runtime: auto-scales, per-account quota applies
-  Monitor: AgentCore ConcurrentSessions metric
-  At 70%: RUNBOOK-002 (quota monitoring)
-  At 90%: pause new basic/standard onboarding, RUNBOOK-004 (quota increase)
-
-Layer 4 — DynamoDB: on-demand for invocations, provisioned for config tables
-  Hot partition mitigation: jitter suffix on high-volume tenant invocation SKs
-
-Layer 5 — Account topology (escalating isolation)
-  Option A: single Runtime account (start here, <70% quota)
-  Option B: tier-split accounts (premium separate, RUNBOOK-004 triggers)
-  Option C: per-tenant accounts (enterprise/regulated, manual trigger)
-```
-
-Planned cross-account tenant provisioning and runtime access flow (Option B/C):
+### Cross-Account Tenant Provisioning (Option B/C)
 
 ```mermaid
 flowchart LR
@@ -198,7 +201,7 @@ flowchart LR
     Admin["Platform Admin / Tenant API\nCREATE tenant"]
     Tenants["DynamoDB: platform-tenants\n(tenant registry + accountId + resource refs)"]
     EB["EventBridge\nplatform.tenant.created"]
-    Prov["Tenant Provisioner\n(CDK TenantStack runner)\nTASK-025 / TASK-049"]
+    Prov["Tenant Provisioner\n(CDK TenantStack runner)"]
     Bridge["Bridge Lambda\ninvocation path"]
     STS["AWS STS"]
   end
@@ -223,32 +226,61 @@ flowchart LR
   Bridge -->|tenant-scoped AWS access| TenantRes
 ```
 
+## CDK Stack Dependencies
+
+![CDK stack deployment order: Network → Identity → Platform → Tenant → Observability → AgentCore](images/tf_acore_aas_cdk_stack_dependencies.drawio.png)
+
+**Audience-specific views:**
+- [Engineer CDK dependencies](images/tf_acore_aas_cdk_dependencies_engineer.drawio.png) — code-level dependency relationships
+- [Executive CDK dependencies](images/tf_acore_aas_cdk_dependencies_exec.drawio.png) — planning and governance view
+
+See [ADR-007](decisions/ADR-007-cdk-terraform.md) for the CDK vs Terraform split rationale.
+
+### Deployment Order
+
+| Order | Stack | Region | Resources |
+|-------|-------|--------|-----------|
+| 1 | NetworkStack | eu-west-2 | VPC, subnets, VPC endpoints, security groups |
+| 2 | IdentityStack | eu-west-2 | GitLab OIDC WIF roles, Entra JWKS layer, KMS keys |
+| 3 | PlatformStack | eu-west-2 | REST API, WAF, CloudFront, Bridge, BFF, Authoriser, Gateway |
+| 4 | TenantStack | eu-west-2 | Per-tenant Memory store, execution role, usage plan key, SSM |
+| 5 | ObservabilityStack | eu-west-1→2 | Dashboards, alarms, metric streams |
+| 6 | AgentCoreStack | eu-west-1 | Runtime config, cross-region resource wiring |
+
+TenantStack deploys per-tenant on EventBridge `platform.tenant.created` event.
+It is **not** deployed by the platform pipeline — only triggered by tenant provisioning.
+Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
+
 ## Failure Modes
 
-| ID    | Failure                        | Detection                          | Response           |
-|-------|--------------------------------|------------------------------------|--------------------|
-| FM-1  | Runtime region unavailable     | ServiceUnavailableException        | RUNBOOK-001        |
-| FM-2  | Authoriser cold start spike    | P99 > 500ms on authoriser metric   | Provisioned concurrency |
-| FM-3  | Secrets Manager throttling     | Cache in Lambda /tmp with TTL      | By design, no alert |
-| FM-4  | DynamoDB hot partition         | Throttle events on invocations     | Jitter suffix on SK |
-| FM-5  | Bridge Lambda timeout          | 504 to client, structured error    | 16-min Lambda timeout |
-| FM-6  | Interceptor retry storm        | DLQ alarm                          | Idempotency key    |
-| FM-7  | AgentCore Memory unavailable   | Degraded mode metric               | Agent runs without LTM |
-| FM-8  | Usage plan quota exhausted     | 429 from API Gateway               | By design, native  |
-| FM-9  | DLQ message arrival            | DLQ CloudWatch alarm               | RUNBOOK-005        |
-| FM-10 | Billing Lambda failure         | DLQ alarm, eventually consistent   | RUNBOOK-006        |
+| ID | Failure | Detection | Response |
+|----|---------|-----------|----------|
+| FM-1 | Runtime region unavailable | `ServiceUnavailableException` | [RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md) |
+| FM-2 | Authoriser cold start spike | P99 > 500ms | Provisioned concurrency |
+| FM-3 | Secrets Manager throttling | Cache miss rate | By design (Lambda /tmp cache with TTL) |
+| FM-4 | DynamoDB hot partition | Throttle events on invocations table | Jitter suffix on SK |
+| FM-5 | Bridge Lambda timeout | 504 to client | 16-min Lambda timeout |
+| FM-6 | Interceptor retry storm | DLQ alarm | Idempotency key |
+| FM-7 | AgentCore Memory unavailable | Degraded mode metric | Agent runs without long-term memory |
+| FM-8 | Usage plan quota exhausted | 429 from API Gateway | By design (native enforcement) |
+| FM-9 | DLQ message arrival | DLQ CloudWatch alarm | [RUNBOOK-005](operations/RUNBOOK-005-dlq-management.md) |
+| FM-10 | Billing Lambda failure | DLQ alarm | [RUNBOOK-006](operations/RUNBOOK-006-budget-and-suspension.md) |
 
 ## Security Model
 
-Authentication chain:
+> Full analysis: [Threat Model](security/THREAT-MODEL.md) | [Compliance Checklist](security/COMPLIANCE-CHECKLIST.md)
+
+### Authentication
+
 ```
 Human user → MSAL.js → Entra OIDC → Bearer JWT → Authoriser Lambda validates
-Machine → SigV4 → Authoriser Lambda validates
-Both → tenantid, appid, tier, roles injected into request context
+Machine    → SigV4   → Authoriser Lambda validates
+Both       → tenantid, appid, tier, roles injected into request context
 Admin routes → roles claim must contain Platform.Admin or Platform.Operator
 ```
 
-Identity propagation:
+### Identity Propagation (Act-on-Behalf)
+
 ```
 Client JWT validated at authoriser (Layer 1)
 Bridge Lambda assumes tenant execution role (Layer 2)
@@ -257,34 +289,28 @@ REQUEST interceptor issues scoped act-on-behalf token (Layer 3)
 Tool Lambda receives scoped token only — never the original user JWT
 ```
 
-Entra RBAC groups → JWT roles claims:
-```
-platform-admins     → Platform.Admin    → admin-only routes
-platform-operators  → Platform.Operator → operator routes
-agent-developers    → Agent.Developer   → agent push pipeline
-tenant-basic        → Agent.Invoke tier:basic
-tenant-standard     → Agent.Invoke tier:standard
-tenant-premium      → Agent.Invoke tier:premium
-```
+See [ADR-004](decisions/ADR-004-act-on-behalf-identity.md).
 
-## CDK Stack Deployment Order
+### Entra RBAC Mapping
 
-1. NetworkStack    — VPC, subnets, VPC endpoints, SGs, eu-west-2
-2. IdentityStack   — GitLab OIDC WIF roles, Entra JWKS layer, KMS keys
-3. PlatformStack   — REST API, WAF, CloudFront, Bridge, BFF, Authoriser, Gateway
-4. TenantStack     — per-tenant Memory store, execution role, usage plan key, SSM
-5. ObservabilityStack — dashboards, alarms, metric streams eu-west-1→eu-west-2
-6. AgentCoreStack  — Runtime config eu-west-1, cross-region resource wiring
+| Entra Group | JWT Claim | Access |
+|-------------|-----------|--------|
+| platform-admins | `Platform.Admin` | Admin-only routes |
+| platform-operators | `Platform.Operator` | Operator routes |
+| agent-developers | `Agent.Developer` | Agent push pipeline |
+| tenant-basic | `Agent.Invoke` | tier:basic |
+| tenant-standard | `Agent.Invoke` | tier:standard |
+| tenant-premium | `Agent.Invoke` | tier:premium |
 
-TenantStack deploys per-tenant on EventBridge platform.tenant.created event.
-It is NOT deployed by the platform pipeline — only triggered by tenant provisioning.
-Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
+See [ADR-013](decisions/ADR-013-entra-rbac-roles-claim.md).
 
 ## Known Constraints
 
-- AgentCore Runtime not available in eu-west-2 at GA — zigzag to eu-west-1 is structural
-- AgentCore Gateway timeout: 5 minutes — unsuitable for tools requiring >5min response
-- AgentCore Code Interpreter: 25 concurrent sessions per account per region
-- arm64 only in Runtime — all Python deps must be cross-compiled
-- Session idle timeout: 15 minutes — BFF keepalive required for long UI sessions
-- REST API synchronous timeout: 15 minutes (not 29 seconds — Lambda can run to 15min)
+| Constraint | Impact | Mitigation |
+|-----------|--------|------------|
+| Current platform policy keeps Runtime in eu-west-1 | ~12ms RTT zigzag to Dublin even though Runtime is now available in eu-west-2 | [ADR-009](decisions/ADR-009-region-zigzag.md); topology stays in place pending explicit review and migration |
+| AgentCore Gateway timeout: 5 min | Tools cannot exceed 5 min response | Design tools for fast response; long work uses async mode |
+| Code Interpreter: 25 concurrent sessions | Per-account per-region limit | Monitor via [RUNBOOK-002](operations/RUNBOOK-002-quota-monitoring.md) |
+| arm64 only in Runtime | All Python deps must be cross-compiled aarch64-manylinux2014 | See [ADR-001](decisions/ADR-001-agentcore-runtime.md) |
+| Session idle timeout: 15 min | Long UI sessions require keepalive | BFF keepalive endpoint; see [ADR-011](decisions/ADR-011-thin-bff.md) |
+| REST API sync timeout: 15 min | Not the standard 29s Lambda limit | Lambda configured for 15 min; API Gateway integration timeout matched |

@@ -471,12 +471,15 @@ task. Result delivered via webhook and available via poll endpoint.
               BLOCKED: Trigger is ConcurrentSessions > 70% quota. Not yet reached.
               ADRs: ADR-009
 
-[!] TASK-050  A2A cross-agent orchestration
-              BLOCKED: Awaiting AWS GA of A2A protocol in eu-west-1
+[ ] TASK-050  A2A cross-agent orchestration
+              UNBLOCKED (2026-03-10): A2A protocol support in AgentCore Runtime is GA
+              and available in eu-west-1. Pending prioritization and implementation.
+              Current zigzag topology remains unchanged.
 
-[!] TASK-051  AgentCore Policy CEDAR enforcement
-              BLOCKED: Policy GA not available in eu-west-1 or eu-west-2
-              Currently: Bedrock Guardrails in prod
+[ ] TASK-051  AgentCore Policy CEDAR enforcement
+              UNBLOCKED (2026-03-10): Policy in AgentCore is GA and available in
+              eu-west-1 and eu-west-2.
+              Pending adoption decision. Currently: Bedrock Guardrails in prod.
 
 [ ] TASK-052  Billing metering pipeline
               Daily Lambda aggregates token counts per tenant
@@ -489,3 +492,8 @@ task. Result delivered via webhook and available via poll endpoint.
               Currently: operator-provisioned via Admin API
               Future: tenant admin can invite users, rotate API keys, view usage
               Phase: backlog
+
+[ ] TASK-054  Re-evaluate runtime placement in eu-west-2
+              AWS now supports AgentCore Runtime in eu-west-2, but the approved
+              London-home / Dublin-runtime zigzag remains in place.
+              Requires explicit architecture review and controlled migration plan.

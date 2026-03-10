@@ -1,67 +1,119 @@
-# SaaS-ified Cell Templates: AgentCore Agents-aaT packaged for two-pizza teams to experiment.
+# tf-acore-aas — Agent as a Service on Amazon Bedrock AgentCore
 
-## What This Is
+A production multi-tenant **Agent as a Service** platform on Amazon Bedrock AgentCore.
+B2B tenants invoke AI agents via REST API with full tenant isolation, billing attribution,
+and compliance controls baked in. Agent developer teams push new agents independently
+via a self-service pipeline — no platform release required.
 
-A small cell enterprise-style Agent as a Template platform vended on Amazon Bedrock AgentCore.
+![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
 
-Small squads can experiment with AI agents via REST API with full isolation, billing attribution,
-and compliance controls. SPA and OIDC included, along with sample Strands and bare agents.
+## Highlights
 
-Internal agent developer teams are empowered to push new agents independently
-via a self-service pipeline. OIDC identity and 3LO are built in.
-
-DevX is included with a TUI inner loop for responsive boto3-backed LocalStack experimentation.
+- **Multi-tenant REST API** — per-request data isolation enforced at four independent layers
+- **Entra ID OIDC + SigV4** — human and machine auth; no Cognito anywhere
+- **Three invocation modes** — sync (15 min), streaming SSE (15 min), async with webhooks (8 hr)
+- **Self-service agent pipeline** — `make agent-push` deploys in <30s warm
+- **SPA frontend** — React app with OIDC login, streaming responses, session keepalive
+- **EU-only data residency** — current approved topology keeps data in eu-west-2 London and runtime in eu-west-1 Dublin (~12ms RTT)
+- **LocalStack DevX** — full local inner loop without AWS credentials
 
 ## Quick Start
 
-Prerequisites: uv, Docker, AWS CLI v2, Node 20 LTS, GitLab access, Entra group membership.
+**Prerequisites**: [uv](https://docs.astral.sh/uv/) (>=0.4), Docker (>=24), AWS CLI v2, Node 20 LTS, npm, GitLab access, Entra group membership.
 
 ```bash
-git clone <repo>
-cd platform
-cp .env.example .env.local    # Fill in Entra client ID, tenant ID, API base URL
-make bootstrap                # Checks prereqs, installs deps
+git clone <repo> && cd tf-acore-aas
+cp .env.example .env.local    # Fill in ENTRA_CLIENT_ID, ENTRA_TENANT_ID, API_BASE_URL
+make bootstrap                # Checks prereqs, installs Python + Node deps
 make dev                      # Starts LocalStack + mock Runtime + mock JWKS
 make dev-invoke               # Confirms echo-agent works end-to-end locally
 ```
 
-See docs/development/LOCAL-SETUP.md for full setup instructions.
-See docs/bootstrap-guide.md for first-time environment deployment.
+| Next step | Guide |
+|-----------|-------|
+| Full local environment | [Local Development Setup](docs/development/LOCAL-SETUP.md) |
+| First AWS deployment | [Bootstrap Guide](docs/bootstrap-guide.md) |
+| Entra app registration | [Entra Setup](docs/entra-setup.md) |
 
-Task tracking source of truth (effective 2026-02-25 13:00 local): GitHub Issues
-(`Seq:` + `Depends on:` in issue bodies). `docs/TASKS.md` is now a snapshot/report.
-Issue queue: https://github.com/j3brns/tf-acore-aas/issues
+## Architecture
+
+> Full details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | All diagrams: [Diagram Catalog](docs/README.md#diagram-catalog)
+
+### Region Topology
+
+| Region | Role | Key Services |
+|--------|------|-------------|
+| **eu-west-2** London | HOME — control + data plane | REST API Gateway, WAF, CloudFront, DynamoDB, S3, Secrets Manager, SSM, all Lambdas, KMS |
+| **eu-west-1** Dublin | COMPUTE — current primary runtime region by platform policy | AgentCore Runtime (arm64 Firecracker), Observability, Browser, Code Interpreter |
+| **eu-central-1** Frankfurt | EVALUATION + failover | AgentCore Evaluations, runtime failover target |
+
+AWS now supports additional AgentCore features in London, but this platform still runs
+the London-to-Dublin zigzag topology adopted in ADR-009. That deployment policy remains
+in place pending an explicit architecture review and controlled migration decision.
+
+### Request Lifecycle
+
+![Synchronous request lifecycle: client through CloudFront, API Gateway, Authoriser, Bridge, Runtime, Gateway interceptors, and back](docs/images/tf_acore_aas_request_lifecycle_engineer.drawio.png)
+
+Client → CloudFront → API Gateway (WAF + usage plan) → **Authoriser** (JWT validation, tenant context)
+→ **Bridge** (tenant role assumption, runtime dispatch) → **AgentCore Runtime** (Firecracker microVM)
+→ **Gateway interceptors** (act-on-behalf tokens, tier filtering) → Tool Lambdas → response stream back.
+
+### Tenant Isolation (Defence in Depth)
+
+| Layer | Component | Enforcement |
+|-------|-----------|-------------|
+| 1 | REST API Authoriser | Validates JWT, rejects invalid/suspended tenants |
+| 2 | Bridge Lambda | Assumes tenant-specific IAM execution role |
+| 3 | Gateway Interceptors | Issues scoped act-on-behalf token, tier-filtered tools |
+| 4 | data-access-lib | `TenantScopedDynamoDB` raises `TenantAccessViolation` on cross-tenant access |
+
+A single-layer breach does not compromise tenant data.
+
+### Entity Lifecycle
+
+![State transitions for tenants, agents, invocations, jobs, and sessions](docs/images/tf_acore_aas_entities_state_diagram.drawio.png)
+
+### CDK Stack Dependencies
+
+![CDK stack deployment order and cross-stack resource wiring](docs/images/tf_acore_aas_cdk_stack_dependencies.drawio.png)
+
+NetworkStack → IdentityStack → PlatformStack → TenantStack *(per-tenant, event-driven)* → ObservabilityStack → AgentCoreStack.
 
 ## Project Structure
 
 ```
-platform/
-├── CLAUDE.md                  AI assistant rules — read first every session
-├── README.md                  This file
-├── Makefile                   All development and operations commands
-├── .githooks/                 Repo-local Git hooks (fast pre-push validation)
-├── .env.example               Required environment variable template
-├── docs/
-│   ├── PLAN.md                Phased delivery plan and milestones
-│   ├── TASKS.md               Historical task snapshot/report (Issues are canonical)
-│   ├── ARCHITECTURE.md        System design, data flows, constraints
-│   ├── bootstrap-guide.md     Day-zero platform deployment
-│   ├── entra-setup.md         Entra app registration instructions
-│   ├── decisions/             Architecture Decision Records (ADR-001..013)
-│   ├── operations/            Operator runbooks (RUNBOOK-001..009)
+tf-acore-aas/
+├── CLAUDE.md                  AI coding assistant rules
+├── Makefile                   All dev, test, ops, and deploy commands
+├── .env.example               Required environment variables
+├── .githooks/                 Repo-local Git hooks (pre-push validation)
+│
+├── docs/                      Documentation suite
+│   ├── README.md              Index, diagram catalog, role-based reading guide
+│   ├── ARCHITECTURE.md        System design, data model, failure modes
+│   ├── PLAN.md                Phased delivery plan with gates
+│   ├── ROADMAP.md             Vision, milestones M1–M7, V1.x backlog
+│   ├── TASKS.md               Task snapshot (GitHub Issues are canonical)
+│   ├── bootstrap-guide.md     Day-zero deployment
+│   ├── entra-setup.md         Entra app registration
+│   ├── decisions/             ADR-001..013
+│   ├── operations/            RUNBOOK-000..009
 │   ├── security/              Threat model, compliance checklist
-│   └── development/           Agent developer guide, local setup
-├── agents/                    Agent implementations (one directory per agent)
-│   └── echo-agent/            Reference agent — copy this to create new agents
+│   ├── development/           Local setup, agent developer guide
+│   └── images/                Diagrams (.drawio + PNG/SVG exports)
+│
+├── agents/                    Agent implementations
+│   └── echo-agent/            Reference agent — copy to create new agents
 ├── gateway/                   AgentCore Gateway interceptor Lambdas
 ├── src/                       Platform Lambda functions
-│   ├── authoriser/            REST API token authoriser
+│   ├── authoriser/            JWT token authoriser
 │   ├── bridge/                Agent invocation bridge
-│   ├── bff/                   Token refresh and session keepalive
-│   ├── tenant-api/            Tenant CRUD API
-│   ├── async_runner/          Long-running agent job processor
-│   ├── webhook_delivery/      Async job result delivery
-│   └── data-access-lib/       Tenant-scoped DynamoDB/S3 library
+│   ├── bff/                   Token refresh + session keepalive
+│   ├── tenant_api/            Tenant CRUD API
+│   ├── billing/               Billing and metering handlers
+│   ├── webhook_delivery/      Async result delivery
+│   └── data-access-lib/       Tenant-scoped DynamoDB/S3 library package
 ├── spa/                       React SPA frontend
 ├── infra/
 │   ├── cdk/                   CDK stacks (TypeScript strict)
@@ -72,64 +124,105 @@ platform/
 
 ## Development Workflow
 
+### Getting started
+
 ```bash
-# Local inner loop
-make dev                      # Start environment
-make test-unit                # Run all unit tests
-make validate-local           # fast local checks: ruff + pyright + tsc + cdk synth + detect-secrets (diff)
-make validate-local-full      # same, but full-repo secret scan
-make install-git-hooks        # installs repo pre-push hook (fast validation, no cdk synth)
-
-# Issue-driven worktree flow (canonical)
-make issue-queue              # show queue ordered by Seq (dependency-aware)
-make worktree-next-issue      # create worktree for next runnable issue
-make worktree                 # interactive issue worktree menu
-make preflight-session        # worktree branch/issue policy checks
-make pre-validate-session     # fast pre-push validation (no cdk synth)
-make worktree-push-issue      # push branch with preflight + pre-validate enforced
-make issues-audit             # validate issue lifecycle/queue invariants
-make docs-sync-audit          # docs/code semver + drift heuristics audit
-make docs-sync-stamp          # refresh docs/DOCS_SYNC.json (release checkpoint)
-# CI-only prod infrastructure deploy target: make infra-deploy-prod-ci
-
-# Agent developer inner loop
-make agent-push AGENT=my-agent ENV=dev    # Push agent, fast path <30s if deps cached
-make agent-invoke AGENT=my-agent PROMPT="hello"
-make agent-test AGENT=my-agent
-
-# Operations
-make ops-top-tenants ENV=prod
-make ops-quota-report ENV=prod
-make ops-backfill-tenant-role-arn APPLY=1   # backfill/verify tenant executionRoleArn from SSM
-make failover-lock-acquire && make infra-set-runtime-region REGION=eu-central-1 ENV=prod
+make bootstrap                # one-time: checks prereqs, installs all deps
+make install-git-hooks        # one-time: installs pre-push hook (fast validation)
+make dev                      # start LocalStack + mock services
+make test-unit                # run all unit tests
+make validate-local           # ruff + pyright + tsc + cdk synth + detect-secrets
 ```
 
-## Architecture Summary
+### Working on issues (canonical flow)
 
-- **Home region**: eu-west-2 London — data plane, control plane, all data
-- **Compute region**: eu-west-1 Dublin — AgentCore Runtime (12ms RTT from London)
-- **Evaluations/Policy**: eu-central-1 Frankfurt only
-- **Auth**: Microsoft Entra ID OIDC for humans, SigV4 for machines
-- **Isolation**: Tenant context enforced at authoriser, bridge, interceptor, and data layers
-- **Async agents**: AgentCore SDK `app.add_async_task` pattern — session stays HealthyBusy
+All work is tracked via [GitHub Issues](https://github.com/j3brns/tf-acore-aas/issues)
+using `Seq:` for ordering and `Depends on:` for dependency gating.
 
-## Contacts
+```bash
+make issue-queue              # dependency-aware queue ordered by Seq
+make worktree-next-issue      # create worktree for next runnable issue
+make worktree                 # interactive worktree menu
+make preflight-session        # branch/issue policy checks
+make pre-validate-session     # fast pre-push validation (no cdk synth)
+make worktree-push-issue      # push with preflight + pre-validate enforced
+```
 
-| Role              | Contact          |
-|-------------------|------------------|
-| Platform team     | team-platform    |
-| Security          | team-security    |
-| On-call ops       | PagerDuty        |
+### Agent developer inner loop
+
+```bash
+make agent-push AGENT=my-agent ENV=dev    # push agent, <30s if deps cached
+make agent-invoke AGENT=my-agent PROMPT="hello"
+make agent-test AGENT=my-agent
+```
+
+See [Agent Developer Guide](docs/development/AGENT-DEVELOPER-GUIDE.md) for full details.
+
+### Operations
+
+```bash
+make ops-top-tenants ENV=prod             # top tenants by invocation volume
+make ops-quota-report ENV=prod            # AgentCore quota utilisation
+make ops-backfill-tenant-role-arn APPLY=1  # backfill tenant execution roles
+make failover-lock-acquire && \
+  make infra-set-runtime-region REGION=eu-central-1 ENV=prod
+```
+
+See [Operator Runbooks](docs/operations/) for incident procedures.
+
+## Contributing
+
+1. **Pick an issue**: `make issue-queue` shows the next runnable issue
+2. **Create a worktree**: `make worktree-create-issue ISSUE=<N>`
+3. **Implement and test**: write code, run `make test-unit`, iterate
+4. **Validate**: `make preflight-session && make pre-validate-session`
+5. **Push**: `make worktree-push-issue` (enforces preflight + validation)
+6. **Open PR**: link the issue; CI runs full validation
+
+Platform Lambda source directories use `snake_case`. The shared
+`src/data-access-lib/` workspace is the existing tenant-scoped data access package.
+See [CLAUDE.md](CLAUDE.md) for full conventions and branch naming patterns.
+
+## Technology Stack
+
+| Concern | Technology |
+|---------|-----------|
+| Agent runtime | Amazon Bedrock AgentCore Runtime (arm64 Firecracker; current primary runtime region: eu-west-1) |
+| Human auth | Microsoft Entra ID OIDC |
+| Machine auth | AWS SigV4 |
+| IaC (platform) | AWS CDK, TypeScript strict mode |
+| IaC (accounts) | Terraform HCL |
+| Python tooling | uv + pyproject.toml |
+| Logging | aws-lambda-powertools Logger (structured JSON) |
+| CDK testing | Jest + cdk-assertions |
+| Python testing | pytest + LocalStack |
+| Secrets | AWS Secrets Manager |
+| Configuration | AWS SSM Parameter Store |
+| Async agents | AgentCore `add_async_task` / `complete_async_task` SDK |
+| Observability | AgentCore Observability + Amazon CloudWatch |
 
 ## Key Documents
 
-- [Documentation Suite Index](docs/README.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Architecture Diagram Catalog](docs/README.md#diagram-catalog)
-- [Delivery Plan](docs/PLAN.md)
-- [Task Snapshot](docs/TASKS.md)
-- [GitHub Issues (canonical task queue)](https://github.com/j3brns/tf-acore-aas/issues)
-- [Bootstrap Guide](docs/bootstrap-guide.md)
-- [Operator Runbooks](docs/operations/)
-- [Agent Developer Guide](docs/development/AGENT-DEVELOPER-GUIDE.md)
-- [Threat Model](docs/security/THREAT-MODEL.md)
+| Document | Audience | Description |
+|----------|----------|-------------|
+| [Documentation Suite](docs/README.md) | All | Entry point, diagram catalog, role-based reading guide |
+| [Architecture](docs/ARCHITECTURE.md) | Engineers | System topology, data model, scaling, failure modes |
+| [Roadmap](docs/ROADMAP.md) | All | Vision, milestones M1–M7, V1.x backlog |
+| [Delivery Plan](docs/PLAN.md) | Engineers | Phased plan with gates and success criteria |
+| [Bootstrap Guide](docs/bootstrap-guide.md) | Ops | Day-zero environment deployment |
+| [Entra Setup](docs/entra-setup.md) | Ops | Entra app registration |
+| [Agent Developer Guide](docs/development/AGENT-DEVELOPER-GUIDE.md) | Agent devs | Build, test, and push agents |
+| [Local Setup](docs/development/LOCAL-SETUP.md) | Engineers | Full local development environment |
+| [Threat Model](docs/security/THREAT-MODEL.md) | Security | Threat analysis and mitigations |
+| [Compliance Checklist](docs/security/COMPLIANCE-CHECKLIST.md) | Security | Controls and evidence tracking |
+| [Operator Runbooks](docs/operations/) | Ops | RUNBOOK-000..009 incident procedures |
+| [Architecture Decisions](docs/decisions/) | Engineers | ADR-001..013 |
+| [GitHub Issues](https://github.com/j3brns/tf-acore-aas/issues) | All | Canonical task queue |
+
+## Contacts
+
+| Role | Contact |
+|------|---------|
+| Platform team | team-platform |
+| Security | team-security |
+| On-call ops | PagerDuty |

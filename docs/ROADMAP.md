@@ -53,10 +53,10 @@ result delivered via webhook and poll endpoint.
 | Option B account topology       | ConcurrentSessions > 70% of account quota      |
 | Billing metering pipeline       | After V1.0 — token cost attribution per tenant |
 | Tenant self-service portal      | After V1.0 — tenant manages own API keys/users |
-| A2A cross-agent orchestration   | AWS GA of A2A in eu-west-1                     |
-| AgentCore Policy CEDAR          | AWS GA of Policy in eu-west-1                  |
+| A2A cross-agent orchestration   | Available in current eu-west-1 runtime topology; pending prioritization |
+| AgentCore Policy CEDAR          | GA in eu-west-1/eu-west-2; pending platform adoption decision |
 | Agent marketplace               | After V1.0 — discovery and composition portal  |
-| eu-west-2 Runtime               | AWS extends AgentCore to London                |
+| eu-west-2 Runtime migration     | Explicit architecture review and controlled migration off the current zigzag topology |
 
 ---
 
