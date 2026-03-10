@@ -125,6 +125,16 @@ Core platform entities — tenants, agents, invocations, jobs, sessions — and 
 |---------|----------|------|
 | Standard | All | [tf_acore_aas_entities_state_diagram.drawio.png](images/tf_acore_aas_entities_state_diagram.drawio.png) |
 
+### Portal / Admin Console (Testing)
+
+Admin console snapshot for testing documentation and demos.
+
+![Admin console testing fixture screenshot](images/tf_acore_aas_admin_console_testing.png)
+
+| View | Audience | File | Notes |
+|------|----------|------|-------|
+| Admin console | Engineers / QA | [tf_acore_aas_admin_console_testing.png](images/tf_acore_aas_admin_console_testing.png) | Synthetic test fixture data (not production tenant data). |
+
 ## Diagram Semantics
 
 Consistent colour semantics across all architecture diagrams:

@@ -70,6 +70,14 @@ make test-int       # Integration tests (requires make dev running)
 make agent-test AGENT=echo-agent    # Tests for a specific agent
 ```
 
+## UI Testing Snapshot
+
+Testing fixture screenshot for the Admin console:
+
+![Admin console testing fixture](../images/tf_acore_aas_admin_console_testing.png)
+
+The screenshot uses synthetic test data for documentation and QA walkthroughs.
+
 ## Common Issues
 
 **LocalStack not starting**: ensure Docker is running (`docker ps` should work).
