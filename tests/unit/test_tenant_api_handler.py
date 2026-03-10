@@ -752,8 +752,7 @@ def test_audit_export_writes_real_s3_export_and_returns_presigned_url(
         {
             "bucket": "platform-audit-exports",
             "key": (
-                "tenants/t-005/audit-exports/"
-                "audit-export-20260225T120000Z-feedfacecafebeef.json"
+                "tenants/t-005/audit-exports/audit-export-20260225T120000Z-feedfacecafebeef.json"
             ),
             "expires_in": 1800,
             "client_method": "get_object",
