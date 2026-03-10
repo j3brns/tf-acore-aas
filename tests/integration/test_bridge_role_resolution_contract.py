@@ -71,6 +71,7 @@ def _seed_agent(ddb: Any) -> None:
             "deployed_at": "2026-01-01T00:00:00Z",
             "invocation_mode": "sync",
             "streaming_enabled": False,
+            "runtime_arn": "arn:aws:bedrock-agentcore:eu-west-1:210987654321:runtime/echo-agent",
         }
     )
 
@@ -114,14 +115,23 @@ def test_handler_assume_role_uses_tenant_record_arn(mock_aws_services):
             return_value={"runtime_region": "eu-west-1", "mock_runtime_url": None},
         ),
         patch("src.bridge.handler.get_sts") as mock_get_sts,
+        patch("src.bridge.handler.get_runtime_client") as mock_get_runtime_client,
     ):
         mock_sts = MagicMock()
         mock_get_sts.return_value = mock_sts
         mock_sts.assume_role.return_value = {"Credentials": {"AccessKeyId": "foo"}}
+        runtime_client = MagicMock()
+        runtime_client.invoke_agent_runtime.return_value = {
+            "contentType": "application/json",
+            "runtimeSessionId": "runtime-session-id-123456789012345",
+            "response": MagicMock(read=MagicMock(return_value=b'{"echo":"hello"}')),
+            "statusCode": 200,
+        }
+        mock_get_runtime_client.return_value = runtime_client
 
         response = handler(_invoke_event(), FakeLambdaContext())
 
-    assert response["statusCode"] == 501
+    assert response["statusCode"] == 200
     _, kwargs = mock_sts.assume_role.call_args
     assert kwargs["RoleArn"] == "arn:aws:iam::123456789012:role/custom-record-role"
 
@@ -153,13 +163,22 @@ def test_handler_assume_role_uses_ssm_arn_when_tenant_record_missing_field(mock_
             return_value={"runtime_region": "eu-west-1", "mock_runtime_url": None},
         ),
         patch("src.bridge.handler.get_sts") as mock_get_sts,
+        patch("src.bridge.handler.get_runtime_client") as mock_get_runtime_client,
     ):
         mock_sts = MagicMock()
         mock_get_sts.return_value = mock_sts
         mock_sts.assume_role.return_value = {"Credentials": {"AccessKeyId": "foo"}}
+        runtime_client = MagicMock()
+        runtime_client.invoke_agent_runtime.return_value = {
+            "contentType": "application/json",
+            "runtimeSessionId": "runtime-session-id-123456789012345",
+            "response": MagicMock(read=MagicMock(return_value=b'{"echo":"hello"}')),
+            "statusCode": 200,
+        }
+        mock_get_runtime_client.return_value = runtime_client
 
         response = handler(_invoke_event(), FakeLambdaContext())
 
-    assert response["statusCode"] == 501
+    assert response["statusCode"] == 200
     _, kwargs = mock_sts.assume_role.call_args
     assert kwargs["RoleArn"] == "arn:aws:iam::123456789012:role/custom-ssm-role"
