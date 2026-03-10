@@ -530,12 +530,14 @@ def _handle_list(
         app_id=caller.app_id or "system",
     )
 
-    scan_kwargs: dict[str, Any] = {
-        "TableName": _tenants_table_name(),
-        "Limit": limit,
+    scan_params: dict[str, Any] = {
+        "limit": limit,
     }
     if next_token:
-        scan_kwargs["ExclusiveStartKey"] = json.loads(next_token)
+        try:
+            scan_params["exclusive_start_key"] = json.loads(next_token)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid nextToken")
 
     filter_exprs = []
     expr_values = {}
@@ -551,18 +553,20 @@ def _handle_list(
         expr_values[":t"] = tier_filter.lower()
 
     if filter_exprs:
-        scan_kwargs["FilterExpression"] = " AND ".join(filter_exprs)
-        scan_kwargs["ExpressionAttributeNames"] = expr_names
-        scan_kwargs["ExpressionAttributeValues"] = expr_values
+        scan_params["filter_expression"] = " AND ".join(filter_exprs)
+        scan_params["expression_attribute_names"] = expr_names
+        scan_params["expression_attribute_values"] = expr_values
 
     # Scan the table using data-access-lib
-    items = db.scan(_tenants_table_name(), **scan_kwargs)
+    result = db.scan(_tenants_table_name(), **scan_params)
 
     return _response(
         200,
         {
-            "items": [_serialize_tenant(item) for item in items],
-            "nextToken": None,  # TODO: Implement paged scan in data-access-lib
+            "items": [_serialize_tenant(item) for item in result.items],
+            "nextToken": (
+                json.dumps(result.last_evaluated_key) if result.last_evaluated_key else None
+            ),
         },
     )
 

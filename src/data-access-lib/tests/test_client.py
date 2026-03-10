@@ -18,7 +18,12 @@ from unittest.mock import MagicMock
 
 import boto3
 import pytest
-from data_access import TenantAccessViolation, TenantContext, TenantScopedDynamoDB, TenantScopedS3
+from data_access import (
+    TenantAccessViolation,
+    TenantContext,
+    TenantScopedDynamoDB,
+    TenantScopedS3,
+)
 from data_access.client import _emit_tenant_violation_metric
 from data_access.models import TenantTier
 from moto import mock_aws
@@ -437,9 +442,9 @@ class TestTenantScopedDynamoDBQuery:
             # One item for another tenant (written directly — bypassing lib)
             table.put_item(Item={"PK": f"TENANT#{OTHER_TENANT_ID}", "SK": "INV#001"})
 
-            items = db.query(TABLE_NAME)
-        assert len(items) == 2
-        assert all(i["PK"] == f"TENANT#{TENANT_ID}" for i in items)
+            result = db.query(TABLE_NAME)
+        assert len(result.items) == 2
+        assert all(i["PK"] == f"TENANT#{TENANT_ID}" for i in result.items)
 
     def test_query_with_sk_condition(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
         from boto3.dynamodb.conditions import Key
@@ -451,8 +456,8 @@ class TestTenantScopedDynamoDBQuery:
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#002"})
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "SESS#001"})
 
-            items = db.query(TABLE_NAME, sk_condition=Key("SK").begins_with("INV#"))
-        assert len(items) == 2
+            result = db.query(TABLE_NAME, sk_condition=Key("SK").begins_with("INV#"))
+        assert len(result.items) == 2
 
     def test_query_with_limit(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
         with mock_aws():
@@ -461,8 +466,8 @@ class TestTenantScopedDynamoDBQuery:
             for i in range(5):
                 table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
 
-            items = db.query(TABLE_NAME, limit=2)
-        assert len(items) == 2
+            result = db.query(TABLE_NAME, limit=2)
+        assert len(result.items) == 2
 
     def test_query_with_scan_index_forward_false(
         self, ctx: TenantContext, mock_cw: MagicMock
@@ -473,10 +478,10 @@ class TestTenantScopedDynamoDBQuery:
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001"})
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#002"})
 
-            items = db.query(TABLE_NAME, scan_index_forward=False)
+            result = db.query(TABLE_NAME, scan_index_forward=False)
         # Reversed order
-        assert items[0]["SK"] == "INV#002"
-        assert items[1]["SK"] == "INV#001"
+        assert result.items[0]["SK"] == "INV#002"
+        assert result.items[1]["SK"] == "INV#001"
 
     def test_query_with_exclusive_start_key(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
         with mock_aws():
@@ -486,13 +491,16 @@ class TestTenantScopedDynamoDBQuery:
                 table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
 
             # First page
-            first_page = db.query(TABLE_NAME, limit=2)
+            result1 = db.query(TABLE_NAME, limit=2)
+            assert result1.last_evaluated_key is not None
+
             # Second page
-            second_page = db.query(
+            result2 = db.query(
                 TABLE_NAME,
-                exclusive_start_key={"PK": first_page[-1]["PK"], "SK": first_page[-1]["SK"]},
+                exclusive_start_key=result1.last_evaluated_key,
             )
-        assert len(second_page) == 1
+        assert len(result2.items) == 1
+        assert result2.last_evaluated_key is None
 
     def test_query_optional_kwargs_via_mock(self, ctx: TenantContext) -> None:
         """Verify index_name and filter_expression kwargs are forwarded."""
@@ -517,8 +525,8 @@ class TestTenantScopedDynamoDBQuery:
     def test_query_empty_result(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
         with mock_aws():
             db, _ = _make_dynamo_db(ctx, cw=mock_cw)
-            items = db.query(TABLE_NAME)
-        assert items == []
+            result = db.query(TABLE_NAME)
+        assert result.items == []
 
     def test_query_always_uses_caller_partition(
         self, ctx: TenantContext, mock_cw: MagicMock
@@ -531,9 +539,64 @@ class TestTenantScopedDynamoDBQuery:
             table.put_item(Item={"PK": f"TENANT#{OTHER_TENANT_ID}", "SK": "INV#001"})
 
             # Query should return nothing (only our partition)
-            items = db.query(TABLE_NAME)
-        assert items == []
+            result = db.query(TABLE_NAME)
+        assert result.items == []
         mock_cw.put_metric_data.assert_not_called()
+
+
+# ===========================================================================
+# TenantScopedDynamoDB — scan
+# ===========================================================================
+
+
+class TestTenantScopedDynamoDBScan:
+    def test_scan_returns_all_items_regardless_of_tenant(
+        self, ctx: TenantContext, mock_cw: MagicMock
+    ) -> None:
+        """Scan does not enforce tenant isolation — returns everything in the table."""
+        with mock_aws():
+            db, dynamo = _make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001"})
+            table.put_item(Item={"PK": f"TENANT#{OTHER_TENANT_ID}", "SK": "INV#002"})
+
+            result = db.scan(TABLE_NAME)
+        assert len(result.items) == 2
+
+    def test_scan_with_limit_and_pagination(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
+        with mock_aws():
+            db, dynamo = _make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            for i in range(5):
+                table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
+
+            # Page 1
+            result1 = db.scan(TABLE_NAME, limit=2)
+            assert len(result1.items) == 2
+            assert result1.last_evaluated_key is not None
+
+            # Page 2
+            result2 = db.scan(TABLE_NAME, limit=2, exclusive_start_key=result1.last_evaluated_key)
+            assert len(result2.items) == 2
+            assert result2.last_evaluated_key is not None
+
+            # Page 3
+            result3 = db.scan(TABLE_NAME, limit=2, exclusive_start_key=result2.last_evaluated_key)
+            assert len(result3.items) == 1
+            assert result3.last_evaluated_key is None
+
+    def test_scan_with_filter_expression(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
+        from boto3.dynamodb.conditions import Attr
+
+        with mock_aws():
+            db, dynamo = _make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001", "status": "ok"})
+            table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#002", "status": "fail"})
+
+            result = db.scan(TABLE_NAME, filter_expression=Attr("status").eq("ok"))
+        assert len(result.items) == 1
+        assert result.items[0]["SK"] == "INV#001"
 
 
 # ===========================================================================

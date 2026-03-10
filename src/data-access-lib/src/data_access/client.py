@@ -26,7 +26,7 @@ from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import ConditionBase, Key
 
 from data_access.exceptions import TenantAccessViolation
-from data_access.models import TenantContext
+from data_access.models import PaginatedItems, TenantContext
 
 logger = Logger(service="data-access-lib")
 
@@ -206,7 +206,7 @@ class TenantScopedDynamoDB:
         limit: int | None = None,
         scan_index_forward: bool = True,
         exclusive_start_key: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> PaginatedItems:
         """Query the caller's tenant partition.
 
         The PK is always forced to TENANT#{tenant_id}; the caller cannot
@@ -214,8 +214,8 @@ class TenantScopedDynamoDB:
         attribute name is "PK" (platform single-table design convention).
         An optional SK condition is ANDed onto the key condition.
 
-        Returns the first page of matching items.  Pass exclusive_start_key
-        for subsequent pages.
+        Returns a PaginatedItems object. Pass result.last_evaluated_key
+        to exclusive_start_key for subsequent pages.
         """
         table = self._dynamodb.Table(table_name)
         pk_condition = Key("PK").eq(f"{_TENANT_PK_PREFIX}{self._tenant_id}")
@@ -235,18 +235,21 @@ class TenantScopedDynamoDB:
             kwargs["ExclusiveStartKey"] = exclusive_start_key
 
         response = table.query(**kwargs)
-        return response.get("Items", [])
+        return PaginatedItems(
+            items=response.get("Items", []),
+            last_evaluated_key=response.get("LastEvaluatedKey"),
+        )
 
     def scan(
         self,
         table_name: str,
         *,
-        filter_expression: ConditionBase | None = None,
+        filter_expression: ConditionBase | str | None = None,
         limit: int | None = None,
         exclusive_start_key: dict[str, Any] | None = None,
         expression_attribute_names: dict[str, str] | None = None,
         expression_attribute_values: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> PaginatedItems:
         """Scan a table.
 
         SECURITY: Scanning is an administrative operation.  Isolation is
@@ -255,6 +258,9 @@ class TenantScopedDynamoDB:
 
         Lambda handlers must perform their own authorization (e.g. roles claim
         check) before calling this method.
+
+        Returns a PaginatedItems object. Pass result.last_evaluated_key
+        to exclusive_start_key for subsequent pages.
         """
         table = self._dynamodb.Table(table_name)
         kwargs: dict[str, Any] = {}
@@ -270,10 +276,10 @@ class TenantScopedDynamoDB:
             kwargs["ExpressionAttributeValues"] = expression_attribute_values
 
         response = table.scan(**kwargs)
-        # Handle pagination by returning the LastEvaluatedKey in the result if we want it?
-        # But for now, let's keep it simple and just return items.
-        # To support pagination properly, we should probably return (items, last_key).
-        return response.get("Items", [])
+        return PaginatedItems(
+            items=response.get("Items", []),
+            last_evaluated_key=response.get("LastEvaluatedKey"),
+        )
 
 
 # ---------------------------------------------------------------------------

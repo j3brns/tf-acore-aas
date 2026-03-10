@@ -11,6 +11,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from data_access.models import PaginatedItems
+
 from src.tenant_api import handler as tenant_api_handler
 
 
@@ -67,19 +69,46 @@ class FakeScopedDb:
     def scan(
         self,
         _table_name: str | None = None,
-        **kwargs: Any,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
+        *,
+        filter_expression: Any | None = None,
+        limit: int | None = None,
+        exclusive_start_key: dict[str, Any] | None = None,
+        expression_attribute_names: dict[str, str] | None = None,
+        expression_attribute_values: dict[str, Any] | None = None,
+    ) -> PaginatedItems:
+        # Match real lib: _table_name is NOT None if we use it correctly
         results = [dict(item) for item in self.items.values()]
         # Simple filter implementation for tests
-        status_filter = kwargs.get("ExpressionAttributeValues", {}).get(":s")
-        tier_filter = kwargs.get("ExpressionAttributeValues", {}).get(":t")
+        status_filter = (expression_attribute_values or {}).get(":s")
+        tier_filter = (expression_attribute_values or {}).get(":t")
         if status_filter:
             results = [r for r in results if r.get("status") == status_filter]
         if tier_filter:
             results = [r for r in results if r.get("tier") == tier_filter]
-        if _table_name is None:
-            return {"Items": results}
-        return results
+
+        # Paginated results simulation
+        last_key = None
+        if limit and len(results) > limit:
+            # Not really accurate for DynamoDB but enough for tests
+            last_key = {"PK": results[limit - 1]["PK"], "SK": results[limit - 1]["SK"]}
+            results = results[:limit]
+
+        return PaginatedItems(items=results, last_evaluated_key=last_key)
+
+    def query(
+        self,
+        _table_name: str | None = None,
+        *,
+        sk_condition: Any | None = None,
+        filter_expression: Any | None = None,
+        index_name: str | None = None,
+        limit: int | None = None,
+        scan_index_forward: bool = True,
+        exclusive_start_key: dict[str, Any] | None = None,
+    ) -> PaginatedItems:
+        # Mock query — just return some items
+        results = [dict(item) for item in self.items.values()]
+        return PaginatedItems(items=results)
 
 
 class FakeSecretsManager:
