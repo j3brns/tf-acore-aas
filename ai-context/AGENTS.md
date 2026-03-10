@@ -16,6 +16,7 @@ State the task number when you start: "Starting TASK-016: authoriser Lambda"
 - appid and tenantid must appear on every log line, metric, and trace.
 - data_access (src/data_access/) is the ONLY permitted DynamoDB interface.
   Never write raw boto3 DynamoDB calls in Lambda handlers.
+- appid and tenantid on every log line, metric dimension, and trace annotation.
 - AgentCore Runtime is arm64 only. All Python deps need arm64 cross-compilation.
 - Authentication: Entra JWT for humans, SigV4 for machines. No Cognito.
 - Invocation mode is DECLARED (sync|streaming|async), never inferred at runtime.
