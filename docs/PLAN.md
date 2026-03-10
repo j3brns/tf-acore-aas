@@ -224,3 +224,193 @@ Results delivered via webhook or poll endpoint.
 | M5        | Phase 6     | Tenant invokes agent via browser              |
 | M6        | Phase 7     | Pipeline auto-rollback verified in staging    |
 | M7        | Phase 8     | 8-hour async agent delivers via webhook       |
+
+---
+
+## Appendix — SPA Target State
+
+Current maturity baseline as of 2026-03-10:
+
+- Engineering MVP: approximately 65%
+- Production B2B portal: approximately 40%
+- Ideal-state product/site: approximately 25-30%
+
+The gap is not that the SPA is absent. The gap is that the current SPA is still
+an engineering surface rather than a finished tenant and operator product.
+
+### Design Principles
+
+1. Long-running work must feel safe.
+   Streaming, async jobs, token refresh, and session continuity must behave as
+   one coherent product flow rather than isolated components.
+2. Tenant and operator experiences must diverge cleanly.
+   Tenant users need clarity, self-service, and trust. Operators need density,
+   evidence, and controlled action surfaces.
+3. The shell must be role-aware and mobile-complete.
+   Navigation cannot disappear on smaller viewports or expose irrelevant routes.
+4. Trust cues must be explicit.
+   The product should show environment, tenant, region, session state, and data
+   handling expectations where the user needs them.
+5. Product content is part of the system.
+   Empty states, permissions messaging, failure copy, onboarding, and help text
+   are part of operability.
+6. Accessibility is a release gate.
+   Keyboard navigation, focus order, live regions for streaming, and readable
+   contrast must be designed in, not added later.
+
+### Target Navigation
+
+#### Shared
+
+| Area | Purpose |
+|------|---------|
+| Sign In | Human entry point using Entra |
+| Onboarding | First-run orientation and permission checks |
+| Notifications | Cross-product status, success, warning, and error messaging |
+| Profile / Session | Current identity, tenant, role, and sign-out |
+| Status / Maintenance | Platform-wide incident and maintenance communication |
+
+#### Tenant
+
+| Area | Purpose |
+|------|---------|
+| Dashboard | Usage, active jobs, session health, quota, and current issues |
+| Agents | Discover available agents and their capabilities |
+| Invoke | Primary execution workspace for sync, streaming, and async use |
+| Jobs | Historic and active async execution tracking |
+| Sessions | Runtime session visibility and keepalive state |
+| Usage & Billing | Consumption, budget, tier, and invoice-facing summaries |
+| API Keys | Rotation and lifecycle management |
+| Members & Invites | Tenant user access control |
+| Webhooks | Async result destinations and delivery history |
+| Audit Exports | Export requests, status, and evidence retrieval |
+| Settings | Tenant profile and platform-facing configuration |
+| Help / Support | Documentation, contact path, and troubleshooting guidance |
+
+#### Operator
+
+| Area | Purpose |
+|------|---------|
+| Platform Overview | High-level health, active incidents, and rollout state |
+| Tenants | Search, filter, inspect, and act on tenant records |
+| Runtime Regions | Active region, failover posture, and regional health |
+| Quota & Capacity | Utilisation, trend, and account-topology trigger visibility |
+| Incidents | Open events, timelines, and runbook entry points |
+| Security Events | Auth failures, policy denials, tenant violations, audit flags |
+| DLQs / Failed Deliveries | Operational backlog and replay surfaces |
+| Jobs / Webhooks | Cross-tenant async execution and delivery visibility |
+| Configuration / Rollouts | Environment version, rollout state, and change evidence |
+| Audit / Evidence | Exportable records for compliance and incident review |
+
+### Route Model
+
+| Route | Audience | Notes |
+|-------|----------|-------|
+| `/` | Shared | Role-aware landing route; redirects to dashboard when signed in |
+| `/onboarding` | Shared | First-run checks and setup guidance |
+| `/agents` | Tenant | Catalogue and discovery |
+| `/agents/:agentName` | Tenant | Agent detail, examples, constraints, supported modes |
+| `/invoke/:agentName` | Tenant | Dedicated execution workspace |
+| `/jobs` | Tenant | Job history and active work |
+| `/jobs/:jobId` | Tenant | Job detail and result retrieval |
+| `/sessions` | Tenant | Session list, health, expiry, and keepalive state |
+| `/tenant` | Tenant | Tenant dashboard |
+| `/tenant/usage` | Tenant | Usage and billing detail |
+| `/tenant/api-keys` | Tenant | API key lifecycle |
+| `/tenant/members` | Tenant | Members, invites, roles |
+| `/tenant/webhooks` | Tenant | Registered endpoints and delivery state |
+| `/tenant/audit` | Tenant | Audit export requests and download history |
+| `/tenant/settings` | Tenant | Tenant settings |
+| `/help` | Shared | Docs, support, troubleshooting |
+| `/admin` | Operator | Platform overview |
+| `/admin/tenants` | Operator | Tenant search, list, drill-down |
+| `/admin/tenants/:tenantId` | Operator | Tenant detail and operator actions |
+| `/admin/runtime` | Operator | Runtime regions, failover, quotas |
+| `/admin/incidents` | Operator | Incident board and runbook links |
+| `/admin/security` | Operator | Security events and policy signals |
+| `/admin/deliveries` | Operator | DLQs and webhook failures |
+| `/admin/changes` | Operator | Rollouts, versions, evidence |
+| `/admin/audit` | Operator | Audit and evidence exports |
+
+### Page Responsibilities
+
+#### Tenant
+
+| Page | Must Show | Primary Actions |
+|------|-----------|-----------------|
+| Dashboard | today's usage, budget posture, active jobs, session status, recent failures | resume work, open jobs, open support |
+| Agents | agent cards, tier requirement, invocation mode, summary | inspect, invoke |
+| Agent Detail | description, supported modes, expected duration, examples, limits, tool access notes | invoke, copy example |
+| Invoke Workspace | prompt composer, agent metadata, stream state, async state, retries, errors, history sidebar | submit, cancel, retry, open job |
+| Jobs | filterable list, status, durations, result readiness, webhook state | open job, retry delivery when permitted |
+| Job Detail | timeline, result links, delivery attempts, error detail | download result, copy request context |
+| Sessions | active sessions, expiry, runtime region, keepalive status | refresh state, inspect session |
+| Usage & Billing | usage trends, budget, tier, expected billing summary | export usage, request upgrade |
+| API Keys | current key metadata, last rotation, policy notes | rotate, revoke, copy integration guidance |
+| Members & Invites | users, roles, pending invites, expiry | invite, revoke, resend |
+| Webhooks | endpoints, secret posture, delivery health | add endpoint, rotate secret, disable |
+| Audit Exports | export history, status, retention, destination | request export, download |
+| Settings | tenant metadata, support contacts, region posture | update allowed fields |
+| Help / Support | docs links, troubleshooting, contact path | open doc, contact support |
+
+#### Operator
+
+| Page | Must Show | Primary Actions |
+|------|-----------|-----------------|
+| Platform Overview | global health, active incidents, quota hot spots, runtime region, deployment version | drill into issue, open runbook |
+| Tenants | filterable tenant list, tier, status, region, budget posture | inspect tenant, suspend or resume where policy allows |
+| Tenant Detail | tenant metadata, recent activity, sessions, jobs, security signals, audit path | rotate key, resend invite, export evidence |
+| Runtime Regions | active runtime region, failover state, quota, alarms, recent failovers | trigger guarded failover, inspect evidence |
+| Incidents | open events, severity, owner, timeline | acknowledge, open runbook |
+| Security Events | auth failures, policy denials, access violations | inspect, export, pivot to tenant |
+| DLQs / Failed Deliveries | pending failures, age, retry state | replay, inspect payload metadata |
+| Jobs / Webhooks | async backlog, webhook health, failure hotspots | inspect, replay when allowed |
+| Configuration / Rollouts | deployed version, rollout state, validation evidence | inspect change, rollback entry point |
+| Audit / Evidence | export jobs, compliance evidence, incident pack status | request export, download evidence |
+
+### Key Wireframe Structures
+
+1. Application shell
+   Top bar: environment banner, current tenant, current role, notification tray, profile menu.
+   Navigation: role-aware, responsive, always available on mobile via drawer or bottom sheet.
+   Main area: page header, status chips, primary action, content area, optional context rail.
+2. Invoke workspace
+   Left rail: agent summary, examples, invocation mode, recent prompts.
+   Main composer: prompt editor and submit controls.
+   Stream pane: live response, connection state, elapsed time, retry or reconnect cues.
+   Async panel: job identifier, progress state, poll cadence, webhook or download outcome.
+   Evidence footer: invocation metadata, runtime region, correlation IDs, copy support payload.
+3. Tenant dashboard
+   Summary cards, work queue, operational alerts, and quick actions.
+4. Operator overview
+   Global status strip, hotspot grid, action queue, and tenant spotlight.
+
+### Delivery Slices
+
+1. Session continuity and invoke resilience.
+   Align browser flows with ADR-011 and make long-running streaming and async work safe to operate.
+   Related issues: `#166`, `#167`, `#168`.
+2. App shell and route model.
+   Introduce responsive navigation, role-aware routing, notifications, and a production landing model.
+   Related issues: `#163`, `#169`.
+3. Tenant self-service.
+   Complete members, API keys, usage, webhooks, audit, and settings surfaces.
+   Related issues: `#170`.
+4. Operator operations console.
+   Expand the admin view into a real operations product.
+   Related issues: `#171`.
+5. Design system and content.
+   Replace generic internal styling and placeholder copy with a coherent product system and accessibility baseline.
+   Related issues: `#172`.
+
+### Acceptance Criteria
+
+The SPA is not considered production-finished until all items below are true:
+
+1. The BFF-backed token refresh and keepalive path is used for the intended long-running browser flows.
+2. Deep links and hard refreshes work correctly behind CloudFront.
+3. Mobile navigation exists and supports the full route model.
+4. Tenant admins can complete common self-service tasks without operator help.
+5. Operators can triage common runtime, tenant, and delivery problems from the UI.
+6. The product exposes clear trust, status, and support cues.
+7. Accessibility, contract, and component tests cover the critical UI paths.
