@@ -19,7 +19,8 @@ def test_canary_policy_variables_are_explicit_per_environment() -> None:
     assert 'CANARY_POLICY_PROD: "canary-10%-15m"' in content
     assert 'STAGING_ROLLOUT_WINDOW_MINUTES: "30"' in content
     assert 'PROD_ROLLOUT_WINDOW_MINUTES: "15"' in content
-    assert 'PROD_APPROVAL_MODE: "protected-environment-two-reviewer"' in content
+    assert 'GITLAB_PROTECTED_ENVIRONMENT_NAME: "prod"' in content
+    assert 'GITLAB_PROTECTED_ENV_REQUIRED_APPROVALS: "2"' in content
 
 
 def test_ci_test_matrix_covers_unit_integration_and_cdk() -> None:
@@ -27,6 +28,13 @@ def test_ci_test_matrix_covers_unit_integration_and_cdk() -> None:
     for name in ("test-unit", "test-integration", "test-cdk"):
         block = _job_block(name, content)
         assert "extends: .test_job_base" in block
+
+
+def test_validate_pipeline_policy_runs_ci_contract_and_protection_script_tests() -> None:
+    content = CI_FILE.read_text(encoding="utf-8")
+    validate = _job_block("validate-pipeline-policy", content)
+    assert "tests/unit/test_issue_110_ci_policy.py" in validate
+    assert "tests/unit/test_check_gitlab_protected_environment.py" in validate
 
 
 def test_staging_and_prod_gates_have_manual_approvals_and_rollout_windows() -> None:
@@ -45,7 +53,10 @@ def test_staging_and_prod_gates_have_manual_approvals_and_rollout_windows() -> N
     assert 'needs: ["staging-rollout-window"]' in prod
     assert "when: manual" in prod
     assert "deployment_tier: production" in prod
-    assert 'test "${PROD_APPROVAL_MODE}" = "protected-environment-two-reviewer"' in prod
+    assert "uv run python scripts/check_gitlab_protected_environment.py" in prod
+    assert '--environment "${GITLAB_PROTECTED_ENVIRONMENT_NAME}"' in prod
+    assert '--min-approvals "${GITLAB_PROTECTED_ENV_REQUIRED_APPROVALS}"' in prod
+    assert 'test "${PROD_APPROVAL_MODE}"' not in prod
 
     prod_window = _job_block("prod-rollout-window", content)
     assert "when: delayed" in prod_window

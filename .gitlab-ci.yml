@@ -21,7 +21,8 @@ variables:
   CANARY_POLICY_PROD: "canary-10%-15m"
   STAGING_ROLLOUT_WINDOW_MINUTES: "30"
   PROD_ROLLOUT_WINDOW_MINUTES: "15"
-  PROD_APPROVAL_MODE: "protected-environment-two-reviewer"
+  GITLAB_PROTECTED_ENVIRONMENT_NAME: "prod"
+  GITLAB_PROTECTED_ENV_REQUIRED_APPROVALS: "2"
   # Default roles (should be overridden in GitLab CI/CD variables)
   AWS_ROLE_ARN_VALIDATE: ${AWS_ROLE_ARN_VALIDATE}
   AWS_ROLE_ARN_DEPLOY_DEV: ${AWS_ROLE_ARN_DEPLOY_DEV}
@@ -103,7 +104,11 @@ validate-pipeline-policy:
   variables:
     AWS_ROLE_ARN: ${AWS_ROLE_ARN_VALIDATE}
   script:
-    - PYTHONPATH=. uv run pytest tests/unit/test_issue_110_ci_policy.py -v --tb=short
+    - >
+      PYTHONPATH=. uv run pytest
+      tests/unit/test_issue_110_ci_policy.py
+      tests/unit/test_check_gitlab_protected_environment.py
+      -v --tb=short
   interruptible: true
 
 # --- TEST STAGE ---
@@ -217,7 +222,10 @@ deploy-prod:
     AWS_ROLE_ARN: ${AWS_ROLE_ARN_DEPLOY_PROD}
     ENV: prod
   script:
-    - test "${PROD_APPROVAL_MODE}" = "protected-environment-two-reviewer"
+    - >
+      uv run python scripts/check_gitlab_protected_environment.py
+      --environment "${GITLAB_PROTECTED_ENVIRONMENT_NAME}"
+      --min-approvals "${GITLAB_PROTECTED_ENV_REQUIRED_APPROVALS}"
     - echo "Applying canary policy for ${ENV}: ${CANARY_POLICY_PROD}"
     - echo "Production rollout observation window: ${PROD_ROLLOUT_WINDOW_MINUTES} minutes"
     - make infra-deploy-prod-ci
