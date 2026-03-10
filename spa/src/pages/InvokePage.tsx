@@ -4,6 +4,7 @@ import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { Agent, AgentInvokeResponse } from "../types";
 import { useJobPolling } from "../hooks/useJobPolling";
+import { useSessionKeepalive } from "../hooks/useSessionKeepalive";
 import {
     createInvokePayload,
     extractJobIdFromPollUrl,
@@ -21,9 +22,14 @@ export const InvokePage: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<string | null>(null);
     const [jobId, setJobId] = useState<string | null>(null);
+    const [sessionId, setSessionId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const { status: jobStatus, error: pollingError } = useJobPolling(jobId, getAccessToken);
+    
+    // Maintain session continuity with keepalive pings
+    useSessionKeepalive(sessionId, agentName || null);
+
     const invocationMode = agent?.invocation_mode ?? "sync";
 
     useEffect(() => {
@@ -49,7 +55,7 @@ export const InvokePage: React.FC = () => {
 
         try {
             const client = getApiClient(getAccessToken);
-            const body = JSON.stringify(createInvokePayload(prompt));
+            const body = JSON.stringify(createInvokePayload(prompt, sessionId));
 
             if (invocationMode === "streaming") {
                 setResult("");
@@ -60,7 +66,23 @@ export const InvokePage: React.FC = () => {
                 });
 
                 for await (const chunk of stream) {
-                    setResult((prev) => (prev || "") + chunk.data);
+                    if (chunk.data === "[DONE]") continue;
+                    
+                    try {
+                        const payload = JSON.parse(chunk.data);
+                        if (payload.type === "session" && payload.sessionId) {
+                            setSessionId(payload.sessionId);
+                        } else if (payload.type === "text" && payload.content) {
+                            setResult((prev) => (prev || "") + payload.content);
+                        } else if (typeof payload.content === "string") {
+                            setResult((prev) => (prev || "") + payload.content);
+                        } else if (!payload.type && typeof payload.output === "string") {
+                            setResult((prev) => (prev || "") + payload.output);
+                        }
+                    } catch (e) {
+                        // Fallback for raw text data
+                        setResult((prev) => (prev || "") + chunk.data);
+                    }
                 }
             } else {
                 const data = await client.request<AgentInvokeResponse>(`/v1/agents/${agentName}/invoke`, {
@@ -77,6 +99,9 @@ export const InvokePage: React.FC = () => {
                     setJobId(acceptedJobId);
                 } else {
                     setResult(data.output);
+                    if (data.sessionId) {
+                        setSessionId(data.sessionId);
+                    }
                 }
             }
         } catch (err: unknown) {

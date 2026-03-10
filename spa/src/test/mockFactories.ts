@@ -16,6 +16,7 @@ export function createAuthContextValue(
     login: async () => undefined,
     logout: async () => undefined,
     getAccessToken: async () => "token",
+    refreshAccessTokenViaBff: async () => "token",
     ...overrides,
   };
 }
