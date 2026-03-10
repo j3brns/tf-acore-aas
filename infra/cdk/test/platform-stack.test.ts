@@ -263,6 +263,10 @@ describe('PlatformStack (TASK-023)', () => {
     template.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
       AuthorizerType: 'AWS_IAM',
       ProtocolType: 'MCP',
+      PolicyEngineConfiguration: Match.objectLike({
+        Arn: Match.anyValue(),
+        Mode: 'LOG_ONLY',
+      }),
       InterceptorConfigurations: Match.arrayWith([
         Match.objectLike({
           InterceptionPoints: ['REQUEST'],
@@ -283,6 +287,72 @@ describe('PlatformStack (TASK-023)', () => {
         }),
       ]),
     });
+  });
+
+  test('creates AgentCore Policy Engine and Cedar policy resources', () => {
+    template.resourceCountIs('AWS::BedrockAgentCore::PolicyEngine', 1);
+    template.resourceCountIs('AWS::BedrockAgentCore::Policy', 1);
+
+    template.hasResourceProperties('AWS::BedrockAgentCore::PolicyEngine', {
+      Name: 'PlatformGatewayPolicyEngineDev',
+    });
+
+    template.hasResourceProperties('AWS::BedrockAgentCore::Policy', {
+      Name: 'PlatformGatewayAllowAllDev',
+      ValidationMode: 'FAIL_ON_ANY_FINDINGS',
+      Definition: Match.objectLike({
+        Cedar: Match.objectLike({
+          Statement: Match.stringLikeRegexp('permit'),
+        }),
+      }),
+    });
+
+    template.hasOutput('AgentCoreGatewayPolicyMode', {
+      Value: 'LOG_ONLY',
+    });
+  });
+
+  test('uses LOG_ONLY for non-prod and ENFORCE for prod gateway policy mode', () => {
+    const stagingTemplate = synthTemplate('staging');
+    const prodTemplate = synthTemplate('prod');
+
+    stagingTemplate.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
+      PolicyEngineConfiguration: Match.objectLike({
+        Mode: 'LOG_ONLY',
+      }),
+    });
+    prodTemplate.hasResourceProperties('AWS::BedrockAgentCore::Gateway', {
+      PolicyEngineConfiguration: Match.objectLike({
+        Mode: 'ENFORCE',
+      }),
+    });
+  });
+
+  test('grants gateway role policy-engine authorization actions without wildcard resource', () => {
+    const policies = template.findResources('AWS::IAM::Policy');
+    const allStatements = Object.values(policies).flatMap((resource) => {
+      const properties = (resource as { Properties?: { PolicyDocument?: { Statement?: Array<Record<string, unknown>> } } })
+        .Properties;
+      return properties?.PolicyDocument?.Statement ?? [];
+    });
+
+    const gatewayPolicyStatement = allStatements.find((statement) => {
+      const actions = statement.Action;
+      if (!Array.isArray(actions)) {
+        return false;
+      }
+      return (
+        actions.includes('bedrock-agentcore:AuthorizeAction') &&
+        actions.includes('bedrock-agentcore:PartiallyAuthorizeActions') &&
+        actions.includes('bedrock-agentcore:GetPolicyEngine')
+      );
+    });
+
+    expect(gatewayPolicyStatement).toBeDefined();
+    const resources = Array.isArray(gatewayPolicyStatement?.Resource)
+      ? gatewayPolicyStatement?.Resource
+      : [gatewayPolicyStatement?.Resource];
+    expect(resources).not.toContain('*');
   });
 
   test('does not synthesize a standalone async-runner lambda', () => {
