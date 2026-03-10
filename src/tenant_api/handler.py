@@ -21,20 +21,25 @@ from typing import Any
 
 import boto3
 from aws_lambda_powertools import Logger
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import ConditionBase, Key
 from botocore.exceptions import ClientError
-from data_access import TenantContext, TenantScopedDynamoDB
+from data_access import TenantContext, TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import TenantStatus, TenantTier
 
 logger = Logger(service="tenant-api")
 
 _TENANTS_TABLE_ENV = "TENANTS_TABLE_NAME"
+_INVOCATIONS_TABLE_ENV = "INVOCATIONS_TABLE_NAME"
 _EVENT_BUS_ENV = "EVENT_BUS_NAME"
+_AUDIT_EXPORT_BUCKET_ENV = "AUDIT_EXPORT_BUCKET"
 _API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"  # pragma: allowlist secret
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 _SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator"}
 _INVITE_EXPIRY_DAYS = 7
+_AUDIT_EXPORT_PREFIX = "audit-exports"
+_AUDIT_EXPORT_URL_EXPIRY_SECONDS = 3600
+_AUDIT_EXPORT_PAGE_SIZE = 200
 _TENANT_ID_MIN_LENGTH = 3
 _TENANT_ID_MAX_LENGTH = 32
 _TENANT_ID_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
@@ -156,6 +161,13 @@ def _require_json_body(event: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _query_params(event: dict[str, Any]) -> dict[str, Any]:
+    query = event.get("queryStringParameters") or {}
+    if not isinstance(query, dict):
+        return {}
+    return query
+
+
 def _http_method(event: dict[str, Any]) -> str:
     method = event.get("httpMethod")
     if not method:
@@ -204,16 +216,61 @@ def _canonical_tenant_id(value: Any) -> str:
     return normalized
 
 
+def _parse_utc_timestamp(value: Any, *, field: str) -> datetime:
+    text = _str_or_none(value)
+    if text is None:
+        raise ValueError(f"{field} must be an ISO 8601 UTC timestamp")
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO 8601 UTC timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a timezone")
+    return parsed.astimezone(UTC)
+
+
+def _parse_optional_utc_timestamp(value: Any, *, field: str) -> datetime | None:
+    if _str_or_none(value) is None:
+        return None
+    return _parse_utc_timestamp(value, field=field)
+
+
+def _format_export_timestamp(dt: datetime) -> str:
+    return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _coerce_positive_int(value: Any, *, default: int) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
 def _tenants_table_name() -> str:
     return os.environ.get(_TENANTS_TABLE_ENV, "platform-tenants")
+
+
+def _invocations_table_name() -> str:
+    return os.environ.get(_INVOCATIONS_TABLE_ENV, "platform-invocations")
 
 
 def _event_bus_name() -> str:
     return os.environ.get(_EVENT_BUS_ENV, "default")
 
 
+def _audit_export_bucket() -> str | None:
+    return _str_or_none(os.environ.get(_AUDIT_EXPORT_BUCKET_ENV))
+
+
 def _secret_prefix() -> str:
     return os.environ.get(_API_KEY_SECRET_PREFIX_ENV, "platform/tenants")
+
+
+def _audit_export_url_expiry_seconds() -> int:
+    raw = os.environ.get("AUDIT_EXPORT_URL_EXPIRY_SECONDS")
+    return _coerce_positive_int(raw, default=_AUDIT_EXPORT_URL_EXPIRY_SECONDS)
 
 
 def _dependencies() -> TenantApiDependencies:
@@ -269,6 +326,20 @@ def _db_for_tenant(
         app_id=app_id,
     )
     return TenantScopedDynamoDB(tenant_context)
+
+
+def _tenant_s3_for_scope(
+    *,
+    tenant_id: str,
+    caller: CallerIdentity,
+    app_id: str | None,
+) -> TenantScopedS3:
+    tenant_context = _tenant_context_for_scope(
+        tenant_id=tenant_id,
+        caller=caller,
+        app_id=app_id,
+    )
+    return TenantScopedS3(tenant_context)
 
 
 def _normalize_tier(value: Any) -> str:
@@ -842,7 +913,98 @@ def _handle_invite_user(
     return _response(202, {"invite": invite})
 
 
+def _invocation_timestamp(item: dict[str, Any]) -> str | None:
+    explicit = _str_or_none(item.get("timestamp"))
+    if explicit is not None:
+        return explicit
+
+    sort_key = _str_or_none(item.get("SK"))
+    if sort_key is None or not sort_key.startswith("INV#"):
+        return None
+    parts = sort_key.split("#", 2)
+    if len(parts) < 3:
+        return None
+    return _str_or_none(parts[1])
+
+
+def _audit_export_sk_condition(
+    *,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> ConditionBase | None:
+    start_text = f"INV#{_iso(start_at)}" if start_at is not None else None
+    end_text = f"INV#{_iso(end_at)}~" if end_at is not None else None
+    if start_text and end_text:
+        return Key("SK").between(start_text, end_text)
+    if start_text:
+        return Key("SK").gte(start_text)
+    if end_text:
+        return Key("SK").lte(end_text)
+    return None
+
+
+def _collect_audit_export_records(
+    *,
+    tenant_id: str,
+    caller: CallerIdentity,
+    app_id: str | None,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> list[dict[str, Any]]:
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    last_evaluated_key: dict[str, Any] | None = None
+    items: list[dict[str, Any]] = []
+    sk_condition = _audit_export_sk_condition(start_at=start_at, end_at=end_at)
+    start_text = _iso(start_at) if start_at is not None else None
+    end_text = _iso(end_at) if end_at is not None else None
+
+    while True:
+        page = db.query(
+            _invocations_table_name(),
+            sk_condition=sk_condition,
+            limit=_AUDIT_EXPORT_PAGE_SIZE,
+            exclusive_start_key=last_evaluated_key,
+        )
+        for item in page.items:
+            item_timestamp = _invocation_timestamp(item)
+            if item_timestamp is None:
+                continue
+            if start_text is not None and item_timestamp < start_text:
+                continue
+            if end_text is not None and item_timestamp > end_text:
+                continue
+            items.append(item)
+        last_evaluated_key = page.last_evaluated_key
+        if last_evaluated_key is None:
+            return items
+
+
+def _audit_export_key(tenant_id: str, generated_at: datetime) -> str:
+    timestamp = _format_export_timestamp(generated_at)
+    return f"tenants/{tenant_id}/{_AUDIT_EXPORT_PREFIX}/audit-export-{timestamp}.json"
+
+
+def _build_audit_export_payload(
+    *,
+    tenant_id: str,
+    generated_at: datetime,
+    start_at: datetime | None,
+    end_at: datetime | None,
+    records: list[dict[str, Any]],
+) -> bytes:
+    payload = {
+        "tenantId": tenant_id,
+        "generatedAt": _iso(generated_at),
+        "windowStart": _iso(start_at) if start_at is not None else None,
+        "windowEnd": _iso(end_at) if end_at is not None else None,
+        "recordCount": len(records),
+        "records": records,
+    }
+    return json.dumps(payload, default=_json_default).encode("utf-8")
+
+
 def _handle_audit_export(
+    event: dict[str, Any],
     caller: CallerIdentity,
     deps: TenantApiDependencies,
     *,
@@ -853,16 +1015,67 @@ def _handle_audit_export(
     if existing is None:
         return _error(404, "NOT_FOUND", "Tenant not found")
 
-    # In a real implementation, this would trigger a background export of
-    # platform-invocations to S3 and return a presigned URL.
-    # For now, we return a mock response as per the "future implementation" note in openapi.yaml.
-    now = _now_utc()
-    expires_at = now + timedelta(hours=1)
+    query = _query_params(event)
+    start_at = _parse_optional_utc_timestamp(query.get("start"), field="start")
+    end_at = _parse_optional_utc_timestamp(query.get("end"), field="end")
+    if start_at is not None and end_at is not None and start_at > end_at:
+        raise ValueError("start must be less than or equal to end")
+
+    bucket = _audit_export_bucket()
+    if bucket is None:
+        logger.error("Audit export bucket is not configured")
+        return _error(500, "INTERNAL_ERROR", "Audit export bucket is not configured")
+
+    app_id = _str_or_none(existing.get("appId"))
+    records = _collect_audit_export_records(
+        tenant_id=tenant_id,
+        caller=caller,
+        app_id=app_id,
+        start_at=start_at,
+        end_at=end_at,
+    )
+    generated_at = _now_utc()
+    object_key = _audit_export_key(tenant_id, generated_at)
+    payload = _build_audit_export_payload(
+        tenant_id=tenant_id,
+        generated_at=generated_at,
+        start_at=start_at,
+        end_at=end_at,
+        records=records,
+    )
+
+    try:
+        tenant_s3 = _tenant_s3_for_scope(tenant_id=tenant_id, caller=caller, app_id=app_id)
+        tenant_s3.put_object(
+            bucket,
+            object_key,
+            payload,
+            ContentType="application/json",
+        )
+        expires_in = _audit_export_url_expiry_seconds()
+        download_url = tenant_s3.generate_presigned_url(
+            bucket,
+            object_key,
+            expires_in=expires_in,
+        )
+    except Exception:
+        logger.exception("Failed to generate tenant audit export")
+        return _error(500, "INTERNAL_ERROR", "Failed to generate audit export")
+
+    logger.info(
+        "Generated tenant audit export",
+        extra={
+            "target_tenantid": tenant_id,
+            "record_count": len(records),
+            "object_key": object_key,
+        },
+    )
+    expires_at = generated_at + timedelta(seconds=_audit_export_url_expiry_seconds())
     return _response(
         200,
         {
             "tenantId": tenant_id,
-            "downloadUrl": f"https://s3.amazonaws.com/mock-export-{tenant_id}.csv",
+            "downloadUrl": download_url,
             "expiresAt": _iso(expires_at),
         },
     )
@@ -1312,7 +1525,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             if path.endswith("/users/invite") and method == "POST":
                 return _handle_invite_user(event, caller, deps, tenant_id=tenant_id)
             if path.endswith("/audit-export") and method == "GET":
-                return _handle_audit_export(caller, deps, tenant_id=tenant_id)
+                return _handle_audit_export(event, caller, deps, tenant_id=tenant_id)
 
             if method == "GET":
                 return _handle_read(event, caller, deps, tenant_id=tenant_id)
