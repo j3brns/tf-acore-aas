@@ -43,6 +43,12 @@ type BridgeCanaryPolicy = {
   readonly summary: string;
 };
 
+type GatewayPolicyConfiguration = {
+  readonly enforcementMode: 'LOG_ONLY' | 'ENFORCE';
+  readonly policyEngineName: string;
+  readonly policyName: string;
+};
+
 export interface PlatformStackProps extends cdk.StackProps {
   readonly vpc: ec2.IVpc;
   readonly tenantDataKey: kms.IKey;
@@ -80,6 +86,7 @@ export class PlatformStack extends cdk.Stack {
 
     const env = ((this.node.tryGetContext('env') as string | undefined) ?? 'dev').toLowerCase();
     const bridgeCanaryPolicy = this.resolveBridgeCanaryPolicy(env);
+    const gatewayPolicyConfiguration = this.resolveGatewayPolicyConfiguration(env);
 
     // --- Secrets ---
 
@@ -851,14 +858,67 @@ export class PlatformStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AgentCore Gateway interceptors',
     });
+
+    const gatewayPolicyEngine = new cdk.CfnResource(this, 'AgentCoreGatewayPolicyEngine', {
+      type: 'AWS::BedrockAgentCore::PolicyEngine',
+      properties: {
+        Name: gatewayPolicyConfiguration.policyEngineName,
+        Description: 'Cedar policy engine for AgentCore Gateway tool authorization',
+        Tags: [
+          {
+            Key: 'stack',
+            Value: this.stackName,
+          },
+          {
+            Key: 'component',
+            Value: 'platform-gateway-policy',
+          },
+        ],
+      },
+    });
+
+    const gatewayDefaultPolicy = new cdk.CfnResource(this, 'AgentCoreGatewayDefaultPolicy', {
+      type: 'AWS::BedrockAgentCore::Policy',
+      properties: {
+        Name: gatewayPolicyConfiguration.policyName,
+        Description: 'Baseline Cedar policy for AgentCore Gateway',
+        PolicyEngineId: gatewayPolicyEngine.getAtt('PolicyEngineId').toString(),
+        ValidationMode: 'FAIL_ON_ANY_FINDINGS',
+        Definition: {
+          Cedar: {
+            Statement: [
+              'permit (',
+              '  principal,',
+              '  action,',
+              '  resource',
+              ') when {',
+              '  true',
+              '};',
+            ].join('\n'),
+          },
+        },
+      },
+    });
+    gatewayDefaultPolicy.addDependency(gatewayPolicyEngine);
+
     agentCoreGatewayRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['lambda:InvokeFunction'],
         resources: [this.requestInterceptorFn.functionArn, this.responseInterceptorFn.functionArn],
       }),
     );
+    agentCoreGatewayRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'bedrock-agentcore:AuthorizeAction',
+          'bedrock-agentcore:PartiallyAuthorizeActions',
+          'bedrock-agentcore:GetPolicyEngine',
+        ],
+        resources: [gatewayPolicyEngine.ref],
+      }),
+    );
 
-    new cdk.CfnResource(this, 'AgentCoreGateway', {
+    const agentCoreGateway = new cdk.CfnResource(this, 'AgentCoreGateway', {
       type: 'AWS::BedrockAgentCore::Gateway',
       properties: {
         Name: `${this.stackName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-gateway`,
@@ -866,6 +926,10 @@ export class PlatformStack extends cdk.Stack {
         AuthorizerType: 'AWS_IAM',
         ProtocolType: 'MCP',
         RoleArn: agentCoreGatewayRole.roleArn,
+        PolicyEngineConfiguration: {
+          Arn: gatewayPolicyEngine.ref,
+          Mode: gatewayPolicyConfiguration.enforcementMode,
+        },
         InterceptorConfigurations: [
           {
             InterceptionPoints: ['REQUEST'],
@@ -895,6 +959,12 @@ export class PlatformStack extends cdk.Stack {
           component: 'platform-gateway',
         },
       },
+    });
+    agentCoreGateway.addDependency(gatewayDefaultPolicy);
+
+    new cdk.CfnOutput(this, 'AgentCoreGatewayPolicyMode', {
+      value: gatewayPolicyConfiguration.enforcementMode,
+      description: 'Policy enforcement mode for the AgentCore Gateway',
     });
   }
 
@@ -944,6 +1014,31 @@ export class PlatformStack extends cdk.Stack {
         };
       default:
         throw new Error(`Unsupported env context for canary policy: ${env}`);
+    }
+  }
+
+  private resolveGatewayPolicyConfiguration(env: string): GatewayPolicyConfiguration {
+    switch (env) {
+      case 'dev':
+        return {
+          enforcementMode: 'LOG_ONLY',
+          policyEngineName: 'PlatformGatewayPolicyEngineDev',
+          policyName: 'PlatformGatewayAllowAllDev',
+        };
+      case 'staging':
+        return {
+          enforcementMode: 'LOG_ONLY',
+          policyEngineName: 'PlatformGatewayPolicyEngineStaging',
+          policyName: 'PlatformGatewayAllowAllStaging',
+        };
+      case 'prod':
+        return {
+          enforcementMode: 'ENFORCE',
+          policyEngineName: 'PlatformGatewayPolicyEngineProd',
+          policyName: 'PlatformGatewayAllowAllProd',
+        };
+      default:
+        throw new Error(`Unsupported env context for gateway policy mode: ${env}`);
     }
   }
 }

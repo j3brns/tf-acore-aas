@@ -45,7 +45,7 @@ eu-west-1 Dublin (COMPUTE — runtime only)
 
 eu-central-1 Frankfurt (EVALUATION — async, non-real-time)
 ├── AgentCore Evaluations
-└── AgentCore Policy (preview — currently Bedrock Guardrails in prod)
+└── AgentCore Policy (Cedar) for Gateway authorization decisions
 ```
 
 All data remains in the EU. The zigzag to Dublin adds ~12ms RTT.
@@ -73,6 +73,7 @@ Client
   → AgentCore Runtime eu-west-1
       Firecracker microVM isolation per session
       Calls tools via AgentCore Gateway eu-west-2
+      Gateway policy engine: Cedar evaluation (LOG_ONLY in dev/staging, ENFORCE in prod)
       Gateway REQUEST interceptor: issues scoped act-on-behalf token
       Tool Lambda eu-west-2: executes with scoped token
       Gateway RESPONSE interceptor: filters by tier, redacts PII

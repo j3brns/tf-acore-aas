@@ -476,9 +476,10 @@ task. Result delivered via webhook and available via poll endpoint.
               using AgentCore Runtime A2A protocol (target map + task fan-out).
               Done: 2026-03-10
 
-[!] TASK-051  AgentCore Policy CEDAR enforcement
-              BLOCKED: Policy GA not available in eu-west-1 or eu-west-2
-              Currently: Bedrock Guardrails in prod
+[x] TASK-051  AgentCore Policy CEDAR enforcement
+              Implemented: AgentCore Gateway now wires Policy Engine + baseline Cedar policy.
+              Environments: dev/staging LOG_ONLY, prod ENFORCE.
+              Done: 2026-03-10, issue #58
 
 [ ] TASK-052  Billing metering pipeline
               Daily Lambda aggregates token counts per tenant

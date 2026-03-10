@@ -54,7 +54,7 @@ result delivered via webhook and poll endpoint.
 | Billing metering pipeline       | After V1.0 — token cost attribution per tenant |
 | Tenant self-service portal      | After V1.0 — tenant manages own API keys/users |
 | A2A cross-agent orchestration   | Delivered (TASK-050, 2026-03-10)               |
-| AgentCore Policy CEDAR          | AWS GA of Policy in eu-west-1                  |
+| AgentCore Policy CEDAR tuning   | Baseline shipped; next is fine-grained rules   |
 | Agent marketplace               | After V1.0 — discovery and composition portal  |
 | eu-west-2 Runtime               | AWS extends AgentCore to London                |
 
