@@ -15,6 +15,7 @@ import { Construct } from 'constructs';
 
 export interface AgentCoreStackProps extends cdk.StackProps {
   readonly homeRegion: string;
+  readonly runtimeNetworkPosture: 'PUBLIC_WITH_COMPENSATING_CONTROLS';
 }
 
 export class AgentCoreStack extends cdk.Stack {
@@ -28,6 +29,11 @@ export class AgentCoreStack extends cdk.Stack {
 
     if (!cdk.Token.isUnresolved(runtimeRegion) && runtimeRegion !== 'eu-west-1') {
       throw new Error('AgentCoreStack must be deployed in eu-west-1');
+    }
+    if (props.runtimeNetworkPosture !== 'PUBLIC_WITH_COMPENSATING_CONTROLS') {
+      throw new Error(
+        'AgentCoreStack requires an explicit runtime network posture decision for the current deployment path',
+      );
     }
 
     const runtimeExecutionRoleArn = new cdk.CfnParameter(this, 'RuntimeExecutionRoleArn', {
@@ -96,9 +102,27 @@ export class AgentCoreStack extends cdk.Stack {
           component: 'agentcore-runtime',
           environment: envName,
           homeRegion: props.homeRegion,
+          networkMode: 'PUBLIC',
+          networkPosture: props.runtimeNetworkPosture,
         },
       },
     });
+    runtime.cfnOptions.metadata = {
+      RuntimeNetworkPosture: {
+        Decision: props.runtimeNetworkPosture,
+        Justification: 'ADR-009_NO_RUNTIME_REGION_VPC',
+        Rationale:
+          'The approved ADR-009 topology deploys the runtime in eu-west-1, while this repository only provisions VPC infrastructure in eu-west-2. A VPC migration requires dedicated eu-west-1 subnets, security groups, and service endpoints before NetworkMode can move to VPC.',
+        CompensatingControls: [
+          'Custom JWT authorizer enforces Entra discovery URL and allowed audience',
+          'Request headers are allowlisted to authorization, x-tenant-id, and x-app-id',
+          'Tenant execution roles restrict invocation to approved runtime regions only',
+          'Runtime region remains fixed to eu-west-1 until a successor ADR approves a topology change',
+        ],
+        RevisitTrigger:
+          'Revisit when runtime-region VPC infrastructure exists in eu-west-1 and a successor ADR or approved design authorises migration to NetworkMode=VPC.',
+      },
+    };
 
     const runtimeEndpoint = new cdk.CfnResource(this, 'AgentCoreRuntimeEndpoint', {
       type: 'AWS::BedrockAgentCore::RuntimeEndpoint',
@@ -168,6 +192,14 @@ export class AgentCoreStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AgentCoreRuntimeRegion', {
       value: runtimeRegion,
       description: 'Runtime compute region for AgentCore execution',
+    });
+    new cdk.CfnOutput(this, 'AgentCoreRuntimeNetworkMode', {
+      value: 'PUBLIC',
+      description: 'Explicitly approved runtime network mode for the current deployment path',
+    });
+    new cdk.CfnOutput(this, 'AgentCoreRuntimeNetworkPostureDecision', {
+      value: props.runtimeNetworkPosture,
+      description: 'Explicit network posture decision guarding against silent runtime network drift',
     });
     new cdk.CfnOutput(this, 'AgentCoreRuntimeName', {
       value: runtimeName,

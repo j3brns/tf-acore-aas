@@ -9,6 +9,7 @@ let iam_policies = Resources.*[ Type == 'AWS::IAM::Policy' ]
 let s3_buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
 let dynamodb_tables = Resources.*[ Type == 'AWS::DynamoDB::Table' ]
 let lambda_functions = Resources.*[ Type == 'AWS::Lambda::Function' ]
+let agentcore_runtimes = Resources.*[ Type == 'AWS::BedrockAgentCore::Runtime' ]
 
 # no_wildcard_iam_action
 rule no_wildcard_iam_action {
@@ -175,6 +176,28 @@ rule lambda_in_vpc {
             %lambda_functions.Properties.VpcConfig {
                 SubnetIds exists
                 SecurityGroupIds exists
+            }
+        }
+    }
+}
+
+# agentcore_runtime_network_mode_explicit
+rule agentcore_runtime_network_mode_explicit {
+    when %agentcore_runtimes exists {
+        %agentcore_runtimes.Properties.NetworkConfiguration.NetworkMode exists
+    }
+}
+
+# agentcore_runtime_public_requires_exception_metadata
+rule agentcore_runtime_public_requires_exception_metadata {
+    when %agentcore_runtimes exists {
+        %agentcore_runtimes {
+            when Properties.NetworkConfiguration.NetworkMode == "PUBLIC" {
+                Metadata.RuntimeNetworkPosture {
+                    Decision == "PUBLIC_WITH_COMPENSATING_CONTROLS"
+                    Justification == "ADR-009_NO_RUNTIME_REGION_VPC"
+                    RevisitTrigger exists
+                }
             }
         }
     }

@@ -58,6 +58,15 @@ Threat: attacker intercepts active AgentCore Runtime session
 Mitigation: HTTPS everywhere, scoped tokens per session, session ID is UUID4 (not guessable),
 Runtime microVM isolation prevents cross-session access at compute level
 
+### 8a. Runtime Public Network Drift
+Threat: AgentCore Runtime remains internet-addressable by silent default even after the
+platform claims a stronger network posture
+Mitigation: the runtime stack now records `PUBLIC` as an explicit exception tied to
+ADR-009 and the absence of eu-west-1 runtime VPC infrastructure. CDK tests and
+cfn-guard fail if `PUBLIC` is present without the documented exception metadata and
+revisit trigger. Migration to `VPC` is deferred until runtime-region subnets, security
+groups, endpoints, and egress controls are designed and approved.
+
 ### 9. Data Exfiltration via Agent
 Threat: agent accumulates and exfiltrates tenant data
 Mitigation: RESPONSE interceptor PII redaction, tool access filtered by tier,
@@ -83,6 +92,7 @@ CloudTrail records all AWS API calls including Secrets Manager reads
 | cfn-guard IaC policy           | 7                            | GitLab CI validate stage  |
 | CloudTrail + VPC Flow Logs     | 10                           | ObservabilityStack        |
 | PII redaction (RESPONSE)       | 9                            | RESPONSE interceptor      |
+| Explicit runtime posture gate  | 8a                           | AgentCoreStack + cfn-guard + CDK tests |
 
 ## Data Classification
 
