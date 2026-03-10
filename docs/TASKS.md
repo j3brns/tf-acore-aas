@@ -471,8 +471,10 @@ task. Result delivered via webhook and available via poll endpoint.
               BLOCKED: Trigger is ConcurrentSessions > 70% quota. Not yet reached.
               ADRs: ADR-009
 
-[!] TASK-050  A2A cross-agent orchestration
-              BLOCKED: Awaiting AWS GA of A2A protocol in eu-west-1
+[x] TASK-050  A2A cross-agent orchestration
+              Implemented: reference-agent sync A2A delegate orchestration pattern
+              using AgentCore Runtime A2A protocol (target map + task fan-out).
+              Done: 2026-03-10
 
 [x] TASK-051  AgentCore Policy CEDAR enforcement
               Implemented: AgentCore Gateway now wires Policy Engine + baseline Cedar policy.
