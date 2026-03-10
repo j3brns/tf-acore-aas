@@ -212,6 +212,25 @@ class FakeLambdaContext:
     aws_request_id = "req-123"
 
 
+class FakeSsm:
+    def __init__(self) -> None:
+        self.parameters = {"/platform/config/runtime-region": "eu-west-1"}
+        self.get_calls: list[dict[str, Any]] = []
+        self.put_calls: list[dict[str, Any]] = []
+        self.put_error: Exception | None = None
+
+    def get_parameter(self, *, Name: str) -> dict[str, Any]:  # noqa: N803 - boto3 compatibility
+        self.get_calls.append({"Name": Name})
+        return {"Parameter": {"Name": Name, "Value": self.parameters[Name]}}
+
+    def put_parameter(self, **kwargs: Any) -> dict[str, Any]:
+        self.put_calls.append(dict(kwargs))
+        if self.put_error is not None:
+            raise self.put_error
+        self.parameters[str(kwargs["Name"])] = str(kwargs["Value"])
+        return {"Version": 1}
+
+
 @pytest.fixture
 def fixed_now() -> datetime:
     return datetime(2026, 2, 25, 12, 0, 0, tzinfo=UTC)
@@ -224,6 +243,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
         dynamodb=FakeDynamoDbResource(),
+        ssm=FakeSsm(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
     )
@@ -234,6 +254,8 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     monkeypatch.setenv("AUDIT_EXPORT_BUCKET", "platform-audit-exports")
     monkeypatch.setenv("AUDIT_EXPORT_URL_EXPIRY_SECONDS", "1800")
     monkeypatch.setenv("TENANT_API_KEY_SECRET_PREFIX", "platform/tenants")
+    monkeypatch.setenv("OPS_LOCKS_TABLE", "platform-ops-locks")
+    monkeypatch.setenv("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
     monkeypatch.setattr(tenant_api_handler, "_dependencies", lambda: deps)
     monkeypatch.setattr(tenant_api_handler, "_db_for_tenant", lambda **_kwargs: db)
     monkeypatch.setattr(tenant_api_handler, "_now_utc", lambda: fixed_now)
@@ -289,6 +311,23 @@ def _last_event_detail(fake_state: dict[str, Any]) -> tuple[str, dict[str, Any]]
     assert calls, "expected EventBridge put_events call"
     entry = calls[-1]["Entries"][0]
     return entry["DetailType"], json.loads(entry["Detail"])
+
+
+def _seed_failover_lock(
+    fake_state: dict[str, Any],
+    *,
+    lock_id: str = "lock-123",
+    ttl: int | None = None,
+    acquired_by: str = "ops@example.com",
+) -> None:
+    expires_at = ttl if ttl is not None else int(datetime.now(UTC).timestamp()) + 300
+    fake_state["db"].items[("LOCK#platform-runtime-failover", "METADATA")] = {
+        "PK": "LOCK#platform-runtime-failover",
+        "SK": "METADATA",
+        "lockId": lock_id,
+        "acquiredBy": acquired_by,
+        "ttl": expires_at,
+    }
 
 
 def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
@@ -807,13 +846,134 @@ def test_audit_export_requires_bucket_configuration(
     assert error["message"] == "Audit export bucket is not configured"
 
 
-def test_platform_failover_requires_lock_and_admin(fake_state: dict[str, Any]) -> None:
+def test_platform_failover_updates_runtime_region_when_lock_is_valid(
+    fake_state: dict[str, Any], fixed_now: datetime
+) -> None:
+    _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) + 300)
     event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
     event["path"] = "/v1/platform/failover"
     response = _invoke(event)
 
     assert response["statusCode"] == 200
-    assert _body(response)["status"] == "initiated"
+    assert _body(response) == {
+        "status": "completed",
+        "region": "eu-central-1",
+        "previousRegion": "eu-west-1",
+        "lockId": "lock-123",
+        "changed": True,
+    }
+    assert fake_state["deps"].ssm.parameters["/platform/config/runtime-region"] == "eu-central-1"
+    assert fake_state["deps"].ssm.put_calls == [
+        {
+            "Name": "/platform/config/runtime-region",
+            "Value": "eu-central-1",
+            "Type": "String",
+            "Overwrite": True,
+        }
+    ]
+
+
+def test_platform_failover_is_idempotent_when_target_region_is_already_active(
+    fake_state: dict[str, Any], fixed_now: datetime
+) -> None:
+    _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) + 300)
+    fake_state["deps"].ssm.parameters["/platform/config/runtime-region"] = "eu-central-1"
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    assert _body(response) == {
+        "status": "completed",
+        "region": "eu-central-1",
+        "previousRegion": "eu-central-1",
+        "lockId": "lock-123",
+        "changed": False,
+    }
+    assert fake_state["deps"].ssm.put_calls == []
+
+
+def test_platform_failover_rejects_missing_lock(fake_state: dict[str, Any]) -> None:
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 409
+    assert _body(response)["error"]["code"] == "LOCK_NOT_HELD"
+    assert fake_state["deps"].ssm.put_calls == []
+
+
+def test_platform_failover_rejects_expired_lock(
+    fake_state: dict[str, Any], fixed_now: datetime
+) -> None:
+    _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) - 1)
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 409
+    assert _body(response)["error"]["code"] == "LOCK_EXPIRED"
+    assert fake_state["deps"].ssm.put_calls == []
+
+
+def test_platform_failover_rejects_lock_owned_by_another_actor(
+    fake_state: dict[str, Any], fixed_now: datetime
+) -> None:
+    _seed_failover_lock(fake_state, lock_id="other-lock", ttl=int(fixed_now.timestamp()) + 300)
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 409
+    assert _body(response)["error"]["code"] == "LOCK_MISMATCH"
+    assert fake_state["deps"].ssm.put_calls == []
+
+
+def test_platform_failover_ssm_update_failure_returns_error_and_logs_context(
+    fake_state: dict[str, Any], fixed_now: datetime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) + 300)
+    fake_state["deps"].ssm.put_error = tenant_api_handler.ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+        "PutParameter",
+    )
+    logged: list[tuple[str, dict[str, Any]]] = []
+
+    def _capture_exception(message: str, *args: Any, **kwargs: Any) -> None:
+        extra = kwargs.get("extra")
+        if message == "Platform failover SSM update failed" and isinstance(extra, dict):
+            logged.append((message, dict(extra)))
+
+    monkeypatch.setattr(tenant_api_handler.logger, "exception", _capture_exception)
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 502
+    assert _body(response)["error"]["code"] == "AWS_CLIENT_ERROR"
+    assert fake_state["deps"].ssm.parameters["/platform/config/runtime-region"] == "eu-west-1"
+    assert logged == [
+        (
+            "Platform failover SSM update failed",
+            {
+                "actor": "user-123",
+                "lock_id": "lock-123",
+                "lock_owner": "ops@example.com",
+                "previous_region": "eu-west-1",
+                "target_region": "eu-central-1",
+            },
+        )
+    ]
+
+
+def test_platform_failover_requires_platform_admin_role(fake_state: dict[str, Any]) -> None:
+    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event["path"] = "/v1/platform/failover"
 
     # Non-admin forbidden
     event_non_admin = _event(method="POST", roles=[], body={"targetRegion": "x", "lockId": "y"})

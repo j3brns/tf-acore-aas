@@ -33,6 +33,9 @@ _INVOCATIONS_TABLE_ENV = "INVOCATIONS_TABLE_NAME"
 _EVENT_BUS_ENV = "EVENT_BUS_NAME"
 _AUDIT_EXPORT_BUCKET_ENV = "AUDIT_EXPORT_BUCKET"
 _API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"  # pragma: allowlist secret
+_OPS_LOCKS_TABLE_ENV = "OPS_LOCKS_TABLE"
+_RUNTIME_REGION_PARAM_ENV = "RUNTIME_REGION_PARAM"
+_FAILOVER_LOCK_NAME_ENV = "FAILOVER_LOCK_NAME"
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 _SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator"}
@@ -44,6 +47,9 @@ _TENANT_ID_MIN_LENGTH = 3
 _TENANT_ID_MAX_LENGTH = 32
 _TENANT_ID_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
 _RESERVED_TENANT_IDS = frozenset({"admin", "root", "system", "stub"})
+_DEFAULT_OPS_LOCKS_TABLE = "platform-ops-locks"
+_DEFAULT_RUNTIME_REGION_PARAM = "/platform/config/runtime-region"
+_DEFAULT_FAILOVER_LOCK_NAME = "platform-runtime-failover"
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,7 @@ class TenantApiDependencies:
     secretsmanager: Any
     events: Any
     dynamodb: Any
+    ssm: Any
     usage_client: Any
     memory_provisioner: Any
 
@@ -273,6 +280,18 @@ def _audit_export_url_expiry_seconds() -> int:
     return _coerce_positive_int(raw, default=_AUDIT_EXPORT_URL_EXPIRY_SECONDS)
 
 
+def _ops_locks_table_name() -> str:
+    return os.environ.get(_OPS_LOCKS_TABLE_ENV, _DEFAULT_OPS_LOCKS_TABLE)
+
+
+def _runtime_region_param_name() -> str:
+    return os.environ.get(_RUNTIME_REGION_PARAM_ENV, _DEFAULT_RUNTIME_REGION_PARAM)
+
+
+def _failover_lock_name() -> str:
+    return os.environ.get(_FAILOVER_LOCK_NAME_ENV, _DEFAULT_FAILOVER_LOCK_NAME)
+
+
 def _dependencies() -> TenantApiDependencies:
     region = os.environ["AWS_REGION"]
     session = boto3.session.Session(region_name=region)
@@ -280,6 +299,7 @@ def _dependencies() -> TenantApiDependencies:
         secretsmanager=session.client("secretsmanager"),
         events=session.client("events"),
         dynamodb=session.resource("dynamodb"),
+        ssm=session.client("ssm"),
         usage_client=_NoopUsageClient(),
         memory_provisioner=_NoopMemoryProvisioner(),
     )
@@ -342,6 +362,14 @@ def _tenant_s3_for_scope(
     return TenantScopedS3(tenant_context)
 
 
+def _control_plane_db(caller: CallerIdentity) -> TenantScopedDynamoDB:
+    return _db_for_tenant(
+        tenant_id=caller.tenant_id or "platform-admin",
+        caller=caller,
+        app_id=caller.app_id or "platform-admin",
+    )
+
+
 def _normalize_tier(value: Any) -> str:
     tier_text = _str_or_none(value)
     if tier_text is None:
@@ -402,6 +430,14 @@ def _read_tenant_record(
 ) -> dict[str, Any] | None:
     db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
     return db.get_item(_tenants_table_name(), _tenant_key(tenant_id))
+
+
+def _read_failover_lock_record(caller: CallerIdentity) -> dict[str, Any] | None:
+    db = _control_plane_db(caller)
+    return db.get_item(
+        _ops_locks_table_name(),
+        {"PK": f"LOCK#{_failover_lock_name()}", "SK": "METADATA"},
+    )
 
 
 def _build_update_expression(
@@ -1103,15 +1139,129 @@ def _handle_platform_failover(
     if not target_region or not lock_id:
         raise ValueError("targetRegion and lockId are required")
 
-    # TODO: Verify lock_id against platform-ops-locks table
-    # TODO: Update SSM /platform/config/runtime-region
+    lock_record = _read_failover_lock_record(caller)
+    if lock_record is None:
+        logger.warning(
+            "Platform failover rejected: lock missing",
+            extra={
+                "actor": caller.sub,
+                "lock_id": lock_id,
+                "target_region": target_region,
+                "lock_name": _failover_lock_name(),
+            },
+        )
+        return _error(409, "LOCK_NOT_HELD", "Runtime failover lock is not currently held")
+
+    current_lock_id = _str_or_none(lock_record.get("lockId") or lock_record.get("lock_id"))
+    acquired_by = _str_or_none(lock_record.get("acquiredBy") or lock_record.get("acquired_by"))
+    ttl_raw = lock_record.get("ttl")
+    if ttl_raw is None:
+        raise ValueError("Failover lock record is invalid")
+    try:
+        ttl = int(ttl_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Failover lock record is invalid") from exc
+
+    now_epoch = int(_now_utc().timestamp())
+    if ttl <= now_epoch:
+        logger.warning(
+            "Platform failover rejected: lock expired",
+            extra={
+                "actor": caller.sub,
+                "lock_id": lock_id,
+                "current_lock_id": current_lock_id,
+                "target_region": target_region,
+                "lock_owner": acquired_by,
+                "lock_expires_at": ttl,
+            },
+        )
+        return _error(409, "LOCK_EXPIRED", "Runtime failover lock has expired")
+
+    if current_lock_id != lock_id:
+        logger.warning(
+            "Platform failover rejected: lock mismatch",
+            extra={
+                "actor": caller.sub,
+                "lock_id": lock_id,
+                "current_lock_id": current_lock_id,
+                "target_region": target_region,
+                "lock_owner": acquired_by,
+            },
+        )
+        return _error(
+            409,
+            "LOCK_MISMATCH",
+            "Runtime failover lock is held by another actor or session",
+        )
+
+    current_region = str(
+        deps.ssm.get_parameter(Name=_runtime_region_param_name())["Parameter"]["Value"]
+    ).strip()
+    if current_region == target_region:
+        logger.info(
+            "Platform failover already completed",
+            extra={
+                "actor": caller.sub,
+                "lock_id": lock_id,
+                "lock_owner": acquired_by,
+                "previous_region": current_region,
+                "target_region": target_region,
+                "changed": False,
+            },
+        )
+        return _response(
+            200,
+            {
+                "status": "completed",
+                "region": target_region,
+                "previousRegion": current_region,
+                "lockId": lock_id,
+                "changed": False,
+            },
+        )
+
+    try:
+        deps.ssm.put_parameter(
+            Name=_runtime_region_param_name(),
+            Value=target_region,
+            Type="String",
+            Overwrite=True,
+        )
+    except ClientError:
+        logger.exception(
+            "Platform failover SSM update failed",
+            extra={
+                "actor": caller.sub,
+                "lock_id": lock_id,
+                "lock_owner": acquired_by,
+                "previous_region": current_region,
+                "target_region": target_region,
+            },
+        )
+        raise
 
     logger.info(
-        "Platform failover triggered",
-        extra={"target_region": target_region, "lock_id": lock_id, "actor": caller.sub},
+        "Platform failover completed",
+        extra={
+            "actor": caller.sub,
+            "lock_id": lock_id,
+            "lock_owner": acquired_by,
+            "previous_region": current_region,
+            "target_region": target_region,
+            "changed": True,
+        },
     )
 
-    return _response(200, {"status": "initiated", "region": target_region})
+    return _response(
+        200,
+        {
+            "status": "completed",
+            "region": target_region,
+            "previousRegion": current_region,
+            "lockId": lock_id,
+            "changed": True,
+        },
+    )
 
 
 def _handle_health() -> dict[str, Any]:

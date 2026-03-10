@@ -30,7 +30,8 @@ if (!env) {
 // eu-west-2 is the platform home region (see ARCHITECTURE.md, ADR-009).
 // This is an architectural constant, not runtime configuration.
 const HOME_REGION = 'eu-west-2';
-const RUNTIME_REGION = 'eu-west-1';
+const PRIMARY_RUNTIME_REGION = 'eu-west-1';
+const FAILOVER_RUNTIME_REGION = 'eu-central-1';
 
 const awsEnv: cdk.Environment = {
   account: process.env['CDK_DEFAULT_ACCOUNT'],
@@ -38,7 +39,7 @@ const awsEnv: cdk.Environment = {
 };
 const runtimeEnv: cdk.Environment = {
   account: process.env['CDK_DEFAULT_ACCOUNT'],
-  region: RUNTIME_REGION,
+  region: PRIMARY_RUNTIME_REGION,
 };
 
 // 1. NetworkStack
@@ -73,6 +74,7 @@ new TenantStack(app, stackId, {
   description: tenantId
     ? `Platform resources for tenant ${tenantId} — ${env}`
     : `Platform per-tenant resources stub — ${env}`,
+  authorizedRuntimeRegions: [PRIMARY_RUNTIME_REGION, FAILOVER_RUNTIME_REGION],
 });
 
 // 5. ObservabilityStack
@@ -100,6 +102,6 @@ new ObservabilityStack(app, `platform-observability-${env}`, {
 // 6. AgentCoreStack (cross-region: deploys config for eu-west-1 Runtime)
 new AgentCoreStack(app, `platform-agentcore-${env}`, {
   env: runtimeEnv,
-  description: `Platform AgentCore configuration (${RUNTIME_REGION}) — ${env}`,
+  description: `Platform AgentCore configuration (${PRIMARY_RUNTIME_REGION}) — ${env}`,
   homeRegion: HOME_REGION,
 });
