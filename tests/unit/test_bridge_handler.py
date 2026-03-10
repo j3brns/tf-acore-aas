@@ -435,6 +435,38 @@ def test_handler_streaming(setup_data):
         assert response is None
         mock_stream.write.assert_called()
 
+        # The first write should be the preamble
+        preamble_call = mock_stream.write.call_args_list[0][0][0]
+        assert b"statusCode" in preamble_call
+        assert b"text/event-stream" in preamble_call
+        assert preamble_call.endswith(b"\0")
+
+
+def test_handler_non_streaming_with_response_stream(setup_data):
+    event = {
+        "path": "/v1/agents",
+        "httpMethod": "GET",
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+            }
+        },
+    }
+    mock_stream = MagicMock()
+
+    response = handler(event, FakeLambdaContext(), response_stream=mock_stream)
+
+    assert response is None
+    # Check that it wrote to the stream
+    mock_stream.write.assert_called()
+    # The first write should be the preamble
+    preamble_call = mock_stream.write.call_args_list[0][0][0]
+    assert b"statusCode" in preamble_call
+    assert b"application/json" in preamble_call
+    assert preamble_call.endswith(b"\0")
+
 
 def test_handler_session_id_propagation(setup_data):
     event = {
