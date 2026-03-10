@@ -231,7 +231,7 @@ def _get_scoped_token_signing_key() -> str:
 
     # 1. Check for explicit environment variable (Local/Tests precedence)
     explicit = os.environ.get("SCOPED_TOKEN_SIGNING_KEY")
-    if explicit:
+    if explicit and platform_env == "local":
         if len(explicit) < 32:
             logger.warning("SCOPED_TOKEN_SIGNING_KEY is too short (min 32 bytes recommended)")
         return explicit
