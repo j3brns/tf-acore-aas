@@ -356,9 +356,11 @@ infra-deploy-prod-ci:
 	@test "$(CI)" = "true" || (echo "ERROR: infra-deploy-prod-ci is CI-only" && exit 1)
 	@test "$$GITLAB_CI" = "true" || (echo "ERROR: infra-deploy-prod-ci requires GitLab CI context" && exit 1)
 	@test -n "$$AWS_REGION" || (echo "ERROR: AWS_REGION must be set" && exit 1)
-	@test -n "$$AWS_ROLE_ARN_DEPLOY_PROD" || (echo "ERROR: AWS_ROLE_ARN_DEPLOY_PROD must be set" && exit 1)
 	@test -n "$$AWS_ROLE_ARN" || (echo "ERROR: AWS_ROLE_ARN must be set" && exit 1)
-	@test "$$AWS_ROLE_ARN" = "$$AWS_ROLE_ARN_DEPLOY_PROD" || (echo "ERROR: AWS_ROLE_ARN must match AWS_ROLE_ARN_DEPLOY_PROD for prod deploy" && exit 1)
+	@prod_role="$$PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN"; \
+		if [ -z "$$prod_role" ]; then prod_role="$$AWS_ROLE_ARN_DEPLOY_PROD"; fi; \
+		test -n "$$prod_role" || (echo "ERROR: PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN (preferred) or AWS_ROLE_ARN_DEPLOY_PROD must be set" && exit 1); \
+		test "$$AWS_ROLE_ARN" = "$$prod_role" || (echo "ERROR: AWS_ROLE_ARN must match the effective prod deploy role ARN" && exit 1)
 	cd infra/cdk && npx cdk deploy --all --context env=prod --require-approval never
 
 ## infra-destroy: Destroy all CDK stacks (dev only)

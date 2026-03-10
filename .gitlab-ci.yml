@@ -23,11 +23,13 @@ variables:
   PROD_ROLLOUT_WINDOW_MINUTES: "15"
   GITLAB_PROTECTED_ENVIRONMENT_NAME: "prod"
   GITLAB_PROTECTED_ENV_REQUIRED_APPROVALS: "2"
-  # Default roles (should be overridden in GitLab CI/CD variables)
-  AWS_ROLE_ARN_VALIDATE: ${AWS_ROLE_ARN_VALIDATE}
-  AWS_ROLE_ARN_DEPLOY_DEV: ${AWS_ROLE_ARN_DEPLOY_DEV}
-  AWS_ROLE_ARN_DEPLOY_STAGING: ${AWS_ROLE_ARN_DEPLOY_STAGING}
-  AWS_ROLE_ARN_DEPLOY_PROD: ${AWS_ROLE_ARN_DEPLOY_PROD}
+  # Canonical role variables (set in GitLab CI/CD variables):
+  # PLATFORM_PIPELINE_VALIDATE_ROLE_ARN
+  # PLATFORM_PIPELINE_DEPLOY_DEV_ROLE_ARN
+  # PLATFORM_PIPELINE_DEPLOY_STAGING_ROLE_ARN
+  # PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN
+  # Legacy fallback variables are still supported in jobs:
+  # AWS_ROLE_ARN_VALIDATE, AWS_ROLE_ARN_DEPLOY_DEV, AWS_ROLE_ARN_DEPLOY_STAGING, AWS_ROLE_ARN_DEPLOY_PROD
 
 default:
   image: python:3.12
@@ -59,6 +61,20 @@ default:
       fi
       aws --version
     - |
+      if [ -z "${AWS_ROLE_ARN:-}" ]; then
+        if [ -n "${AWS_ROLE_ARN_PRIMARY:-}" ]; then
+          export AWS_ROLE_ARN="${AWS_ROLE_ARN_PRIMARY}"
+        elif [ -n "${AWS_ROLE_ARN_FALLBACK:-}" ]; then
+          export AWS_ROLE_ARN="${AWS_ROLE_ARN_FALLBACK}"
+        fi
+      fi
+      if [ -z "${AWS_ROLE_ARN:-}" ]; then
+        echo "ERROR: AWS role ARN not set."
+        echo "Set canonical PLATFORM_PIPELINE_*_ROLE_ARN variables (preferred)."
+        echo "Legacy AWS_ROLE_ARN_* variables are accepted temporarily for compatibility."
+        exit 1
+      fi
+    - |
       KST=($(aws sts assume-role-with-web-identity \
         --role-arn ${AWS_ROLE_ARN} \
         --role-session-name "GitLabCI-${CI_JOB_ID}" \
@@ -76,7 +92,8 @@ default:
   stage: test
   extends: .aws_oidc_base
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_VALIDATE}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_VALIDATE_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_VALIDATE}
   interruptible: true
 
 .deploy_job_base:
@@ -91,7 +108,8 @@ validate:
   stage: validate
   extends: .aws_oidc_base
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_VALIDATE}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_VALIDATE_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_VALIDATE}
   script:
     - make validate-python
     - make validate-cdk
@@ -102,7 +120,8 @@ validate-pipeline-policy:
   stage: validate
   extends: .aws_oidc_base
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_VALIDATE}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_VALIDATE_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_VALIDATE}
   script:
     - >
       PYTHONPATH=. uv run pytest
@@ -149,7 +168,8 @@ plan-infra:
   stage: plan
   extends: .aws_oidc_base
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_VALIDATE}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_VALIDATE_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_VALIDATE}
   script:
     - make infra-diff ENV=dev > dev-diff.txt
     - make infra-diff ENV=staging > staging-diff.txt
@@ -169,7 +189,8 @@ deploy-dev:
   stage: deploy-dev
   extends: .deploy_job_base
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_DEPLOY_DEV}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_DEPLOY_DEV_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_DEPLOY_DEV}
     ENV: dev
   script:
     - echo "Applying canary policy for ${ENV}: ${CANARY_POLICY_DEV}"
@@ -185,7 +206,8 @@ deploy-staging:
   stage: deploy-staging
   extends: .deploy_job_base
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_DEPLOY_STAGING}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_DEPLOY_STAGING_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_DEPLOY_STAGING}
     ENV: staging
   script:
     - echo "Applying canary policy for ${ENV}: ${CANARY_POLICY_STAGING}"
@@ -219,7 +241,8 @@ deploy-prod:
   extends: .deploy_job_base
   needs: ["staging-rollout-window"]
   variables:
-    AWS_ROLE_ARN: ${AWS_ROLE_ARN_DEPLOY_PROD}
+    AWS_ROLE_ARN_PRIMARY: ${PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN}
+    AWS_ROLE_ARN_FALLBACK: ${AWS_ROLE_ARN_DEPLOY_PROD}
     ENV: prod
   script:
     - >

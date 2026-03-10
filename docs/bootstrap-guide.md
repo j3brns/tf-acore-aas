@@ -8,15 +8,15 @@ prerequisites and manual steps that cannot be automated.
 
 ## AWS Account Setup
 
-The platform requires two AWS accounts at minimum:
-- **platform-control**: eu-west-2 (London) — data plane, all application services
-- **platform-runtime**: eu-west-1 (Dublin) — AgentCore Runtime compute
+The platform bootstrap flow assumes one AWS account per environment.
 
-Both accounts should be under an AWS Organization for SCP enforcement.
-For eu-central-1 (Frankfurt) — Evaluations/Policy — the platform-runtime account
-is used unless you have a third dedicated account.
+- **Single account, multi-region**:
+  - eu-west-2 (London): home region for data plane and control plane
+  - eu-west-1 (Dublin): AgentCore Runtime compute
+  - eu-central-1 (Frankfurt): evaluation/failover supporting services
 
-Record the account IDs — needed for CDK bootstrap and cross-account IAM trust.
+Record the AWS account ID for the target environment — needed for CDK bootstrap
+and IAM role verification.
 
 ## Entra App Registration (manual — see entra-setup.md)
 
@@ -39,6 +39,12 @@ GitLab → Project → Settings → CI/CD → Variables:
 - PLATFORM_PIPELINE_DEPLOY_DEV_ROLE_ARN
 - PLATFORM_PIPELINE_DEPLOY_STAGING_ROLE_ARN
 - PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN
+
+Legacy variable names are still accepted temporarily for compatibility:
+- AWS_ROLE_ARN_VALIDATE
+- AWS_ROLE_ARN_DEPLOY_DEV
+- AWS_ROLE_ARN_DEPLOY_STAGING
+- AWS_ROLE_ARN_DEPLOY_PROD
 
 ## What bootstrap.py Does
 

@@ -4,7 +4,7 @@
 Bootstrap the platform from scratch into a new AWS environment. Run once per environment.
 
 ## Prerequisites
-- AWS account IDs for: platform-control (eu-west-2), platform-runtime (eu-west-1)
+- AWS account ID for target environment (single-account, multi-region deployment)
 - AWS CLI configured with bootstrap IAM user credentials (AdministratorAccess, temp)
 - Node 20 LTS, uv, Docker, GitLab project access
 - Entra app registration completed (see docs/entra-setup.md)
@@ -35,6 +35,12 @@ make bootstrap-gitlab-oidc ENV=dev
 # Creates pipeline roles: platform-pipeline-validate-dev, -deploy-dev, etc.
 # Outputs role ARNs to console
 # MANUAL STEP: add role ARNs to GitLab CI/CD variables in GitLab UI
+# Preferred CI/CD variable names:
+#   PLATFORM_PIPELINE_VALIDATE_ROLE_ARN
+#   PLATFORM_PIPELINE_DEPLOY_DEV_ROLE_ARN
+#   PLATFORM_PIPELINE_DEPLOY_STAGING_ROLE_ARN
+#   PLATFORM_PIPELINE_DEPLOY_PROD_ROLE_ARN
+# Legacy AWS_ROLE_ARN_* names are still accepted temporarily.
 # Expected output: 5 IAM roles created, ARNs printed
 ```
 
