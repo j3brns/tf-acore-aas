@@ -17,6 +17,7 @@ from tests.unit.test_tenant_api_handler import (
     FakeMemoryProvisioner,
     FakeScopedDb,
     FakeSecretsManager,
+    FakeSsm,
     FakeUsageClient,
     _body,
     _invoke,
@@ -35,6 +36,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
         dynamodb=FakeDynamoDbResource(),
+        ssm=FakeSsm(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
     )
