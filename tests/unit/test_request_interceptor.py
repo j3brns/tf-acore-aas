@@ -14,6 +14,7 @@ OS_ENV = {
     "TOOLS_TABLE": "platform-tools-dev",
     "SCOPED_TOKEN_SIGNING_KEY": "unit-test-signing-key-with-32-bytes-minimum",
     "SCOPED_TOKEN_ISSUER": "platform-gateway",
+    "PLATFORM_ENV": "local",
 }
 
 

@@ -58,9 +58,36 @@ def test_scoped_token_signing_key_from_secret_works():
             assert mock_get_secret.call_count == 1
 
 
+def test_scoped_token_signing_key_fails_in_prod_even_if_set():
+    # In prod, it must fail if no secret ARN is configured,
+    # even if an explicit key env var is present
+    env = {
+        "PLATFORM_ENV": "prod",
+        "SCOPED_TOKEN_SIGNING_KEY": "some-explicit-key-that-is-32-bytes-long",
+        "SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN": "",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        msg = "SCOPED_TOKEN_SIGNING_KEY or SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN must be configured"
+        with pytest.raises(RuntimeError, match=msg):
+            request_interceptor._get_scoped_token_signing_key()
+
+
+def test_scoped_token_signing_key_works_in_local_if_set():
+    # In local, explicit environment variable should still work
+    env = {
+        "PLATFORM_ENV": "local",
+        "SCOPED_TOKEN_SIGNING_KEY": "local-explicit-signing-key-32-bytes",
+        "SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN": "",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        key = request_interceptor._get_scoped_token_signing_key()
+        assert key == "local-explicit-signing-key-32-bytes"
+
+
 def test_scoped_token_signing_key_length_warning(caplog):
     short_key = "too-short"
-    with patch.dict(os.environ, {"SCOPED_TOKEN_SIGNING_KEY": short_key}, clear=False):
+    env = {"PLATFORM_ENV": "local", "SCOPED_TOKEN_SIGNING_KEY": short_key}
+    with patch.dict(os.environ, env, clear=False):
         key = request_interceptor._get_scoped_token_signing_key()
         assert key == short_key
         assert "SCOPED_TOKEN_SIGNING_KEY is too short" in caplog.text
