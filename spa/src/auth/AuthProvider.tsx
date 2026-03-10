@@ -17,12 +17,14 @@ import {
 } from "react";
 
 import { defaultScopes, loginRequest, msalConfig } from "./msalConfig";
+import { getApiClient } from "../api/client";
 
 const msalInstance = new PublicClientApplication(msalConfig);
 
 type TokenRequestOptions = {
   forceRefresh?: boolean;
   scopes?: string[];
+  allowBffFallback?: boolean;
 };
 
 export type AuthContextValue = {
@@ -32,6 +34,7 @@ export type AuthContextValue = {
   login: () => Promise<void>;
   logout: () => Promise<void>;
   getAccessToken: (options?: TokenRequestOptions) => Promise<string>;
+  refreshAccessTokenViaBff: (scopes?: string[]) => Promise<string>;
 };
 
 export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -46,26 +49,42 @@ type TokenAcquisitionParams = {
   account: AccountInfo;
   scopes: string[];
   forceRefresh?: boolean;
+  allowBffFallback?: boolean;
 };
 
-export async function acquireTokenWithPopupFallback(
+export async function acquireTokenWithBffFallback(
   params: TokenAcquisitionParams,
-): Promise<AuthenticationResult> {
-  const { client, account, scopes, forceRefresh = false } = params;
+): Promise<string> {
+  const { client, account, scopes, forceRefresh = false, allowBffFallback = true } = params;
 
   try {
-    return await client.acquireTokenSilent({
+    const result = await client.acquireTokenSilent({
       account,
       scopes,
       forceRefresh,
     });
+    return result.accessToken;
   } catch (error) {
+    if (allowBffFallback) {
+      console.warn("[Auth] MSAL silent refresh failed, attempting BFF OBO fallback", error);
+      try {
+        const apiClient = getApiClient();
+        const bffResult = await apiClient.bffTokenRefresh({ scopes });
+        console.info("[Auth] Successfully refreshed token via BFF OBO");
+        return bffResult.accessToken;
+      } catch (bffError) {
+        console.error("[Auth] BFF OBO fallback failed", bffError);
+      }
+    }
+
     if (error instanceof InteractionRequiredAuthError) {
+      console.warn("[Auth] Interaction required - MSAL popup may be shown");
       const popupRequest: PopupRequest = {
         account,
         scopes,
       };
-      return client.acquireTokenPopup(popupRequest);
+      const result = await client.acquireTokenPopup(popupRequest);
+      return result.accessToken;
     }
     throw error;
   }
@@ -167,15 +186,25 @@ export function AuthProvider({ children, client = msalInstance }: AuthProviderPr
       }
 
       const requestedScopes = options?.scopes?.length ? options.scopes : defaultScopes;
-      const tokenResult = await acquireTokenWithPopupFallback({
+      return await acquireTokenWithBffFallback({
         client,
         account: activeAccount,
         scopes: requestedScopes,
         forceRefresh: options?.forceRefresh,
+        allowBffFallback: options?.allowBffFallback,
       });
-      return tokenResult.accessToken;
     },
     [account, client, login],
+  );
+
+  const refreshAccessTokenViaBff = useCallback(
+    async (scopes?: string[]) => {
+      const requestedScopes = scopes?.length ? scopes : defaultScopes;
+      const apiClient = getApiClient();
+      const bffResult = await apiClient.bffTokenRefresh({ scopes: requestedScopes });
+      return bffResult.accessToken;
+    },
+    [],
   );
 
   const value = useMemo<AuthContextValue>(
@@ -186,8 +215,9 @@ export function AuthProvider({ children, client = msalInstance }: AuthProviderPr
       login,
       logout,
       getAccessToken,
+      refreshAccessTokenViaBff,
     }),
-    [account, getAccessToken, isLoading, login, logout],
+    [account, getAccessToken, isLoading, login, logout, refreshAccessTokenViaBff],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

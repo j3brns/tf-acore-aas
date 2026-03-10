@@ -1,4 +1,3 @@
-import React from "react";
 import TestRenderer, { act } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,7 +17,11 @@ const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamM
             requestMock: request,
             streamMock: stream,
             useAuthMock: useAuth,
-            useJobPollingMock: vi.fn(() => ({ status: null, loading: false, error: null })),
+            useJobPollingMock: vi.fn((_jobId: string | null, _getAccessToken: any) => ({
+                status: null as any,
+                loading: false,
+                error: null as any,
+            })),
         };
     });
 
@@ -37,6 +40,10 @@ vi.mock("../auth/useAuth", () => ({
 vi.mock("../hooks/useJobPolling", () => ({
     useJobPolling: (jobId: string | null, getAccessToken: typeof getAccessTokenMock) =>
         useJobPollingMock(jobId, getAccessToken),
+}));
+
+vi.mock("../hooks/useSessionKeepalive", () => ({
+    useSessionKeepalive: vi.fn(),
 }));
 
 vi.mock("react-router-dom", async () => {

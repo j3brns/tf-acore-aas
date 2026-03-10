@@ -1,4 +1,10 @@
 import { apiBaseUrl, defaultScopes } from "../auth/msalConfig";
+import {
+  BffSessionKeepaliveRequestDto,
+  BffSessionKeepaliveResponseDto,
+  BffTokenRefreshRequestDto,
+  BffTokenRefreshResponseDto,
+} from "./contracts";
 
 export type TokenRequestOptions = {
   forceRefresh?: boolean;
@@ -53,6 +59,25 @@ export class ApiClient {
 
   async requestRaw(path: string, init?: RequestInit): Promise<Response> {
     return this.requestWithAuth(path, init, false);
+  }
+
+  async bffTokenRefresh(request: BffTokenRefreshRequestDto): Promise<BffTokenRefreshResponseDto> {
+    return this.request<BffTokenRefreshResponseDto>("/v1/bff/token-refresh", {
+      method: "POST",
+      body: JSON.stringify(request),
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  async bffSessionKeepalive(
+    request: BffSessionKeepaliveRequestDto,
+  ): Promise<BffSessionKeepaliveResponseDto> {
+    const response = await this.requestRaw("/v1/bff/session-keepalive", {
+      method: "POST",
+      body: JSON.stringify(request),
+      headers: { "Content-Type": "application/json" },
+    });
+    return parseJsonResponse<BffSessionKeepaliveResponseDto>(response);
   }
 
   async *stream(path: string, init?: RequestInit): AsyncGenerator<SseEvent> {

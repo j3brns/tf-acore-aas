@@ -9,8 +9,8 @@ type ErrorBody = {
     message?: string;
 };
 
-export function createInvokePayload(input: string): { input: string } {
-    return { input };
+export function createInvokePayload(input: string, sessionId?: string | null): { input: string; sessionId?: string } {
+    return { input, sessionId: sessionId || undefined };
 }
 
 export function isAsyncInvokeAccepted(

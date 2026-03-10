@@ -112,6 +112,29 @@ export type HealthResponseDto = {
   timestamp: string;
 };
 
+export type BffTokenRefreshRequestDto = {
+  scopes: string[];
+  audience?: string | null;
+};
+
+export type BffTokenRefreshResponseDto = {
+  accessToken: string;
+  tokenType: string;
+  expiresAt: string;
+  scope: string;
+};
+
+export type BffSessionKeepaliveRequestDto = {
+  sessionId: string;
+  agentName: string;
+};
+
+export type BffSessionKeepaliveResponseDto = {
+  sessionId: string;
+  status: "accepted";
+  expiresAt: string;
+};
+
 export type OpenApiContractExpectation = {
   name: string;
   path: string;
@@ -166,5 +189,19 @@ export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
     method: "get",
     statusCode: "200",
     requiredFields: ["status", "version", "timestamp"],
+  },
+  {
+    name: "bffTokenRefresh",
+    path: "/v1/bff/token-refresh",
+    method: "post",
+    statusCode: "200",
+    requiredFields: ["accessToken", "tokenType", "expiresAt"],
+  },
+  {
+    name: "bffSessionKeepalive",
+    path: "/v1/bff/session-keepalive",
+    method: "post",
+    statusCode: "202",
+    requiredFields: ["sessionId", "status", "expiresAt"],
   },
 ];

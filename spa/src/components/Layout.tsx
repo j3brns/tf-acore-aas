@@ -1,10 +1,18 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/useAuth";
+import { getApiClient } from "../api/client";
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { account, logout, isAuthenticated } = useAuth();
+    const { account, logout, isAuthenticated, getAccessToken } = useAuth();
     const location = useLocation();
+
+    // Initialize ApiClient globally
+    useEffect(() => {
+        if (isAuthenticated) {
+            getApiClient(getAccessToken);
+        }
+    }, [isAuthenticated, getAccessToken]);
 
     const navItems = [
         { name: "Catalogue", path: "/" },
