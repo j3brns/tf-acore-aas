@@ -599,16 +599,24 @@ paths:
                   type: string
       responses:
         "200":
-          description: Failover initiated
+          description: Failover completed or confirmed idempotent
           content:
             application/json:
               schema:
                 type: object
+                required: [status, region, previousRegion, lockId, changed]
                 properties:
                   status:
                     type: string
+                    enum: [completed]
                   region:
                     type: string
+                  previousRegion:
+                    type: string
+                  lockId:
+                    type: string
+                  changed:
+                    type: boolean
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
