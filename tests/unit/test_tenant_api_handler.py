@@ -393,6 +393,56 @@ def test_read_own_tenant_allowed_and_enriched_with_usage(fake_state: dict[str, A
     assert tenant["usage"]["usageIdentifierKey"] == "usage-key-1"
 
 
+def test_read_own_tenant_canonicalizes_mixed_case_path_tenant_id(
+    fake_state: dict[str, Any],
+) -> None:
+    fake_state["db"].items[("TENANT#tenant-acme-001", "METADATA")] = {
+        "PK": "TENANT#tenant-acme-001",
+        "SK": "METADATA",
+        "tenantId": "tenant-acme-001",
+        "appId": "app-002",
+        "displayName": "Bravo",
+        "tier": "basic",
+        "status": "active",
+        "createdAt": "2026-02-25T12:00:00Z",
+        "updatedAt": "2026-02-25T12:00:00Z",
+        "ownerEmail": "b@example.com",
+        "ownerTeam": "team-b",
+        "accountId": "123456789012",
+    }
+
+    response = _invoke(
+        _event(
+            method="GET",
+            tenant_id="Tenant-Acme-001",
+            caller_tenant_id="tenant-acme-001",
+            roles=[],
+            app_id="app-002",
+        )
+    )
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["tenantId"] == "tenant-acme-001"
+
+
+@pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
+@pytest.mark.parametrize("tenant_id", ["ab", "tenant--one", "tenant_one", "stub"])
+def test_path_based_tenant_routes_reject_invalid_tenant_ids_deterministically(
+    fake_state: dict[str, Any],
+    method: str,
+    tenant_id: str,
+) -> None:
+    body = {"tier": "premium"} if method == "PATCH" else None
+
+    response = _invoke(_event(method=method, tenant_id=tenant_id, body=body))
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"].startswith("tenantId ")
+
+
 def test_read_other_tenant_forbidden_for_non_admin(fake_state: dict[str, Any]) -> None:
     fake_state["db"].items[("TENANT#t-victim", "METADATA")] = {
         "PK": "TENANT#t-victim",
@@ -451,6 +501,32 @@ def test_update_tier_admin_only_emits_tier_changed_event(fake_state: dict[str, A
     assert detail["newTier"] == "premium"
 
 
+def test_update_canonicalizes_mixed_case_path_tenant_id(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#tenant-acme-002", "METADATA")] = {
+        "PK": "TENANT#tenant-acme-002",
+        "SK": "METADATA",
+        "tenantId": "tenant-acme-002",
+        "appId": "app-003",
+        "displayName": "Charlie",
+        "tier": "basic",
+        "status": "active",
+        "createdAt": "2026-02-25T12:00:00Z",
+        "updatedAt": "2026-02-25T12:00:00Z",
+        "ownerEmail": "c@example.com",
+        "ownerTeam": "team-c",
+        "accountId": "123456789012",
+    }
+
+    response = _invoke(
+        _event(method="PATCH", tenant_id="TENANT-ACME-002", body={"tier": "premium"})
+    )
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["tenantId"] == "tenant-acme-002"
+    assert tenant["tier"] == "premium"
+
+
 def test_delete_is_soft_delete_with_30_day_retention_and_event(
     fake_state: dict[str, Any],
     fixed_now: datetime,
@@ -481,6 +557,34 @@ def test_delete_is_soft_delete_with_30_day_retention_and_event(
     assert detail_type == "tenant.deleted"
     assert detail["retentionDays"] == 30
     assert detail["purgeAtEpochSeconds"] == expected_purge
+
+
+def test_delete_canonicalizes_mixed_case_path_tenant_id(
+    fake_state: dict[str, Any],
+    fixed_now: datetime,
+) -> None:
+    fake_state["db"].items[("TENANT#tenant-acme-003", "METADATA")] = {
+        "PK": "TENANT#tenant-acme-003",
+        "SK": "METADATA",
+        "tenantId": "tenant-acme-003",
+        "appId": "app-004",
+        "displayName": "Delta",
+        "tier": "standard",
+        "status": "active",
+        "createdAt": "2026-02-25T12:00:00Z",
+        "updatedAt": "2026-02-25T12:00:00Z",
+        "ownerEmail": "d@example.com",
+        "ownerTeam": "team-d",
+        "accountId": "123456789012",
+    }
+
+    response = _invoke(_event(method="DELETE", tenant_id="Tenant-Acme-003"))
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["tenantId"] == "tenant-acme-003"
+    assert tenant["status"] == "deleted"
+    assert tenant["purgeAtEpochSeconds"] == int((fixed_now + timedelta(days=30)).timestamp())
 
 
 def test_list_tenants_admin_only(fake_state: dict[str, Any]) -> None:
@@ -680,6 +784,45 @@ def test_rotate_api_key_for_own_tenant_succeeds_and_emits_event(fake_state: dict
     assert detail["tenantId"] == "t-rotate"
 
 
+def test_rotate_api_key_canonicalizes_mixed_case_path_tenant_id(
+    fake_state: dict[str, Any],
+) -> None:
+    fake_state["db"].items[("TENANT#tenant-rotate-001", "METADATA")] = {
+        "PK": "TENANT#tenant-rotate-001",
+        "SK": "METADATA",
+        "tenantId": "tenant-rotate-001",
+        "appId": "app-rotate",
+        "displayName": "Rotate",
+        "tier": "standard",
+        "status": "active",
+        "createdAt": "2026-02-25T12:00:00Z",
+        "updatedAt": "2026-02-25T12:00:00Z",
+        "ownerEmail": "r@example.com",
+        "ownerTeam": "team-r",
+        "accountId": "123456789012",
+        "apiKeySecretArn": (
+            "arn:aws:secretsmanager:eu-west-2:111111111111:secret:"
+            "platform/tenants/tenant-rotate-001/api-key"
+        ),
+    }
+    event = _event(
+        method="POST",
+        tenant_id="Tenant-Rotate-001",
+        caller_tenant_id="tenant-rotate-001",
+        roles=[],
+        app_id="app-rotate",
+    )
+    event["path"] = "/v1/tenants/Tenant-Rotate-001/api-key/rotate"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body["tenantId"] == "tenant-rotate-001"
+    rotate_calls = fake_state["deps"].secretsmanager.rotate_calls
+    assert rotate_calls[0]["SecretId"].endswith("/tenant-rotate-001/api-key")
+
+
 def test_rotate_api_key_cross_tenant_forbidden(fake_state: dict[str, Any]) -> None:
     fake_state["db"].items[("TENANT#t-owner", "METADATA")] = {
         "PK": "TENANT#t-owner",
@@ -734,6 +877,61 @@ def test_invite_user_for_own_tenant_succeeds(fake_state: dict[str, Any]) -> None
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.user_invited"
     assert detail["tenantId"] == "t-invite"
+
+
+def test_invite_user_canonicalizes_mixed_case_path_tenant_id(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#tenant-invite-001", "METADATA")] = {
+        "PK": "TENANT#tenant-invite-001",
+        "SK": "METADATA",
+        "tenantId": "tenant-invite-001",
+        "appId": "app-invite",
+        "status": "active",
+    }
+    event = _event(
+        method="POST",
+        tenant_id="Tenant-Invite-001",
+        caller_tenant_id="tenant-invite-001",
+        roles=[],
+        app_id="app-invite",
+        body={"email": "new.user@example.com", "role": "Agent.Invoke"},
+    )
+    event["path"] = "/v1/tenants/Tenant-Invite-001/users/invite"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 202
+    invite = _body(response)["invite"]
+    assert invite["tenantId"] == "tenant-invite-001"
+
+
+@pytest.mark.parametrize(
+    ("path", "tenant_id"),
+    [
+        ("/v1/tenants/stub/api-key/rotate", "stub"),
+        ("/v1/tenants/tenant_one/users/invite", "tenant_one"),
+        ("/v1/tenants/tenant--one/audit-export", "tenant--one"),
+    ],
+)
+def test_tenant_subroutes_reject_invalid_path_tenant_ids_before_route_logic(
+    fake_state: dict[str, Any],
+    path: str,
+    tenant_id: str,
+) -> None:
+    event = _event(
+        method="POST" if path.endswith(("rotate", "invite")) else "GET",
+        tenant_id=tenant_id,
+        caller_tenant_id="tenant-owner-001",
+        roles=["Platform.Admin"],
+        body={"email": "new.user@example.com"} if path.endswith("invite") else None,
+    )
+    event["path"] = path
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"].startswith("tenantId ")
 
 
 def test_invite_user_requires_valid_email(fake_state: dict[str, Any]) -> None:

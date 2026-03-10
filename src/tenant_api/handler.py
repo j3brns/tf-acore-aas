@@ -170,6 +170,15 @@ def _path_tenant_id(event: dict[str, Any]) -> str | None:
     return _str_or_none(path_params.get("tenantId") or path_params.get("id"))
 
 
+def _validated_path_tenant_id(event: dict[str, Any]) -> str | None:
+    tenant_id = _path_tenant_id(event)
+    if tenant_id is None:
+        return None
+    # Path-based tenant routes use the same canonicalization and validation
+    # contract as tenant creation so auth decisions never depend on raw casing.
+    return _canonical_tenant_id(tenant_id)
+
+
 def _tenant_pk(tenant_id: str) -> str:
     return f"TENANT#{tenant_id}"
 
@@ -1200,10 +1209,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     logger.append_keys(appid=caller.app_id or "unknown", tenantid=caller.tenant_id or "unknown")
 
     method = _http_method(event)
-    tenant_id = _path_tenant_id(event)
     path = _request_path(event)
 
     try:
+        tenant_id = _validated_path_tenant_id(event)
         if path == "/v1/health" and method == "GET":
             return _handle_health()
         if path == "/v1/sessions" and method == "GET":
