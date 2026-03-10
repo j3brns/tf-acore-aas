@@ -50,7 +50,8 @@ all secrets in Secrets Manager with 30-day rotation, Lambda /tmp caching (not en
 ### 7. Pipeline Compromise
 Threat: malicious code injected via CI/CD pipeline
 Mitigation: GitLab WIF OIDC (no long-lived keys), least-privilege pipeline roles,
-cfn-guard validates all IaC before deploy, two-reviewer approval for production
+cfn-guard validates all IaC before deploy, protected `prod` environment audited
+via GitLab API before deployment, two-reviewer approval for production
 
 ### 8. Session Hijacking
 Threat: attacker intercepts active AgentCore Runtime session
@@ -78,7 +79,7 @@ CloudTrail records all AWS API calls including Secrets Manager reads
 | KMS encryption at rest         | 2, 10                        | All DynamoDB + S3          |
 | HTTPS everywhere               | 8                            | CloudFront, API GW, VPC   |
 | detect-secrets in CI           | 6, 7                         | GitLab CI validate stage  |
-| Two-reviewer prod approval     | 7                            | GitLab protected env      |
+| Two-reviewer prod approval     | 7                            | GitLab protected env + CI API audit |
 | cfn-guard IaC policy           | 7                            | GitLab CI validate stage  |
 | CloudTrail + VPC Flow Logs     | 10                           | ObservabilityStack        |
 | PII redaction (RESPONSE)       | 9                            | RESPONSE interceptor      |

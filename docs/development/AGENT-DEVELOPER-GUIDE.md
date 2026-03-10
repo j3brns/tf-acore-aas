@@ -219,6 +219,26 @@ Pushing to a feature branch triggers: validate → test → push-dev (auto).
 Merge to main triggers: promote-staging (manual gate, requires evaluation score).
 Staging → prod: two-reviewer approval in GitLab.
 
+Production deploys fail closed unless the GitLab project protects the `prod`
+environment and requires at least two approvals. CI verifies that state by
+calling the Protected Environments API before any prod deploy step runs.
+
+Required GitLab project setup:
+- Protect environment `prod`.
+- Require at least 2 approvals on that protected environment.
+- Add protected masked CI/CD variable `GITLAB_PROTECTED_ENV_API_TOKEN` with `read_api` scope.
+
+Operator verification command:
+```bash
+curl --silent --header "PRIVATE-TOKEN: $GITLAB_PROTECTED_ENV_API_TOKEN" \
+  "$CI_API_V4_URL/projects/$CI_PROJECT_ID/protected_environments/prod" | \
+  jq '{name, required_approval_count, approval_rules}'
+```
+
+Failure mode when misconfigured:
+- `deploy-prod` exits before `make infra-deploy-prod-ci` if the token is missing,
+  the `prod` environment is not protected, or the API reports fewer than 2 approvals.
+
 The evaluation gate (promote-staging) runs your golden test cases against the real
 AgentCore Evaluations service in Frankfurt. Your agent will not promote if the
 evaluation score is below the threshold in [tool.agentcore.evaluations].
