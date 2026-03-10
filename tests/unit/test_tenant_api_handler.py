@@ -715,6 +715,7 @@ def test_audit_export_writes_real_s3_export_and_returns_presigned_url(
     }
 
     fake_s3 = FakeTenantScopedS3()
+    monkeypatch.setattr(tenant_api_handler.secrets, "token_hex", lambda _n: "feedfacecafebeef")
     monkeypatch.setattr(tenant_api_handler, "_tenant_s3_for_scope", lambda **_kwargs: fake_s3)
 
     event = _event(method="GET", tenant_id="t-005")
@@ -734,7 +735,10 @@ def test_audit_export_writes_real_s3_export_and_returns_presigned_url(
     assert len(fake_s3.put_calls) == 1
     put_call = fake_s3.put_calls[0]
     assert put_call["bucket"] == "platform-audit-exports"
-    assert put_call["key"] == "tenants/t-005/audit-exports/audit-export-20260225T120000Z.json"
+    assert (
+        put_call["key"]
+        == "tenants/t-005/audit-exports/audit-export-20260225T120000Z-feedfacecafebeef.json"
+    )
     assert put_call["kwargs"]["ContentType"] == "application/json"
 
     exported_payload = json.loads(put_call["body"].decode("utf-8"))
@@ -747,7 +751,10 @@ def test_audit_export_writes_real_s3_export_and_returns_presigned_url(
     assert fake_s3.presign_calls == [
         {
             "bucket": "platform-audit-exports",
-            "key": "tenants/t-005/audit-exports/audit-export-20260225T120000Z.json",
+            "key": (
+                "tenants/t-005/audit-exports/"
+                "audit-export-20260225T120000Z-feedfacecafebeef.json"
+            ),
             "expires_in": 1800,
             "client_method": "get_object",
         }

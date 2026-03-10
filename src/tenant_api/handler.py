@@ -981,7 +981,8 @@ def _collect_audit_export_records(
 
 def _audit_export_key(tenant_id: str, generated_at: datetime) -> str:
     timestamp = _format_export_timestamp(generated_at)
-    return f"tenants/{tenant_id}/{_AUDIT_EXPORT_PREFIX}/audit-export-{timestamp}.json"
+    nonce = secrets.token_hex(8)
+    return f"tenants/{tenant_id}/{_AUDIT_EXPORT_PREFIX}/audit-export-{timestamp}-{nonce}.json"
 
 
 def _build_audit_export_payload(
@@ -1027,6 +1028,14 @@ def _handle_audit_export(
         return _error(500, "INTERNAL_ERROR", "Audit export bucket is not configured")
 
     app_id = _str_or_none(existing.get("appId"))
+    logger.info(
+        "Generating tenant audit export",
+        extra={
+            "target_tenantid": tenant_id,
+            "window_start": _iso(start_at) if start_at is not None else None,
+            "window_end": _iso(end_at) if end_at is not None else None,
+        },
+    )
     records = _collect_audit_export_records(
         tenant_id=tenant_id,
         caller=caller,
