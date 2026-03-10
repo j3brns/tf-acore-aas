@@ -107,13 +107,13 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
 
     # 1. Query invocations for the day
     # SK starts with INV#timestamp
-    invocations = db.query(
+    result = db.query(
         INVOCATIONS_TABLE,
         sk_condition=Key("SK").between(f"INV#{start_time}", f"INV#{end_time}"),
     )
 
-    day_input = sum(int(inv.get("input_tokens", 0)) for inv in invocations)
-    day_output = sum(int(inv.get("output_tokens", 0)) for inv in invocations)
+    day_input = sum(int(inv.get("input_tokens", 0)) for inv in result.items)
+    day_output = sum(int(inv.get("output_tokens", 0)) for inv in result.items)
 
     # 2. Apply pricing
     pricing = _get_pricing(tier)

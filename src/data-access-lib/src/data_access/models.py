@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # TTL constants (seconds)
@@ -376,6 +377,19 @@ class BillingSummaryRecord:
     @property
     def sk(self) -> str:
         return f"BILLING#{self.year_month}"
+
+
+# ---------------------------------------------------------------------------
+# Pagination — shared response structures
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PaginatedItems:
+    """A page of DynamoDB items with an optional resumption key."""
+
+    items: list[dict[str, Any]]
+    last_evaluated_key: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

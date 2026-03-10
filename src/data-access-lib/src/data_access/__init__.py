@@ -10,6 +10,12 @@ ADRs: ADR-012
 
 from data_access.client import TenantScopedDynamoDB, TenantScopedS3
 from data_access.exceptions import TenantAccessViolation
-from data_access.models import TenantContext
+from data_access.models import PaginatedItems, TenantContext
 
-__all__ = ["TenantContext", "TenantAccessViolation", "TenantScopedDynamoDB", "TenantScopedS3"]
+__all__ = [
+    "TenantContext",
+    "TenantAccessViolation",
+    "TenantScopedDynamoDB",
+    "TenantScopedS3",
+    "PaginatedItems",
+]
