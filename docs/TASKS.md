@@ -471,15 +471,15 @@ task. Result delivered via webhook and available via poll endpoint.
               BLOCKED: Trigger is ConcurrentSessions > 70% quota. Not yet reached.
               ADRs: ADR-009
 
-[ ] TASK-050  A2A cross-agent orchestration
-              UNBLOCKED (2026-03-10): A2A protocol support in AgentCore Runtime is GA
-              and available in eu-west-1. Pending prioritization and implementation.
-              Current zigzag topology remains unchanged.
+[x] TASK-050  A2A cross-agent orchestration
+              Implemented: reference-agent sync A2A delegate orchestration pattern
+              using AgentCore Runtime A2A protocol (target map + task fan-out).
+              Done: 2026-03-10. Current zigzag topology remains unchanged.
 
-[ ] TASK-051  AgentCore Policy CEDAR enforcement
-              UNBLOCKED (2026-03-10): Policy in AgentCore is GA and available in
-              eu-west-1 and eu-west-2.
-              Pending adoption decision. Currently: Bedrock Guardrails in prod.
+[x] TASK-051  AgentCore Policy CEDAR enforcement
+              Implemented: AgentCore Gateway now wires Policy Engine + baseline Cedar policy.
+              Environments: dev/staging LOG_ONLY, prod ENFORCE.
+              Done: 2026-03-10, issue #58
 
 [ ] TASK-052  Billing metering pipeline
               Daily Lambda aggregates token counts per tenant

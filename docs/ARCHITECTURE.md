@@ -47,6 +47,7 @@ eu-west-1 Dublin (COMPUTE — current primary runtime region by platform policy)
 
 eu-central-1 Frankfurt (EVALUATION + failover)
 ├── AgentCore Evaluations
+├── AgentCore Policy (Cedar) for Gateway authorization decisions
 └── Runtime failover target
 ```
 
@@ -56,8 +57,8 @@ but this platform continues to use the ADR-009 London-home / Dublin-runtime topo
 That deployment policy remains in force pending an explicit architecture review and
 controlled migration plan.
 
-Policy in AgentCore is GA, but the platform currently keeps Bedrock Guardrails in
-production until policy adoption is explicitly prioritized.
+Policy in AgentCore is GA and baseline Cedar enforcement is now wired into the
+platform. Additional policy tuning remains an ongoing platform task.
 
 Failover: Dublin → Frankfurt on `ServiceUnavailableException`
 ([RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md)).
@@ -88,6 +89,7 @@ Client
   → AgentCore Runtime eu-west-1
       Firecracker microVM isolation per session
       Calls tools via AgentCore Gateway eu-west-2
+      Gateway policy engine: Cedar evaluation (LOG_ONLY in dev/staging, ENFORCE in prod)
       Gateway REQUEST interceptor: issues scoped act-on-behalf token
       Tool Lambda eu-west-2: executes with scoped token
       Gateway RESPONSE interceptor: filters by tier, redacts PII

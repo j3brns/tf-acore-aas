@@ -205,8 +205,8 @@ Results delivered via webhook or poll endpoint.
 ## Backlog (Not in MVP scope)
 
 - Account vending Terraform (Option B/C topology) — triggers at 70% quota utilisation
-- A2A cross-agent orchestration — technically available in the current eu-west-1 runtime topology; pending prioritization
-- AgentCore Policy CEDAR enforcement — technically available (GA); pending prioritization and platform adoption
+- A2A cross-agent orchestration — delivered in TASK-050 (2026-03-10)
+- AgentCore Policy CEDAR enforcement — implemented on 2026-03-10 (Issue #58)
 - Agent marketplace and catalogue portal
 - Tenant self-service portal (currently operator-provisioned)
 - Revisit eu-west-2 Runtime placement — AWS now supports London; current zigzag remains in place pending explicit architecture review and migration plan
