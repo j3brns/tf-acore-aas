@@ -1,4 +1,5 @@
-# LoopaaS — A forkable Agent as a Service franchise wrapping Amazon Bedrock AgentCore
+# LoopaaS — A forkable Agent as a Service franchise 
+## adding to and wrapping Amazon Bedrock AgentCore
 
 A production multi-tenant **Agent as a Service** boot and eval on Amazon Bedrock AgentCore.
 
