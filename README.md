@@ -1,9 +1,10 @@
-# tf-acore-aas — Agent as a Service on Amazon Bedrock AgentCore
+# LoopaaS — A forkable Agent as a Service franchise wrapping Amazon Bedrock AgentCore
 
-A production multi-tenant **Agent as a Service** platform on Amazon Bedrock AgentCore.
-B2B tenants invoke AI agents via REST API with full tenant isolation, billing attribution,
+A production multi-tenant **Agent as a Service** boot and eval on Amazon Bedrock AgentCore.
+
+Tenants invoke AI agents via REST API in captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently
-via a self-service pipeline — no platform release required.
+via a local stack on ramp.. And a super fast self-service pipeline — no platform release required.
 
 ![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
 
