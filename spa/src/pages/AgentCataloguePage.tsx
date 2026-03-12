@@ -17,9 +17,9 @@ export const AgentCataloguePage: React.FC = () => {
                 const client = getApiClient(getAccessToken);
                 const data = await client.request<AgentsListResponseDto>("/v1/agents");
                 setAgents((data.items || []).map(toAgentCatalogueItem));
-            } catch (err: any) {
+            } catch (err: unknown) {
                 console.error("Failed to fetch agents", err);
-                setError(err.message || "Failed to load agents");
+                setError(err instanceof Error ? err.message : "Failed to load agents");
             } finally {
                 setLoading(false);
             }

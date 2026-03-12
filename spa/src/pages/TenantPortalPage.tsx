@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
+import { resolveTenantId } from "../auth/identity";
+import { PageBanner } from "../components/PageBanner";
 
 type TenantUsage = {
     requestsToday?: number;
@@ -37,20 +39,17 @@ type InviteResponse = {
     };
 };
 
-function resolveTenantId(claims: unknown): string | null {
-    if (!claims || typeof claims !== "object") {
-        return null;
-    }
-    const map = claims as Record<string, unknown>;
-    const tenantId = map.tenantid ?? map.tenantId;
-    if (typeof tenantId !== "string") {
-        return null;
-    }
-    const trimmed = tenantId.trim();
-    return trimmed.length > 0 ? trimmed : null;
-}
+type TenantPortalPageProps = {
+    initialSection?: "overview" | "access" | "api-keys";
+};
 
-export const TenantPortalPage: React.FC = () => {
+const sectionMessages: Record<NonNullable<TenantPortalPageProps["initialSection"]>, string> = {
+    overview: "Usage, key posture, and invitation controls are grouped here for the current tenant.",
+    access: "This route focuses the tenant access workflow, including invitation issuance.",
+    "api-keys": "This route focuses machine identity hygiene and rotation cadence.",
+};
+
+export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSection = "overview" }) => {
     const { getAccessToken, account, isAuthenticated } = useAuth();
     const tenantId = useMemo(() => resolveTenantId(account?.idTokenClaims), [account?.idTokenClaims]);
 
@@ -178,6 +177,10 @@ export const TenantPortalPage: React.FC = () => {
                     Self-service controls for tenant <span className="font-medium">{tenant.tenantId}</span>.
                 </p>
             </div>
+
+            <PageBanner title={`Tenant / ${initialSection}`} severity="info">
+                {sectionMessages[initialSection]}
+            </PageBanner>
 
             <section className="bg-white shadow sm:rounded-lg border border-gray-200 overflow-hidden">
                 <div className="px-4 py-5 sm:px-6 bg-gray-50 border-b border-gray-200">

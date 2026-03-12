@@ -45,7 +45,7 @@ describe("acquireTokenWithBffFallback", () => {
     const acquireTokenSilent = vi.fn().mockRejectedValue(new Error("silent-fail"));
     const acquireTokenPopup = vi.fn();
     const bffTokenRefresh = vi.fn().mockResolvedValue({ accessToken: "bff-token" });
-    (getApiClient as any).mockReturnValue({ bffTokenRefresh });
+    vi.mocked(getApiClient).mockReturnValue({ bffTokenRefresh } as never);
 
     const token = await acquireTokenWithBffFallback({
       client: {
@@ -69,7 +69,7 @@ describe("acquireTokenWithBffFallback", () => {
       .mockRejectedValue(new InteractionRequiredAuthError("interaction_required", "login"));
     const acquireTokenPopup = vi.fn().mockResolvedValue({ accessToken: "popup-token" });
     const bffTokenRefresh = vi.fn().mockRejectedValue(new Error("bff-fail"));
-    (getApiClient as any).mockReturnValue({ bffTokenRefresh });
+    vi.mocked(getApiClient).mockReturnValue({ bffTokenRefresh } as never);
 
     const token = await acquireTokenWithBffFallback({
       client: {

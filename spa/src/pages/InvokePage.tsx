@@ -79,7 +79,7 @@ export const InvokePage: React.FC = () => {
                         } else if (!payload.type && typeof payload.output === "string") {
                             setResult((prev) => (prev || "") + payload.output);
                         }
-                    } catch (e) {
+                    } catch {
                         // Fallback for raw text data
                         setResult((prev) => (prev || "") + chunk.data);
                     }

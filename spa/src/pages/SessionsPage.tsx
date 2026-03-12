@@ -16,8 +16,8 @@ export const SessionsPage: React.FC = () => {
                 const client = getApiClient(getAccessToken);
                 const data = await client.request<SessionsListResponseDto>("/v1/sessions");
                 setSessions((data.items || []).map(toSessionRow));
-            } catch (err: any) {
-                setError(err.message);
+            } catch (err: unknown) {
+                setError(err instanceof Error ? err.message : "Failed to load sessions");
             } finally {
                 setLoading(false);
             }

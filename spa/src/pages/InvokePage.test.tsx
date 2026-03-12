@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthContextValue } from "../test/mockFactories";
 import { asyncAccepted, buildAgent } from "../test/testData";
+import type { Job } from "../types";
 import { InvokePage } from "./InvokePage";
 
 const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamMock, useAuthMock, useJobPollingMock } =
@@ -17,11 +18,15 @@ const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamM
             requestMock: request,
             streamMock: stream,
             useAuthMock: useAuth,
-            useJobPollingMock: vi.fn((_jobId: string | null, _getAccessToken: any) => ({
-                status: null as any,
-                loading: false,
-                error: null as any,
-            })),
+            useJobPollingMock: vi.fn((jobId: string | null, getAccessToken: typeof getAccessTokenMock) => {
+                void jobId;
+                void getAccessToken;
+                return {
+                    status: null as Job | null,
+                    loading: false,
+                    error: null as string | null,
+                };
+            }),
         };
     });
 
