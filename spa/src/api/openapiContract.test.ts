@@ -8,10 +8,30 @@ import YAML from "yaml";
 import { SPA_OPENAPI_CONTRACTS } from "./contracts";
 
 type OpenApiDoc = {
-  paths: Record<string, Record<string, any>>;
+  paths: Record<string, Record<string, OpenApiOperation>>;
   components?: {
-    schemas?: Record<string, any>;
+    schemas?: Record<string, OpenApiSchema>;
   };
+};
+
+type OpenApiSchema = {
+  $ref?: string;
+  type?: string;
+  items?: OpenApiSchema;
+  properties?: Record<string, OpenApiSchema>;
+};
+
+type OpenApiOperation = {
+  responses?: Record<
+    string,
+    {
+      content?: {
+        "application/json"?: {
+          schema?: OpenApiSchema;
+        };
+      };
+    }
+  >;
 };
 
 function loadOpenApiDoc(): OpenApiDoc {
@@ -21,7 +41,7 @@ function loadOpenApiDoc(): OpenApiDoc {
   return YAML.parse(yaml) as OpenApiDoc;
 }
 
-function resolveSchema(schema: any, doc: OpenApiDoc): any {
+function resolveSchema(schema: OpenApiSchema | undefined, doc: OpenApiDoc): OpenApiSchema | undefined {
   if (!schema || typeof schema !== "object") {
     return schema;
   }
@@ -30,14 +50,18 @@ function resolveSchema(schema: any, doc: OpenApiDoc): any {
   }
 
   const pointer = String(schema.$ref).replace(/^#\//, "").split("/");
-  let resolved: any = doc;
+  let resolved: unknown = doc;
   for (const segment of pointer) {
-    resolved = resolved?.[segment];
+    if (!resolved || typeof resolved !== "object") {
+      resolved = undefined;
+      break;
+    }
+    resolved = (resolved as Record<string, unknown>)[segment];
   }
   if (!resolved) {
     throw new Error(`Unresolvable OpenAPI reference: ${schema.$ref}`);
   }
-  return resolveSchema(resolved, doc);
+  return resolveSchema(resolved as OpenApiSchema, doc);
 }
 
 describe("SPA/OpenAPI contract drift", () => {
