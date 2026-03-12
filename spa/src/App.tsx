@@ -4,7 +4,12 @@ import { AgentCataloguePage } from "./pages/AgentCataloguePage";
 import { InvokePage } from "./pages/InvokePage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { AdminPage } from "./pages/AdminPage";
-import { TenantPortalPage } from "./pages/TenantPortalPage";
+import { TenantDashboardPage } from "./pages/TenantDashboardPage";
+import { TenantApiKeysPage } from "./pages/TenantApiKeysPage";
+import { TenantMembersPage } from "./pages/TenantMembersPage";
+import { TenantWebhooksPage } from "./pages/TenantWebhooksPage";
+import { TenantAuditPage } from "./pages/TenantAuditPage";
+import { TenantSettingsPage } from "./pages/TenantSettingsPage";
 import { useAuth } from "./auth/useAuth";
 
 function App() {
@@ -41,10 +46,18 @@ function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<AgentCataloguePage />} />
-          <Route path="/tenant" element={<TenantPortalPage />} />
-          <Route path="/invoke/:agentName" element={<InvokePage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          
+          <Route path="/invoke/:agentName" element={<InvokePage />} />
+          
+          <Route path="/tenant" element={<TenantDashboardPage />} />
+          <Route path="/tenant/api-keys" element={<TenantApiKeysPage />} />
+          <Route path="/tenant/members" element={<TenantMembersPage />} />
+          <Route path="/tenant/webhooks" element={<TenantWebhooksPage />} />
+          <Route path="/tenant/audit" element={<TenantAuditPage />} />
+          <Route path="/tenant/settings" element={<TenantSettingsPage />} />
+          
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
