@@ -6,7 +6,12 @@ import { AgentCataloguePage } from "./pages/AgentCataloguePage";
 import { InvokePage } from "./pages/InvokePage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { AdminPage } from "./pages/AdminPage";
-import { TenantPortalPage } from "./pages/TenantPortalPage";
+import { TenantDashboardPage } from "./pages/TenantDashboardPage";
+import { TenantApiKeysPage } from "./pages/TenantApiKeysPage";
+import { TenantMembersPage } from "./pages/TenantMembersPage";
+import { TenantWebhooksPage } from "./pages/TenantWebhooksPage";
+import { TenantAuditPage } from "./pages/TenantAuditPage";
+import { TenantSettingsPage } from "./pages/TenantSettingsPage";
 import { useAuth } from "./auth/useAuth";
 import { hasPlatformOperatorRole, resolveTenantId } from "./auth/identity";
 
@@ -49,31 +54,45 @@ export function AppRoutes() {
       <Route path="/agents" element={<AgentCataloguePage />} />
       <Route path="/invoke/:agentName" element={<InvokePage />} />
       <Route path="/sessions" element={<SessionsPage />} />
+      
       <Route path="/tenant" element={<Navigate to="/tenant/overview" replace />} />
-      <Route
-        path="/tenant/overview"
-        element={
-          <RequireTenantContext tenantId={tenantId}>
-            <TenantPortalPage initialSection="overview" />
-          </RequireTenantContext>
-        }
-      />
-      <Route
-        path="/tenant/access"
-        element={
-          <RequireTenantContext tenantId={tenantId}>
-            <TenantPortalPage initialSection="access" />
-          </RequireTenantContext>
-        }
-      />
-      <Route
-        path="/tenant/api-keys"
-        element={
-          <RequireTenantContext tenantId={tenantId}>
-            <TenantPortalPage initialSection="api-keys" />
-          </RequireTenantContext>
-        }
-      />
+      
+      <Route path="/tenant/overview" element={
+        <RequireTenantContext tenantId={tenantId}>
+          <TenantDashboardPage />
+        </RequireTenantContext>
+      } />
+      
+      <Route path="/tenant/api-keys" element={
+        <RequireTenantContext tenantId={tenantId}>
+          <TenantApiKeysPage />
+        </RequireTenantContext>
+      } />
+      
+      <Route path="/tenant/access" element={
+        <RequireTenantContext tenantId={tenantId}>
+          <TenantMembersPage />
+        </RequireTenantContext>
+      } />
+      
+      <Route path="/tenant/webhooks" element={
+        <RequireTenantContext tenantId={tenantId}>
+          <TenantWebhooksPage />
+        </RequireTenantContext>
+      } />
+
+      <Route path="/tenant/audit" element={
+        <RequireTenantContext tenantId={tenantId}>
+          <TenantAuditPage />
+        </RequireTenantContext>
+      } />
+
+      <Route path="/tenant/settings" element={
+        <RequireTenantContext tenantId={tenantId}>
+          <TenantSettingsPage />
+        </RequireTenantContext>
+      } />
+
       <Route path="/admin" element={<Navigate to="/operations/overview" replace />} />
       <Route
         path="/operations/overview"

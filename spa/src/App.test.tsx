@@ -24,10 +24,8 @@ vi.mock("./pages/InvokePage", () => ({
   InvokePage: () => <div>Invoke Page</div>,
 }));
 
-vi.mock("./pages/TenantPortalPage", () => ({
-  TenantPortalPage: ({ initialSection }: { initialSection?: string }) => (
-    <div>Tenant Portal Page {initialSection}</div>
-  ),
+vi.mock("./pages/TenantDashboardPage", () => ({
+  TenantDashboardPage: () => <div>Tenant Dashboard Page</div>,
 }));
 
 vi.mock("./pages/AdminPage", () => ({
@@ -82,7 +80,7 @@ describe("AppRoutes", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Tenant Portal Page overview")).toBeInTheDocument();
+    expect(screen.getByText("Tenant Dashboard Page")).toBeInTheDocument();
   });
 
   it("denies operator routes for non-operator users with clear messaging", () => {

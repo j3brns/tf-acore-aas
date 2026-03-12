@@ -927,16 +927,24 @@ def _handle_invite_user(
     app_id = _str_or_none(existing.get("appId"))
 
     invite_id = f"invite-{secrets.token_hex(8)}"
-    expires_at = _now_utc() + timedelta(days=_INVITE_EXPIRY_DAYS)
+    now = _now_utc()
+    expires_at = now + timedelta(days=_INVITE_EXPIRY_DAYS)
     invite = {
+        "PK": f"TENANT#{tenant_id}",
+        "SK": f"INVITE#{invite_id}",
         "inviteId": invite_id,
         "tenantId": tenant_id,
         "email": email.lower(),
         "role": role,
         "displayName": display_name,
         "status": "pending",
+        "createdAt": _iso(now),
         "expiresAt": _iso(expires_at),
     }
+
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    db.put_item(_tenants_table_name(), invite)
+
     _put_event(
         deps,
         detail_type="tenant.user_invited",
@@ -946,7 +954,33 @@ def _handle_invite_user(
             "appId": app_id,
         },
     )
-    return _response(202, {"invite": invite})
+    # Filter out PK/SK for response
+    response_invite = {k: v for k, v in invite.items() if k not in ("PK", "SK")}
+    return _response(202, {"invite": response_invite})
+
+
+def _handle_list_invites(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    if not _can_manage_tenant_self_service(caller, tenant_id):
+        raise PermissionError(
+            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
+        )
+
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    result = db.query(
+        _tenants_table_name(),
+        sk_condition=Key("SK").begins_with("INVITE#"),
+    )
+
+    items = []
+    for item in result.items:
+        items.append({k: v for k, v in item.items() if k not in ("PK", "SK")})
+
+    return _response(200, {"items": items})
 
 
 def _invocation_timestamp(item: dict[str, Any]) -> str | None:
@@ -1124,6 +1158,125 @@ def _handle_audit_export(
             "expiresAt": _iso(expires_at),
         },
     )
+
+
+def _handle_list_webhooks(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    if not _can_manage_tenant_self_service(caller, tenant_id):
+        raise PermissionError(
+            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
+        )
+
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    result = db.query(
+        _tenants_table_name(),
+        sk_condition=Key("SK").begins_with("WEBHOOK#"),
+    )
+
+    items = []
+    for item in result.items:
+        items.append({k: v for k, v in item.items() if k not in ("PK", "SK")})
+
+    return _response(200, {"items": items})
+
+
+def _handle_register_webhook(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    if not _can_manage_tenant_self_service(caller, tenant_id):
+        raise PermissionError(
+            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
+        )
+
+    body = _require_json_body(event)
+    callback_url = _str_or_none(body.get("callbackUrl"))
+    if callback_url is None:
+        raise ValueError("callbackUrl is required")
+
+    events = body.get("events")
+    if not isinstance(events, list) or not events:
+        raise ValueError("events must be a non-empty list of event types")
+
+    webhook_id = f"wh-{secrets.token_hex(8)}"
+    now = _now_utc()
+
+    # In a real implementation, we would generate a secret and store it in Secrets Manager.
+    # For now, we'll mock the response.
+    webhook = {
+        "PK": f"TENANT#{tenant_id}",
+        "SK": f"WEBHOOK#{webhook_id}",
+        "webhookId": webhook_id,
+        "tenantId": tenant_id,
+        "callbackUrl": callback_url,
+        "events": events,
+        "status": "active",
+        "description": _str_or_none(body.get("description")),
+        "createdAt": _iso(now),
+        "updatedAt": _iso(now),
+    }
+
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db.put_item(_tenants_table_name(), webhook)
+
+    _put_event(
+        deps,
+        detail_type="tenant.webhook_registered",
+        detail={
+            **webhook,
+            "actorSub": caller.sub,
+        },
+    )
+
+    # Filter out PK/SK for response
+    response_webhook = {k: v for k, v in webhook.items() if k not in ("PK", "SK")}
+    # Mock signature header and algorithm as defined in openapi.yaml
+    response_webhook["signatureHeader"] = "X-Platform-Signature"
+    response_webhook["signatureAlgorithm"] = "HMAC-SHA256"
+
+    return _response(201, response_webhook)
+
+
+def _handle_delete_webhook(
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    *,
+    tenant_id: str,
+    webhook_id: str,
+) -> dict[str, Any]:
+    if not _can_manage_tenant_self_service(caller, tenant_id):
+        raise PermissionError(
+            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
+        )
+
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    key = {"PK": f"TENANT#{tenant_id}", "SK": f"WEBHOOK#{webhook_id}"}
+
+    # Check if it exists
+    existing = db.get_item(_tenants_table_name(), key)
+    if existing is None:
+        return _error(404, "NOT_FOUND", "Webhook not found")
+
+    db.delete_item(_tenants_table_name(), key)
+
+    _put_event(
+        deps,
+        detail_type="tenant.webhook_deleted",
+        detail={
+            "tenantId": tenant_id,
+            "webhookId": webhook_id,
+            "actorSub": caller.sub,
+        },
+    )
+
+    return _response(204, {})
 
 
 def _handle_platform_failover(
@@ -1578,6 +1731,133 @@ def _request_path(event: dict[str, Any]) -> str:
     return str(path or "").rstrip("/")
 
 
+def _dispatch_platform_routes(
+    path: str,
+    method: str,
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any] | None:
+    if path == "/v1/platform/failover" and method == "POST":
+        return _handle_platform_failover(event, caller, deps)
+    if path == "/v1/platform/quota" and method == "GET":
+        return _handle_platform_quota(caller, deps)
+    if path == "/v1/platform/quota/split-accounts" and method == "POST":
+        return _handle_platform_split_accounts(event, caller, deps)
+    if path == "/v1/platform/service-health" and method == "GET":
+        return _handle_platform_service_health(caller, deps)
+    if path == "/v1/platform/billing/status" and method == "GET":
+        return _handle_platform_billing_status(caller, deps)
+    return None
+
+
+def _dispatch_ops_routes(
+    path: str,
+    method: str,
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any] | None:
+    if not path.startswith("/v1/platform/ops/"):
+        return None
+
+    _require_admin(caller)
+    if path == "/v1/platform/ops/top-tenants" and method == "GET":
+        return _handle_ops_top_tenants(event, caller, deps)
+    if path == "/v1/platform/ops/security-events" and method == "GET":
+        return _handle_ops_security_events(event, caller, deps)
+    if path == "/v1/platform/ops/error-rate" and method == "GET":
+        return _handle_ops_error_rate(event, caller, deps)
+    if path.startswith("/v1/platform/ops/dlq/"):
+        if path.endswith("/redrive") and method == "POST":
+            queue_name = path.split("/")[-2]
+            return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
+        if method == "GET":
+            queue_name = path.split("/")[-1]
+            return _handle_ops_dlq_inspect(caller, deps, queue_name=queue_name)
+
+    if path.startswith("/v1/platform/ops/tenants/"):
+        tenant_id = path.split("/")[-2]
+        if path.endswith("/sessions") and method == "GET":
+            return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
+        if path.endswith("/suspend") and method == "POST":
+            return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
+        if path.endswith("/reinstate") and method == "POST":
+            return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
+        if path.endswith("/invocations") and method == "GET":
+            return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
+        if path.endswith("/notify") and method == "POST":
+            return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
+
+    if path.startswith("/v1/platform/ops/jobs/") and path.endswith("/fail") and method == "POST":
+        job_id = path.split("/")[-2]
+        return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
+    if path == "/v1/platform/ops/security/page" and method == "POST":
+        return _handle_ops_page_security(event, caller, deps)
+
+    return None
+
+
+def _dispatch_webhook_routes(
+    path: str,
+    method: str,
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any] | None:
+    if path == "/v1/webhooks":
+        if caller.tenant_id is None:
+            return _error(400, "BAD_REQUEST", "tenant context required")
+        if method == "GET":
+            return _handle_list_webhooks(caller, deps, tenant_id=caller.tenant_id)
+        if method == "POST":
+            return _handle_register_webhook(event, caller, deps, tenant_id=caller.tenant_id)
+
+    if path.startswith("/v1/webhooks/") and method == "DELETE":
+        if caller.tenant_id is None:
+            return _error(400, "BAD_REQUEST", "tenant context required")
+        webhook_id = path.split("/")[-1]
+        return _handle_delete_webhook(
+            caller, deps, tenant_id=caller.tenant_id, webhook_id=webhook_id
+        )
+
+    return None
+
+
+def _dispatch_tenant_routes(
+    path: str,
+    method: str,
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    tenant_id: str | None,
+) -> dict[str, Any] | None:
+    if path == "/v1/tenants":
+        if method == "POST":
+            return _handle_create(event, caller, deps)
+        if method == "GET":
+            return _handle_list(event, caller, deps)
+
+    if tenant_id is not None:
+        if path.endswith("/api-key/rotate") and method == "POST":
+            return _handle_rotate_api_key(caller, deps, tenant_id=tenant_id)
+        if path.endswith("/users/invites") and method == "GET":
+            return _handle_list_invites(caller, deps, tenant_id=tenant_id)
+        if path.endswith("/users/invite") and method == "POST":
+            return _handle_invite_user(event, caller, deps, tenant_id=tenant_id)
+        if path.endswith("/audit-export") and method == "GET":
+            return _handle_audit_export(event, caller, deps, tenant_id=tenant_id)
+
+        if method == "GET":
+            return _handle_read(event, caller, deps, tenant_id=tenant_id)
+        if method in {"PATCH", "PUT"}:
+            return _handle_update(event, caller, deps, tenant_id=tenant_id)
+        if method == "DELETE":
+            return _handle_delete(caller, deps, tenant_id=tenant_id)
+
+    return None
+
+
 @logger.inject_lambda_context(clear_state=True, log_event=False)
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     caller = _caller_identity(event)
@@ -1594,104 +1874,22 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if path == "/v1/sessions" and method == "GET":
             return _handle_sessions(event, caller)
 
-        # Platform management routes
-        if path == "/v1/platform/failover" and method == "POST":
-            return _handle_platform_failover(event, caller, deps)
-        if path == "/v1/platform/quota" and method == "GET":
-            return _handle_platform_quota(caller, deps)
-        if path == "/v1/platform/quota/split-accounts" and method == "POST":
-            return _handle_platform_split_accounts(event, caller, deps)
-        if path == "/v1/platform/service-health" and method == "GET":
-            return _handle_platform_service_health(caller, deps)
-        if path == "/v1/platform/billing/status" and method == "GET":
-            return _handle_platform_billing_status(caller, deps)
+        # Dispatch route groups
+        response = _dispatch_platform_routes(path, method, event, caller, deps)
+        if response:
+            return response
 
-        # Ops/Observability routes
-        if path.startswith("/v1/platform/ops/"):
-            _require_admin(caller)
-            if path == "/v1/platform/ops/top-tenants" and method == "GET":
-                return _handle_ops_top_tenants(event, caller, deps)
-            if path == "/v1/platform/ops/security-events" and method == "GET":
-                return _handle_ops_security_events(event, caller, deps)
-            if path == "/v1/platform/ops/error-rate" and method == "GET":
-                return _handle_ops_error_rate(event, caller, deps)
-            if (
-                path.startswith("/v1/platform/ops/dlq/")
-                and path.endswith("/redrive")
-                and method == "POST"
-            ):
-                queue_name = path.split("/")[-2]
-                return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
-            if path.startswith("/v1/platform/ops/dlq/") and method == "GET":
-                queue_name = path.split("/")[-1]
-                return _handle_ops_dlq_inspect(caller, deps, queue_name=queue_name)
+        response = _dispatch_ops_routes(path, method, event, caller, deps)
+        if response:
+            return response
 
-            if (
-                path.startswith("/v1/platform/ops/tenants/")
-                and path.endswith("/sessions")
-                and method == "GET"
-            ):
-                tenant_id = path.split("/")[-2]
-                return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
-            if (
-                path.startswith("/v1/platform/ops/tenants/")
-                and path.endswith("/suspend")
-                and method == "POST"
-            ):
-                tenant_id = path.split("/")[-2]
-                return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
-            if (
-                path.startswith("/v1/platform/ops/tenants/")
-                and path.endswith("/reinstate")
-                and method == "POST"
-            ):
-                tenant_id = path.split("/")[-2]
-                return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
-            if (
-                path.startswith("/v1/platform/ops/tenants/")
-                and path.endswith("/invocations")
-                and method == "GET"
-            ):
-                tenant_id = path.split("/")[-2]
-                return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
-            if (
-                path.startswith("/v1/platform/ops/tenants/")
-                and path.endswith("/notify")
-                and method == "POST"
-            ):
-                tenant_id = path.split("/")[-2]
-                return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
-            if (
-                path.startswith("/v1/platform/ops/jobs/")
-                and path.endswith("/fail")
-                and method == "POST"
-            ):
-                job_id = path.split("/")[-2]
-                return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
-            if path == "/v1/platform/ops/security/page" and method == "POST":
-                return _handle_ops_page_security(event, caller, deps)
+        response = _dispatch_webhook_routes(path, method, event, caller, deps)
+        if response:
+            return response
 
-        # Tenant management routes
-        if path == "/v1/tenants":
-            if method == "POST":
-                return _handle_create(event, caller, deps)
-            if method == "GET":
-                return _handle_list(event, caller, deps)
-
-        if tenant_id is not None:
-            if path.endswith("/api-key/rotate") and method == "POST":
-                return _handle_rotate_api_key(caller, deps, tenant_id=tenant_id)
-            if path.endswith("/users/invite") and method == "POST":
-                return _handle_invite_user(event, caller, deps, tenant_id=tenant_id)
-            if path.endswith("/audit-export") and method == "GET":
-                return _handle_audit_export(event, caller, deps, tenant_id=tenant_id)
-
-            if method == "GET":
-                return _handle_read(event, caller, deps, tenant_id=tenant_id)
-            if method in {"PATCH", "PUT"}:
-                return _handle_update(event, caller, deps, tenant_id=tenant_id)
-            if method == "DELETE":
-                return _handle_delete(caller, deps, tenant_id=tenant_id)
+        response = _dispatch_tenant_routes(path, method, event, caller, deps, tenant_id)
+        if response:
+            return response
 
         return _error(405, "METHOD_NOT_ALLOWED", "Unsupported tenant API route")
     except PermissionError as exc:
