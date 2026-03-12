@@ -128,7 +128,7 @@ export const TenantApiKeysPage: React.FC = () => {
                         curl -X POST https://api.example.com/v1/agents/echo-agent/invoke \<br/>
                         &nbsp;&nbsp;-H "X-API-Key: YOUR_API_KEY" \<br/>
                         &nbsp;&nbsp;-H "Content-Type: application/json" \<br/>
-                        &nbsp;&nbsp;-d '{"input": "Hello world"}'
+                        &nbsp;&nbsp;-d '{"{"}"input": "Hello world"{"}"}'
                     </pre>
                 </div>
             </section>

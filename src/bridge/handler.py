@@ -340,6 +340,23 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
         return None
 
 
+def _send_streaming_response(
+    response_stream: Any,
+    status_code: int,
+    body_bytes: bytes,
+    headers: dict[str, str] | None = None,
+) -> None:
+    """Send a buffered response via response_stream (metadata preamble + body)."""
+    effective_headers = headers or {"Content-Type": "application/json"}
+    preamble = {
+        "statusCode": status_code,
+        "headers": effective_headers,
+    }
+    # For REST API response streaming, the preamble is a JSON object followed by a null byte.
+    response_stream.write(json.dumps(preamble).encode("utf-8") + b"\0")
+    response_stream.write(body_bytes)
+
+
 def error_response(
     status_code: int,
     code: str,
@@ -692,10 +709,10 @@ def get_jitter() -> str:
     return secrets.token_hex(1)
 
 
-@logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
-@tracer.capture_lambda_handler
-def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any = None) -> Any:
-    """Bridge Lambda entry point."""
+def _handler_core(
+    event: dict[str, Any], context: LambdaContext, response_stream: Any = None
+) -> Any:
+    """Core logic for Bridge Lambda."""
     request_id = context.aws_request_id
 
     # 1. Parse Authorizer Context
@@ -792,6 +809,27 @@ def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any 
     return invoke_agent(
         agent, tenant_context, prompt, session_id, webhook_id, request_id, response_stream
     )
+
+
+@logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
+@tracer.capture_lambda_handler
+def handler(event: dict[str, Any], context: LambdaContext, response_stream: Any = None) -> Any:
+    """Bridge Lambda entry point."""
+    result = _handler_core(event, context, response_stream)
+
+    # If response_stream is present and we have a standard response dict, stream it.
+    if response_stream and isinstance(result, dict) and "statusCode" in result:
+        body = result.get("body", "")
+        body_bytes = body.encode("utf-8") if isinstance(body, str) else bytes(body or b"")
+        _send_streaming_response(
+            response_stream,
+            status_code=result["statusCode"],
+            headers=result.get("headers"),
+            body_bytes=body_bytes,
+        )
+        return None
+
+    return result
 
 
 def _http_method(event: dict[str, Any]) -> str:
@@ -1475,6 +1513,13 @@ def invoke_real_runtime(
                 session_id=runtime_session_id,
             )
 
+        # Send preamble for streaming (ADR-003 supported REST API streaming)
+        preamble = {
+            "statusCode": 200,
+            "headers": {"Content-Type": "text/event-stream"},
+        }
+        response_stream.write(json.dumps(preamble).encode("utf-8") + b"\0")
+
         try:
             for line in _iter_runtime_lines(runtime_body):
                 if line:
@@ -1761,6 +1806,13 @@ def handle_streaming_invocation(
         )
 
     effective_session_id = session_id or "mock-session-id"
+
+    # Send preamble for streaming
+    preamble = {
+        "statusCode": 200,
+        "headers": {"Content-Type": "text/event-stream"},
+    }
+    response_stream.write(json.dumps(preamble).encode("utf-8") + b"\0")
 
     with requests.post(
         f"{url}/invocations", headers=headers, json=payload, stream=True, timeout=900

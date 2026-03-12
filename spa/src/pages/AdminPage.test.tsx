@@ -94,9 +94,8 @@ describe("AdminPage", () => {
     render(<AdminPage />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText("Access Denied: Platform.Operator role required."),
-      ).toBeInTheDocument();
+      expect(screen.getByText("Access Denied")).toBeInTheDocument();
+      expect(screen.getByText("Platform operator role required.")).toBeInTheDocument();
     });
     expect(request).not.toHaveBeenCalled();
   });
