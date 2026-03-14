@@ -936,9 +936,16 @@ def _is_newer_agent_record(candidate: dict[str, Any], current: dict[str, Any]) -
 
 
 def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
-    ddb = get_dynamodb()
-    table = ddb.Table(AGENTS_TABLE)
-    items = table.scan().get("Items", [])
+    db = TenantScopedDynamoDB(tenant_context)
+
+    items: list[dict[str, Any]] = []
+    exclusive_start_key = None
+    while True:
+        page = db.scan(AGENTS_TABLE, exclusive_start_key=exclusive_start_key)
+        items.extend(page.items)
+        exclusive_start_key = page.last_evaluated_key
+        if not exclusive_start_key:
+            break
 
     latest_by_name: dict[str, dict[str, Any]] = {}
     for item in items:
