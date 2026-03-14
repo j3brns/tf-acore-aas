@@ -81,8 +81,6 @@ RUNTIME_ARN_PATTERN = re.compile(
 # TTL constants from models
 INVOCATION_TTL_SECONDS = 90 * 24 * 60 * 60
 JOB_TTL_SECONDS = 7 * 24 * 60 * 60
-WEBHOOK_SIGNATURE_HEADER = "X-Platform-Signature"
-WEBHOOK_SIGNATURE_ALGORITHM = "HMAC-SHA256"
 VALID_WEBHOOK_EVENTS = {"job.completed", "job.failed"}
 
 # ---------------------------------------------------------------------------
@@ -761,10 +759,6 @@ def _handler_core(
         and not path.endswith("/invoke")
     ):
         return get_agent_detail(path_params, request_id)
-    if method == "POST" and path.endswith("/v1/webhooks"):
-        return register_webhook(event, tenant_context, request_id)
-    if method == "DELETE" and _coerce_optional_string(path_params.get("webhookId")):
-        return delete_webhook(tenant_context, path_params, request_id)
 
     # 3. Contracted invoke route: POST /v1/agents/{agentName}/invoke.
     if method != "POST":
@@ -910,8 +904,8 @@ def _job_key(tenant_id: str, job_id: str) -> dict[str, str]:
     return {"PK": f"TENANT#{tenant_id}", "SK": f"JOB#{job_id}"}
 
 
-def _webhook_key(webhook_id: str) -> dict[str, str]:
-    return {"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"}
+def _webhook_key(tenant_id: str, webhook_id: str) -> dict[str, str]:
+    return {"PK": f"TENANT#{tenant_id}", "SK": f"WEBHOOK#{webhook_id}"}
 
 
 def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -1071,136 +1065,12 @@ def _presigned_result_url(tenant_context: TenantContext, result_s3_key: str) -> 
     )
 
 
-def register_webhook(
-    event: dict[str, Any], tenant_context: TenantContext, request_id: str
-) -> dict[str, Any]:
-    try:
-        body = _parse_body(event)
-    except ValueError:
-        return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
-
-    callback_url = _coerce_optional_string(body.get("callbackUrl"))
-    if callback_url is None:
-        return error_response(400, "INVALID_REQUEST", "callbackUrl is required", request_id)
-
-    parsed_url = urllib.parse.urlparse(callback_url)
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        return error_response(
-            422,
-            "UNPROCESSABLE_ENTITY",
-            "callbackUrl must be a valid URL",
-            request_id,
-        )
-
-    events_raw = body.get("events")
-    if not isinstance(events_raw, list) or not events_raw:
-        return error_response(
-            400,
-            "INVALID_REQUEST",
-            "events must be a non-empty array",
-            request_id,
-        )
-
-    normalized_events: list[str] = []
-    seen_events: set[str] = set()
-    for raw_event in events_raw:
-        event_name = _coerce_optional_string(raw_event)
-        if event_name is None:
-            return error_response(
-                422,
-                "UNPROCESSABLE_ENTITY",
-                "events must contain non-empty values",
-                request_id,
-            )
-        if event_name not in VALID_WEBHOOK_EVENTS:
-            return error_response(
-                422,
-                "UNPROCESSABLE_ENTITY",
-                f"Unsupported webhook event '{event_name}'",
-                request_id,
-            )
-        if event_name in seen_events:
-            return error_response(
-                400,
-                "INVALID_REQUEST",
-                "events must not contain duplicate values",
-                request_id,
-            )
-        seen_events.add(event_name)
-        normalized_events.append(event_name)
-
-    description = _coerce_optional_string(body.get("description"))
-    if description and len(description) > 256:
-        return error_response(
-            422,
-            "UNPROCESSABLE_ENTITY",
-            "description must be 256 characters or fewer",
-            request_id,
-        )
-
-    webhook_id = str(uuid.uuid4())
-    created_at = datetime.now(UTC).isoformat()
-    webhook_secret = secrets.token_urlsafe(32)
-
-    item: dict[str, Any] = {
-        "PK": _webhook_key(webhook_id)["PK"],
-        "SK": "METADATA",
-        "webhook_id": webhook_id,
-        "tenant_id": tenant_context.tenant_id,
-        "app_id": tenant_context.app_id,
-        "callback_url": callback_url,
-        "events": normalized_events,
-        "created_at": created_at,
-        "signature_secret": webhook_secret,
-        "signature_header": WEBHOOK_SIGNATURE_HEADER,
-        "signature_algorithm": WEBHOOK_SIGNATURE_ALGORITHM,
-        "record_type": "webhook_registration",
-    }
-    if description:
-        item["description"] = description
-
-    db = TenantScopedDynamoDB(tenant_context)
-    db.put_item(JOBS_TABLE, item)
-
-    return {
-        "statusCode": 201,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(
-            {
-                "webhookId": webhook_id,
-                "callbackUrl": callback_url,
-                "events": normalized_events,
-                "createdAt": created_at,
-                "signatureHeader": WEBHOOK_SIGNATURE_HEADER,
-                "signatureAlgorithm": WEBHOOK_SIGNATURE_ALGORITHM,
-            }
-        ),
-    }
-
-
-def delete_webhook(
-    tenant_context: TenantContext, path_params: dict[str, Any], request_id: str
-) -> dict[str, Any]:
-    webhook_id = _coerce_optional_string(path_params.get("webhookId"))
-    if not webhook_id:
-        return error_response(400, "INVALID_REQUEST", "Missing webhookId in path", request_id)
-
-    key = _webhook_key(webhook_id)
-    db = TenantScopedDynamoDB(tenant_context)
-    existing = db.get_item(JOBS_TABLE, key)
-    if existing is None or str(existing.get("tenant_id", "")) != tenant_context.tenant_id:
-        return error_response(404, "NOT_FOUND", f"Webhook '{webhook_id}' not found", request_id)
-
-    db.delete_item(JOBS_TABLE, key)
-    return {"statusCode": 204, "headers": {}, "body": ""}
-
-
 def get_webhook_registration(
     tenant_context: TenantContext, webhook_id: str
 ) -> dict[str, Any] | None:
-    key = _webhook_key(webhook_id)
+    key = _webhook_key(tenant_context.tenant_id, webhook_id)
     db = TenantScopedDynamoDB(tenant_context)
-    record = db.get_item(JOBS_TABLE, key)
+    record = db.get_item(TENANTS_TABLE, key)
     if record is None:
         return None
     if str(record.get("tenant_id", "")) != tenant_context.tenant_id:

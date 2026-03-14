@@ -1321,8 +1321,8 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
     fake_state["db"].items[("TENANT#t-webhook", "METADATA")] = {
         "PK": "TENANT#t-webhook",
         "SK": "METADATA",
-        "tenantId": "t-webhook",
-        "appId": "app-webhook",
+        "tenant_id": "t-webhook",
+        "app_id": "app-webhook",
         "status": "active",
     }
 
@@ -1345,7 +1345,17 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
     body = _body(response)
     webhook_id = body["webhookId"]
     assert body["callbackUrl"] == "https://example.com/callback"
-    assert body["status"] == "active"
+    assert body["events"] == ["job.completed"]
+    assert "createdAt" in body
+    assert body["signatureHeader"] == "X-Platform-Signature"
+    assert body["signatureAlgorithm"] == "HMAC-SHA256"
+
+    # Verify database item
+    db_item = fake_state["db"].items[("TENANT#t-webhook", f"WEBHOOK#{webhook_id}")]
+    assert db_item["callback_url"] == "https://example.com/callback"
+    assert db_item["events"] == ["job.completed"]
+    assert db_item["status"] == "active"
+    assert "signature_secret" in db_item
 
     # 2. List webhooks
     event = _event(
@@ -1386,6 +1396,54 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
     response = _invoke(event)
     body = _body(response)
     assert len(body["items"]) == 0
+
+
+def test_webhook_registration_validation(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-val", "METADATA")] = {
+        "PK": "TENANT#t-val",
+        "SK": "METADATA",
+        "tenant_id": "t-val",
+        "app_id": "app-val",
+        "status": "active",
+    }
+
+    test_cases = [
+        ("Missing callbackUrl", {"events": ["job.completed"]}, 400),
+        ("Invalid callbackUrl", {"callbackUrl": "not-a-url", "events": ["job.completed"]}, 422),
+        ("Missing events", {"callbackUrl": "https://example.com"}, 400),
+        ("Empty events", {"callbackUrl": "https://example.com", "events": []}, 400),
+        (
+            "Unsupported event",
+            {"callbackUrl": "https://example.com", "events": ["bad.event"]},
+            422,
+        ),
+        (
+            "Duplicate events",
+            {"callbackUrl": "https://example.com", "events": ["job.completed", "job.completed"]},
+            400,
+        ),
+        (
+            "Description too long",
+            {
+                "callbackUrl": "https://example.com",
+                "events": ["job.completed"],
+                "description": "a" * 257,
+            },
+            422,
+        ),
+    ]
+
+    for name, payload, expected_status in test_cases:
+        event = _event(
+            method="POST",
+            tenant_id="t-val",
+            caller_tenant_id="t-val",
+            roles=["Agent.Invoke"],
+            body=payload,
+        )
+        event["path"] = "/v1/webhooks"
+        response = _invoke(event)
+        assert response["statusCode"] == expected_status, f"Test '{name}' failed"
 
 
 def test_list_invites_succeeds(fake_state: dict[str, Any]) -> None:

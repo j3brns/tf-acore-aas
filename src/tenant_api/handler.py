@@ -14,6 +14,8 @@ import json
 import os
 import re
 import secrets
+import urllib.parse
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -1179,7 +1181,19 @@ def _handle_list_webhooks(
 
     items = []
     for item in result.items:
-        items.append({k: v for k, v in item.items() if k not in ("PK", "SK")})
+        items.append(
+            {
+                "webhookId": item.get("webhook_id"),
+                "callbackUrl": item.get("callback_url"),
+                "events": item.get("events"),
+                "status": item.get("status"),
+                "description": item.get("description"),
+                "createdAt": item.get("created_at"),
+                "updatedAt": item.get("updated_at"),
+                "signatureHeader": item.get("signature_header", "X-Platform-Signature"),
+                "signatureAlgorithm": item.get("signature_algorithm", "HMAC-SHA256"),
+            }
+        )
 
     return _response(200, {"items": items})
 
@@ -1201,26 +1215,53 @@ def _handle_register_webhook(
     if callback_url is None:
         raise ValueError("callbackUrl is required")
 
-    events = body.get("events")
-    if not isinstance(events, list) or not events:
-        raise ValueError("events must be a non-empty list of event types")
+    # Strict URL validation matching Bridge implementation
+    parsed_url = urllib.parse.urlparse(callback_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return _error(422, "UNPROCESSABLE_ENTITY", "callbackUrl must be a valid URL")
 
-    webhook_id = f"wh-{secrets.token_hex(8)}"
+    events_raw = body.get("events")
+    if not isinstance(events_raw, list) or not events_raw:
+        raise ValueError("events must be a non-empty array")
+
+    # Supported events matching Bridge/OpenAPI
+    valid_events = {"job.completed", "job.failed"}
+    normalized_events: list[str] = []
+    seen_events: set[str] = set()
+    for raw_event in events_raw:
+        event_name = _str_or_none(raw_event)
+        if event_name is None:
+            return _error(422, "UNPROCESSABLE_ENTITY", "events must contain non-empty values")
+        if event_name not in valid_events:
+            return _error(422, "UNPROCESSABLE_ENTITY", f"Unsupported webhook event '{event_name}'")
+        if event_name in seen_events:
+            raise ValueError("events must not contain duplicate values")
+        seen_events.add(event_name)
+        normalized_events.append(event_name)
+
+    description = _str_or_none(body.get("description"))
+    if description and len(description) > 256:
+        return _error(422, "UNPROCESSABLE_ENTITY", "description must be 256 characters or fewer")
+
+    webhook_id = str(uuid.uuid4())
     now = _now_utc()
+    webhook_secret = secrets.token_urlsafe(32)
 
-    # In a real implementation, we would generate a secret and store it in Secrets Manager.
-    # For now, we'll mock the response.
     webhook = {
         "PK": f"TENANT#{tenant_id}",
         "SK": f"WEBHOOK#{webhook_id}",
-        "webhookId": webhook_id,
-        "tenantId": tenant_id,
-        "callbackUrl": callback_url,
-        "events": events,
+        "webhook_id": webhook_id,
+        "tenant_id": tenant_id,
+        "callback_url": callback_url,
+        "events": normalized_events,
         "status": "active",
-        "description": _str_or_none(body.get("description")),
-        "createdAt": _iso(now),
-        "updatedAt": _iso(now),
+        "description": description,
+        "created_at": _iso(now),
+        "updated_at": _iso(now),
+        "signature_secret": webhook_secret,
+        "signature_header": "X-Platform-Signature",
+        "signature_algorithm": "HMAC-SHA256",
+        "record_type": "webhook_registration",
     }
 
     db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
@@ -1235,11 +1276,15 @@ def _handle_register_webhook(
         },
     )
 
-    # Filter out PK/SK for response
-    response_webhook = {k: v for k, v in webhook.items() if k not in ("PK", "SK")}
-    # Mock signature header and algorithm as defined in openapi.yaml
-    response_webhook["signatureHeader"] = "X-Platform-Signature"
-    response_webhook["signatureAlgorithm"] = "HMAC-SHA256"
+    # Filter out sensitive fields for response
+    response_webhook = {
+        "webhookId": webhook_id,
+        "callbackUrl": callback_url,
+        "events": normalized_events,
+        "createdAt": _iso(now),
+        "signatureHeader": "X-Platform-Signature",
+        "signatureAlgorithm": "HMAC-SHA256",
+    }
 
     return _response(201, response_webhook)
 
