@@ -375,18 +375,15 @@ infra-rollback-lambda:
 	@test -n "$(FUNCTION)" || (echo "ERROR: FUNCTION required" && exit 1)
 	uv run python scripts/rollback_lambda.py $(FUNCTION) $(ENV)
 
-## infra-set-runtime-region: Update active runtime region (use with failover lock)
+## infra-set-runtime-region: Update active runtime region via Admin REST API (requires failover lock)
 ## Usage: make infra-set-runtime-region REGION=eu-central-1 ENV=prod
 infra-set-runtime-region:
 	@test -n "$(REGION)" || (echo "ERROR: REGION required" && exit 1)
-	@test -n "$$AWS_REGION" || (echo "ERROR: AWS_REGION environment variable not set" && exit 1)
-	aws ssm put-parameter \
-		--region $$AWS_REGION \
-		--name /platform/config/runtime-region \
-		--value $(REGION) \
-		--type String \
-		--overwrite
-	@echo "==> Runtime region set to $(REGION) (via SSM in $$AWS_REGION)"
+	uv run python scripts/ops.py set-runtime-region \
+		--region $(REGION) \
+		$(if $(LOCK_ID),--lock-id "$(LOCK_ID)",) \
+		--env $(ENV)
+	@echo "==> Runtime region set to $(REGION) via POST /v1/platform/failover"
 	@echo "    Allow 90 seconds for all bridge Lambda instances to pick up the change"
 
 ## failover-lock-acquire: Acquire distributed lock before region failover
