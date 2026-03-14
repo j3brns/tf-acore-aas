@@ -1102,7 +1102,9 @@ def test_create_tenant_allows_json_encoded_admin_roles(fake_state: dict[str, Any
     assert response["statusCode"] == 201
 
 
-def test_rotate_api_key_for_own_tenant_succeeds_and_emits_event(fake_state: dict[str, Any]) -> None:
+def test_rotate_api_key_for_own_tenant_requires_self_service_admin_role(
+    fake_state: dict[str, Any],
+) -> None:
     fake_state["db"].items[("TENANT#t-rotate", "METADATA")] = {
         "PK": "TENANT#t-rotate",
         "SK": "METADATA",
@@ -1125,6 +1127,42 @@ def test_rotate_api_key_for_own_tenant_succeeds_and_emits_event(fake_state: dict
         tenant_id="t-rotate",
         caller_tenant_id="t-rotate",
         roles=[],
+        app_id="app-rotate",
+    )
+    event["path"] = "/v1/tenants/t-rotate/api-key/rotate"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 403
+    assert _body(response)["error"]["code"] == "FORBIDDEN"
+    assert fake_state["deps"].secretsmanager.rotate_calls == []
+
+
+def test_rotate_api_key_for_own_tenant_succeeds_for_platform_operator(
+    fake_state: dict[str, Any],
+) -> None:
+    fake_state["db"].items[("TENANT#t-rotate", "METADATA")] = {
+        "PK": "TENANT#t-rotate",
+        "SK": "METADATA",
+        "tenantId": "t-rotate",
+        "appId": "app-rotate",
+        "displayName": "Rotate",
+        "tier": "standard",
+        "status": "active",
+        "createdAt": "2026-02-25T12:00:00Z",
+        "updatedAt": "2026-02-25T12:00:00Z",
+        "ownerEmail": "r@example.com",
+        "ownerTeam": "team-r",
+        "accountId": "123456789012",
+        "apiKeySecretArn": (
+            "arn:aws:secretsmanager:eu-west-2:111111111111:secret:platform/tenants/t-rotate/api-key"
+        ),
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-rotate",
+        caller_tenant_id="t-rotate",
+        roles=["Platform.Operator"],
         app_id="app-rotate",
     )
     event["path"] = "/v1/tenants/t-rotate/api-key/rotate"
@@ -1168,7 +1206,7 @@ def test_rotate_api_key_canonicalizes_mixed_case_path_tenant_id(
         method="POST",
         tenant_id="Tenant-Rotate-001",
         caller_tenant_id="tenant-rotate-001",
-        roles=[],
+        roles=["Platform.Operator"],
         app_id="app-rotate",
     )
     event["path"] = "/v1/tenants/Tenant-Rotate-001/api-key/rotate"
@@ -1208,7 +1246,9 @@ def test_rotate_api_key_cross_tenant_forbidden(fake_state: dict[str, Any]) -> No
     assert _body(response)["error"]["code"] == "FORBIDDEN"
 
 
-def test_invite_user_for_own_tenant_succeeds(fake_state: dict[str, Any]) -> None:
+def test_invite_user_for_own_tenant_requires_self_service_admin_role(
+    fake_state: dict[str, Any],
+) -> None:
     fake_state["db"].items[("TENANT#t-invite", "METADATA")] = {
         "PK": "TENANT#t-invite",
         "SK": "METADATA",
@@ -1221,6 +1261,32 @@ def test_invite_user_for_own_tenant_succeeds(fake_state: dict[str, Any]) -> None
         tenant_id="t-invite",
         caller_tenant_id="t-invite",
         roles=[],
+        app_id="app-invite",
+        body={"email": "new.user@example.com", "role": "Agent.Invoke"},
+    )
+    event["path"] = "/v1/tenants/t-invite/users/invite"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 403
+    assert _body(response)["error"]["code"] == "FORBIDDEN"
+
+
+def test_invite_user_for_own_tenant_succeeds_for_platform_operator(
+    fake_state: dict[str, Any],
+) -> None:
+    fake_state["db"].items[("TENANT#t-invite", "METADATA")] = {
+        "PK": "TENANT#t-invite",
+        "SK": "METADATA",
+        "tenantId": "t-invite",
+        "appId": "app-invite",
+        "status": "active",
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-invite",
+        caller_tenant_id="t-invite",
+        roles=["Platform.Operator"],
         app_id="app-invite",
         body={"email": "new.user@example.com", "role": "Agent.Invoke"},
     )
@@ -1250,7 +1316,7 @@ def test_invite_user_canonicalizes_mixed_case_path_tenant_id(fake_state: dict[st
         method="POST",
         tenant_id="Tenant-Invite-001",
         caller_tenant_id="tenant-invite-001",
-        roles=[],
+        roles=["Platform.Operator"],
         app_id="app-invite",
         body={"email": "new.user@example.com", "role": "Agent.Invoke"},
     )
@@ -1305,7 +1371,7 @@ def test_invite_user_requires_valid_email(fake_state: dict[str, Any]) -> None:
         method="POST",
         tenant_id="t-invite-2",
         caller_tenant_id="t-invite-2",
-        roles=[],
+        roles=["Platform.Operator"],
         app_id="app-invite-2",
         body={"email": "not-an-email"},
     )
@@ -1317,7 +1383,66 @@ def test_invite_user_requires_valid_email(fake_state: dict[str, Any]) -> None:
     assert _body(response)["error"]["code"] == "BAD_REQUEST"
 
 
-def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
+def test_webhook_management_requires_self_service_admin_role(
+    fake_state: dict[str, Any],
+) -> None:
+    fake_state["db"].items[("TENANT#t-webhook", "METADATA")] = {
+        "PK": "TENANT#t-webhook",
+        "SK": "METADATA",
+        "tenantId": "t-webhook",
+        "appId": "app-webhook",
+        "status": "active",
+    }
+    fake_state["db"].items[("TENANT#t-webhook", "WEBHOOK#wh-existing")] = {
+        "PK": "TENANT#t-webhook",
+        "SK": "WEBHOOK#wh-existing",
+        "webhookId": "wh-existing",
+        "tenantId": "t-webhook",
+        "callbackUrl": "https://example.com/callback",
+        "events": ["job.completed"],
+        "status": "active",
+    }
+
+    register_event = _event(
+        method="POST",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+        body={
+            "callbackUrl": "https://example.com/callback",
+            "events": ["job.completed"],
+            "description": "My Webhook",
+        },
+    )
+    register_event["path"] = "/v1/webhooks"
+
+    register_response = _invoke(register_event)
+    assert register_response["statusCode"] == 403
+
+    list_event = _event(
+        method="GET",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+    )
+    list_event["path"] = "/v1/webhooks"
+
+    list_response = _invoke(list_event)
+    assert list_response["statusCode"] == 403
+
+    delete_event = _event(
+        method="DELETE",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+    )
+    delete_event["path"] = "/v1/webhooks/wh-existing"
+
+    delete_response = _invoke(delete_event)
+    assert delete_response["statusCode"] == 403
+
+
+def test_webhook_management_succeeds_for_platform_operator(fake_state: dict[str, Any]) -> None:
     fake_state["db"].items[("TENANT#t-webhook", "METADATA")] = {
         "PK": "TENANT#t-webhook",
         "SK": "METADATA",
@@ -1331,7 +1456,7 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
         method="POST",
         tenant_id="t-webhook",
         caller_tenant_id="t-webhook",
-        roles=["Agent.Invoke"],
+        roles=["Platform.Operator"],
         body={
             "callbackUrl": "https://example.com/callback",
             "events": ["job.completed"],
@@ -1352,7 +1477,7 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
         method="GET",
         tenant_id="t-webhook",
         caller_tenant_id="t-webhook",
-        roles=["Agent.Invoke"],
+        roles=["Platform.Operator"],
     )
     event["path"] = "/v1/webhooks"
 
@@ -1367,7 +1492,7 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
         method="DELETE",
         tenant_id="t-webhook",
         caller_tenant_id="t-webhook",
-        roles=["Agent.Invoke"],
+        roles=["Platform.Operator"],
     )
     event["path"] = f"/v1/webhooks/{webhook_id}"
 
@@ -1379,7 +1504,7 @@ def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
         method="GET",
         tenant_id="t-webhook",
         caller_tenant_id="t-webhook",
-        roles=["Agent.Invoke"],
+        roles=["Platform.Operator"],
     )
     event["path"] = "/v1/webhooks"
 
@@ -1408,7 +1533,7 @@ def test_list_invites_succeeds(fake_state: dict[str, Any]) -> None:
         method="GET",
         tenant_id="t-list-invites",
         caller_tenant_id="t-list-invites",
-        roles=["Agent.Invoke"],
+        roles=["Platform.Operator"],
     )
     event["path"] = "/v1/tenants/t-list-invites/users/invites"
 
