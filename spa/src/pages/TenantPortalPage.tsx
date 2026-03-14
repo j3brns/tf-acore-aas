@@ -3,6 +3,25 @@ import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { resolveTenantId } from "../auth/identity";
 import { PageBanner } from "../components/PageBanner";
+import { Loading } from "../components/ui/loading";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Badge } from "../components/ui/badge";
+import { Typography } from "../components/ui/typography";
+import { 
+  BarChart3, 
+  Key, 
+  UserPlus, 
+  ShieldCheck, 
+  RotateCcw, 
+  Mail, 
+  AlertCircle,
+  CreditCard,
+  Zap
+} from "lucide-react";
+import { cn } from "../lib/utils";
 
 type TenantUsage = {
     requestsToday?: number;
@@ -39,15 +58,19 @@ type InviteResponse = {
     };
 };
 
+import { EmptyState } from "../components/ui/empty-state";
+
 type TenantPortalPageProps = {
-    initialSection?: "overview" | "access" | "api-keys";
+    initialSection?: "overview" | "access" | "api-keys" | "webhooks";
 };
 
 const sectionMessages: Record<NonNullable<TenantPortalPageProps["initialSection"]>, string> = {
     overview: "Usage, key posture, and invitation controls are grouped here for the current tenant.",
     access: "This route focuses the tenant access workflow, including invitation issuance.",
     "api-keys": "This route focuses machine identity hygiene and rotation cadence.",
+    webhooks: "This route focuses on configuring async result delivery destinations.",
 };
+
 
 export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSection = "overview" }) => {
     const { getAccessToken, account, isAuthenticated } = useAuth();
@@ -70,7 +93,7 @@ export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSecti
         }
         if (!tenantId) {
             setLoading(false);
-            setError("Token is missing tenantid claim.");
+            setError("Token is missing required tenantid claim.");
             return;
         }
 
@@ -91,9 +114,7 @@ export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSecti
     }, [getAccessToken, isAuthenticated, tenantId]);
 
     const onRotateApiKey = async () => {
-        if (!tenantId) {
-            return;
-        }
+        if (!tenantId) return;
         setRotating(true);
         setRotateMessage(null);
         try {
@@ -123,9 +144,7 @@ export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSecti
 
     const onInviteSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        if (!tenantId || !inviteEmail.trim()) {
-            return;
-        }
+        if (!tenantId || !inviteEmail.trim()) return;
         setInvitePending(true);
         setInviteMessage(null);
         try {
@@ -140,7 +159,7 @@ export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSecti
                 body: JSON.stringify(payload),
             });
             setInviteMessage(
-                `Invite ${response.invite.inviteId} accepted for ${response.invite.email}; expires ${new Date(
+                `Invite accepted for ${response.invite.email}; expires ${new Date(
                     response.invite.expiresAt,
                 ).toLocaleString()}.`,
             );
@@ -153,117 +172,189 @@ export const TenantPortalPage: React.FC<TenantPortalPageProps> = ({ initialSecti
         }
     };
 
-    if (loading) {
-        return <div>Loading tenant portal...</div>;
-    }
+    if (loading) return <Loading message="Loading tenant workspace..." size="lg" className="h-[400px]" />;
 
     if (error) {
         return (
-            <div className="bg-red-50 border-l-4 border-red-400 p-4">
-                <p className="text-sm text-red-700">{error}</p>
-            </div>
+            <PageBanner title="Identity Resolution Error" severity="error">
+                {error}
+            </PageBanner>
         );
     }
 
     if (!tenant) {
-        return <div>No tenant data available.</div>;
+        return (
+            <EmptyState 
+                title="No Tenant Context" 
+                description="Unable to resolve tenant metadata for the current session. Please re-authenticate."
+                icon={AlertCircle}
+            />
+        );
     }
 
     return (
-        <div className="space-y-8">
+        <div className="space-y-8 animate-in fade-in duration-500">
             <div>
-                <h1 className="text-3xl font-bold text-gray-900">Tenant Portal</h1>
-                <p className="mt-2 text-gray-600">
-                    Self-service controls for tenant <span className="font-medium">{tenant.tenantId}</span>.
-                </p>
+                <Typography variant="h2" className="border-none pb-0">Tenant Settings</Typography>
+                <Typography variant="muted" className="mt-1">
+                    Self-service controls and usage visibility for <span className="font-mono text-cyan-400 font-bold">{tenant.tenantId}</span>.
+                </Typography>
             </div>
 
-            <PageBanner title={`Tenant / ${initialSection}`} severity="info">
+            <PageBanner title={`Self-Service / ${initialSection}`} severity="info">
                 {sectionMessages[initialSection]}
             </PageBanner>
 
-            <section className="bg-white shadow sm:rounded-lg border border-gray-200 overflow-hidden">
-                <div className="px-4 py-5 sm:px-6 bg-gray-50 border-b border-gray-200">
-                    <h2 className="text-lg font-medium text-gray-900">Usage Snapshot</h2>
-                </div>
-                <div className="px-4 py-5 sm:p-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="rounded border border-gray-200 p-4">
-                        <p className="text-sm text-gray-500">Requests Today</p>
-                        <p className="text-2xl font-semibold text-gray-900">{tenant.usage?.requestsToday ?? 0}</p>
-                    </div>
-                    <div className="rounded border border-gray-200 p-4">
-                        <p className="text-sm text-gray-500">Budget Remaining (USD)</p>
-                        <p className="text-2xl font-semibold text-gray-900">
-                            {tenant.usage?.budgetRemainingUsd ?? "n/a"}
-                        </p>
-                    </div>
-                    <div className="rounded border border-gray-200 p-4">
-                        <p className="text-sm text-gray-500">Tier / Status</p>
-                        <p className="text-2xl font-semibold text-gray-900">
-                            {tenant.tier} / {tenant.status}
-                        </p>
-                    </div>
-                </div>
-            </section>
+            <div className="grid gap-6 lg:grid-cols-2">
+                <Card className="border-white/5 bg-slate-900/40 backdrop-blur-sm overflow-hidden flex flex-col">
+                    <CardHeader>
+                        <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-cyan-500/10 flex items-center justify-center text-cyan-400">
+                                <BarChart3 className="h-5 w-5" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-lg">Usage Snapshot</CardTitle>
+                                <CardDescription>Real-time platform consumption metrics.</CardDescription>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="flex-1 grid gap-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <MetricCard label="Requests Today" value={tenant.usage?.requestsToday ?? 0} icon={Zap} />
+                            <MetricCard label="Remaining Budget" value={`$${tenant.usage?.budgetRemainingUsd ?? 0}`} icon={CreditCard} />
+                        </div>
+                        <div className="rounded-xl border border-white/5 bg-white/5 p-4 flex items-center justify-between">
+                            <div className="space-y-1">
+                                <Typography variant="muted" className="text-[10px] font-bold uppercase tracking-widest opacity-60">Status Posture</Typography>
+                                <Typography variant="small" className="text-white font-bold capitalize">{tenant.tier} Tier / {tenant.status}</Typography>
+                            </div>
+                            <Badge variant={tenant.status === "active" ? "success" : "warning"} className="tracking-widest text-[10px]">
+                                {tenant.status.toUpperCase()}
+                            </Badge>
+                        </div>
+                    </CardContent>
+                </Card>
 
-            <section className="bg-white shadow sm:rounded-lg border border-gray-200 overflow-hidden">
-                <div className="px-4 py-5 sm:px-6 bg-gray-50 border-b border-gray-200">
-                    <h2 className="text-lg font-medium text-gray-900">API Key Rotation</h2>
-                </div>
-                <div className="px-4 py-5 sm:p-6 space-y-4">
-                    <p className="text-sm text-gray-600">Secret ARN: {tenant.apiKeySecretArn ?? "Not configured"}</p>
-                    <button
-                        onClick={onRotateApiKey}
-                        disabled={rotating}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
-                    >
-                        {rotating ? "Rotating..." : "Rotate API Key"}
-                    </button>
-                    {rotateMessage && <p className="text-sm text-gray-700">{rotateMessage}</p>}
-                </div>
-            </section>
+                <Card className="border-white/5 bg-slate-900/40 backdrop-blur-sm overflow-hidden flex flex-col">
+                    <CardHeader>
+                        <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+                                <Key className="h-5 w-5" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-lg">API Key Rotation</CardTitle>
+                                <CardDescription>Manage machine identity and rotation cadence.</CardDescription>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="flex-1 space-y-4">
+                        <div className="rounded-xl border border-white/5 bg-slate-950/50 p-4">
+                           <Typography variant="muted" className="text-[10px] font-bold uppercase tracking-widest opacity-60 block mb-2">Secret ARN</Typography>
+                           <Typography variant="small" className="font-mono text-xs text-slate-300 break-all leading-relaxed">
+                              {tenant.apiKeySecretArn ?? "Identity store not yet provisioned."}
+                           </Typography>
+                        </div>
+                        
+                        {rotateMessage && (
+                           <div className={cn(
+                             "rounded-xl border p-4 text-xs font-medium animate-in slide-in-from-top-2",
+                             rotateMessage.includes("rotated") ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : "border-destructive/20 bg-destructive/10 text-destructive"
+                           )}>
+                              {rotateMessage}
+                           </div>
+                        )}
+                    </CardContent>
+                    <CardFooter className="pt-0">
+                        <Button 
+                            onClick={onRotateApiKey} 
+                            disabled={rotating} 
+                            variant="accent"
+                            className="w-full rounded-xl gap-2 font-bold"
+                        >
+                            {rotating ? <Loading size="sm" className="p-0 h-4 w-4" message="" /> : <RotateCcw className="h-4 w-4" />}
+                            {rotating ? "Initiating Rotation..." : "Rotate Secret Now"}
+                        </Button>
+                    </CardFooter>
+                </Card>
 
-            <section className="bg-white shadow sm:rounded-lg border border-gray-200 overflow-hidden">
-                <div className="px-4 py-5 sm:px-6 bg-gray-50 border-b border-gray-200">
-                    <h2 className="text-lg font-medium text-gray-900">Invite User</h2>
-                </div>
-                <form className="px-4 py-5 sm:p-6 space-y-4" onSubmit={onInviteSubmit}>
-                    <div>
-                        <label htmlFor="invite-email" className="block text-sm font-medium text-gray-700">
-                            Email
-                        </label>
-                        <input
-                            id="invite-email"
-                            type="email"
-                            required
-                            value={inviteEmail}
-                            onChange={(e) => setInviteEmail(e.target.value)}
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            placeholder="new.user@example.com"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="invite-role" className="block text-sm font-medium text-gray-700">
-                            Role
-                        </label>
-                        <input
-                            id="invite-role"
-                            type="text"
-                            value={inviteRole}
-                            onChange={(e) => setInviteRole(e.target.value)}
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        />
-                    </div>
-                    <button
-                        type="submit"
-                        disabled={invitePending}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
-                    >
-                        {invitePending ? "Sending..." : "Send Invite"}
-                    </button>
-                    {inviteMessage && <p className="text-sm text-gray-700">{inviteMessage}</p>}
-                </form>
-            </section>
+                <Card className="border-white/5 bg-slate-900/40 backdrop-blur-sm overflow-hidden lg:col-span-2">
+                    <CardHeader>
+                        <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-400">
+                                <UserPlus className="h-5 w-5" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-lg">Member Invitation</CardTitle>
+                                <CardDescription>Issue new tenant-scoped human identities via Entra ID.</CardDescription>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent>
+                        <form className="space-y-6 max-w-2xl" onSubmit={onInviteSubmit}>
+                            <div className="grid gap-6 sm:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label htmlFor="invite-email" className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Email Address</Label>
+                                    <Input
+                                        id="invite-email"
+                                        type="email"
+                                        required
+                                        value={inviteEmail}
+                                        onChange={(e) => setInviteEmail(e.target.value)}
+                                        className="rounded-xl border-white/10 bg-white/5 text-white focus:ring-blue-500/50"
+                                        placeholder="user@enterprise.com"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="invite-role" className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Assigned Role</Label>
+                                    <Input
+                                        id="invite-role"
+                                        type="text"
+                                        value={inviteRole}
+                                        onChange={(e) => setInviteRole(e.target.value)}
+                                        className="rounded-xl border-white/10 bg-white/5 text-white focus:ring-blue-500/50 font-mono text-xs"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-4 pt-2">
+                               <div className="flex items-center gap-2 text-xs text-slate-500">
+                                  <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                                  Role-based access will be enforced on next login.
+                               </div>
+                               <Button
+                                    type="submit"
+                                    disabled={invitePending || !inviteEmail.trim()}
+                                    className="rounded-xl px-8 font-bold gap-2"
+                                >
+                                    {invitePending ? <Loading size="sm" className="p-0 h-4 w-4" message="" /> : <Mail className="h-4 w-4" />}
+                                    {invitePending ? "Processing..." : "Issue Invitation"}
+                                </Button>
+                            </div>
+                            
+                            {inviteMessage && (
+                                <div className={cn(
+                                  "rounded-xl border p-4 text-xs font-medium animate-in slide-in-from-top-2",
+                                  inviteMessage.includes("accepted") ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : "border-destructive/20 bg-destructive/10 text-destructive"
+                                )}>
+                                   {inviteMessage}
+                                </div>
+                            )}
+                        </form>
+                    </CardContent>
+                </Card>
+            </div>
         </div>
     );
 };
+
+function MetricCard({ label, value, icon: Icon }: { label: string; value: string | number; icon: any }) {
+    return (
+        <div className="rounded-xl border border-white/5 bg-white/5 p-4 space-y-2">
+            <Typography variant="muted" className="text-[10px] font-bold uppercase tracking-widest opacity-60 flex items-center gap-1.5">
+                <Icon className="h-3 w-3" />
+                {label}
+            </Typography>
+            <Typography variant="h3" className="text-2xl font-bold text-white tracking-tight">{value}</Typography>
+        </div>
+    );
+}

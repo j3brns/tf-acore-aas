@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { Agent, AgentInvokeResponse } from "../types";
@@ -11,10 +11,30 @@ import {
     formatApiErrorMessage,
     isAsyncInvokeAccepted,
 } from "./invokeContract";
+import { Loading } from "../components/ui/loading";
+import { PageBanner } from "../components/PageBanner";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Typography } from "../components/ui/typography";
+import { StatusIndicator } from "../components/ui/status-indicator";
+import { ResponseDisplay } from "../components/ui/response-display";
+import { AsyncJobStatus } from "../components/ui/async-job-status";
+import { 
+  Bot, 
+  ArrowLeft, 
+  Send, 
+  Info, 
+  Zap, 
+  Shield, 
+  Clock, 
+  Activity,
+  Maximize2,
+  Settings
+} from "lucide-react";
 
 export const InvokePage: React.FC = () => {
     const { agentName } = useParams<{ agentName: string }>();
-    const navigate = useNavigate();
     const { getAccessToken, isAuthenticated } = useAuth();
     
     const [agent, setAgent] = useState<Agent | null>(null);
@@ -111,93 +131,170 @@ export const InvokePage: React.FC = () => {
         }
     };
 
-    if (!agent && !error) return <div>Loading...</div>;
+    if (!agent && !error) return <Loading message="Preparing execution workspace..." className="h-[400px]" />;
 
     return (
-        <div className="max-w-4xl mx-auto">
-            <button 
-                onClick={() => navigate("/")}
-                className="mb-4 text-sm text-blue-600 hover:underline flex items-center"
-            >
-                ← Back to Catalogue
-            </button>
-            
-            <div className="bg-white shadow sm:rounded-lg overflow-hidden border border-gray-200">
-                <div className="px-4 py-5 sm:p-6">
-                    <h1 className="text-2xl font-bold text-gray-900 mb-2">Invoke: {agent?.agent_name}</h1>
-                    <p className="text-sm text-gray-500 mb-6">
-                        Version {agent?.version} • {agent?.invocation_mode} mode
-                    </p>
-
-                    <form onSubmit={handleInvoke} className="space-y-4">
-                        <div>
-                            <label htmlFor="prompt" className="block text-sm font-medium text-gray-700">
-                                Prompt
-                            </label>
-                            <textarea
-                                id="prompt"
-                                rows={4}
-                                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                                placeholder="Enter your instructions for the agent..."
-                                value={prompt}
-                                onChange={(e) => setPrompt(e.target.value)}
-                                required
-                            />
+        <div className="grid gap-8 lg:grid-cols-[1fr_320px] animate-in fade-in slide-in-from-bottom-8 duration-700">
+            <div className="space-y-8">
+                <Card className="border-white/5 bg-slate-900/40 backdrop-blur-sm overflow-hidden ring-1 ring-white/5">
+                    <CardHeader className="flex flex-row items-center justify-between border-b border-white/5 pb-4">
+                        <div className="flex items-center gap-4">
+                            <div className="h-12 w-12 rounded-2xl bg-cyan-500/10 flex items-center justify-center text-cyan-400">
+                                <Bot className="h-7 w-7" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-xl font-bold text-white">Invoke: {agent?.agent_name}</CardTitle>
+                                <CardDescription className="text-slate-400 font-mono text-xs">
+                                    Agent ARN: platform::agent::{agentName} v{agent?.version}
+                                </CardDescription>
+                            </div>
                         </div>
+                        <Badge variant="outline" className="h-6 border-cyan-500/30 text-cyan-400 bg-cyan-500/5">
+                            {agent?.invocation_mode} mode
+                        </Badge>
+                    </CardHeader>
 
-                        <p className="text-sm text-gray-600">
-                            Invocation mode is configured by the agent:{" "}
-                            <span className="font-semibold capitalize">{invocationMode}</span>.
-                        </p>
+                    <CardContent className="pt-8">
+                        <form onSubmit={handleInvoke} className="space-y-6">
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between px-1">
+                                    <Typography variant="small" className="font-bold text-slate-300 uppercase tracking-widest text-[10px]">
+                                        Input Prompt
+                                    </Typography>
+                                    <div className="flex gap-2">
+                                       <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-slate-500">
+                                          <Maximize2 className="h-3 w-3" />
+                                       </Button>
+                                       <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-slate-500">
+                                          <Settings className="h-3 w-3" />
+                                       </Button>
+                                    </div>
+                                </div>
+                                <div className="relative group">
+                                    <textarea
+                                        id="prompt"
+                                        rows={6}
+                                        className="w-full bg-slate-950/50 border border-white/10 rounded-2xl p-4 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all resize-none group-hover:border-white/20"
+                                        placeholder="Type your instructions for the agent here..."
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        required
+                                    />
+                                    <div className="absolute bottom-4 right-4 text-[10px] font-mono text-slate-600">
+                                        {prompt.length} chars
+                                    </div>
+                                </div>
+                            </div>
 
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className={`w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                                loading ? "opacity-50 cursor-not-allowed" : ""
-                            }`}
-                        >
-                            {loading ? "Invoking..." : "Submit"}
-                        </button>
-                    </form>
-                </div>
+                            <Button
+                                type="submit"
+                                disabled={loading || !prompt.trim()}
+                                variant="accent"
+                                className="w-full h-12 rounded-xl text-white font-bold shadow-lg shadow-cyan-500/10 group"
+                            >
+                                {loading ? (
+                                    <>
+                                        <Activity className="mr-2 h-4 w-4 animate-pulse" />
+                                        Invoking Agent...
+                                    </>
+                                ) : (
+                                    <>
+                                        Submit Instruction
+                                        <Send className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1 group-hover:-translate-y-1" />
+                                    </>
+                                )}
+                            </Button>
+                        </form>
+                    </CardContent>
+                </Card>
+
+                {error && (
+                    <PageBanner title="Execution Error" severity="error">
+                        {error}
+                    </PageBanner>
+                )}
+
+                {jobId && (
+                    <AsyncJobStatus 
+                      jobId={jobId} 
+                      status={jobStatus?.status || "pending"} 
+                      resultUrl={jobStatus?.resultUrl || undefined} 
+                      error={pollingError || undefined}
+                    />
+                )}
+
+                {(result !== null || (loading && invocationMode === "streaming")) && (
+                    <ResponseDisplay content={result || ""} isLoading={loading && invocationMode === "streaming"} />
+                )}
             </div>
 
-            {error && (
-                <div className="mt-6 bg-red-50 border-l-4 border-red-400 p-4">
-                    <p className="text-sm text-red-700">{error}</p>
+            {/* Context Sidebar */}
+            <aside className="space-y-6">
+                <div className="rounded-2xl border border-white/5 bg-white/5 p-5 space-y-4">
+                   <Typography variant="small" className="font-bold text-slate-400 uppercase tracking-widest block">
+                      Trust Cues
+                   </Typography>
+                   <div className="space-y-2">
+                      <StatusIndicator 
+                        label="Runtime" 
+                        value="eu-west-1" 
+                        tone="success" 
+                        title="AgentCore execution region: Dublin"
+                      />
+                      <StatusIndicator 
+                        label="Compute" 
+                        value="Firecracker" 
+                        tone="info" 
+                        title="Isolated microVM runtime"
+                      />
+                      <StatusIndicator 
+                        label="Session" 
+                        value={sessionId ? "Active" : "New"} 
+                        tone={sessionId ? "success" : "neutral"} 
+                        pulse={!!sessionId}
+                        title={sessionId ? "Long-running session active" : "No active session"}
+                      />
+                   </div>
                 </div>
-            )}
 
-            {jobId && (
-                <div className="mt-6 bg-blue-50 border-l-4 border-blue-400 p-4">
-                    <h3 className="text-sm font-medium text-blue-800">Async Job Started</h3>
-                    <p className="text-sm text-blue-700 mt-1">Job ID: {jobId}</p>
-                    <p className="text-sm text-blue-700 mt-1 uppercase font-bold">Status: {jobStatus?.status || "pending"}</p>
-                    {jobStatus?.status === "completed" && (
-                        <div className="mt-2">
-                            <a 
-                                href={jobStatus.resultUrl || undefined} 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="text-sm font-medium text-blue-600 hover:underline"
-                            >
-                                View Results
-                            </a>
-                        </div>
-                    )}
-                    {pollingError && <p className="text-sm text-red-700 mt-2">{pollingError}</p>}
+                <div className="rounded-2xl border border-white/5 bg-slate-900/40 p-5 space-y-4">
+                   <Typography variant="small" className="font-bold text-slate-400 uppercase tracking-widest block">
+                      Capabilities
+                   </Typography>
+                   <div className="space-y-3">
+                      <div className="flex items-center gap-3 text-xs text-slate-300">
+                         <Clock className="h-4 w-4 text-cyan-400 shrink-0" />
+                         <span>Max timeout: 15 min</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-300">
+                         <Zap className="h-4 w-4 text-cyan-400 shrink-0" />
+                         <span>Mode: {agent?.invocation_mode}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-300">
+                         <Shield className="h-4 w-4 text-cyan-400 shrink-0" />
+                         <span>Tier: {agent?.tier_minimum}+</span>
+                      </div>
+                   </div>
                 </div>
-            )}
 
-            {result && (
-                <div className="mt-6">
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">Response</h3>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 whitespace-pre-wrap font-mono text-sm">
-                        {result}
-                    </div>
+                <div className="rounded-2xl border border-white/5 bg-amber-500/5 p-5">
+                   <div className="flex items-center gap-2 mb-2 text-amber-500">
+                      <Info className="h-4 w-4" />
+                      <Typography variant="small" className="font-bold">Usage Note</Typography>
+                   </div>
+                   <Typography variant="muted" className="text-[11px] leading-relaxed">
+                      All prompts are logged for compliance. Do not include unencrypted secrets or PII unless 
+                      the agent is explicitly configured for that data type.
+                   </Typography>
                 </div>
-            )}
+                
+                <Button asChild variant="ghost" className="w-full text-slate-500 hover:text-white">
+                   <Link to="/agents" className="gap-2">
+                      <ArrowLeft className="h-4 w-4" />
+                      Back to Catalogue
+                   </Link>
+                </Button>
+            </aside>
         </div>
     );
 };
