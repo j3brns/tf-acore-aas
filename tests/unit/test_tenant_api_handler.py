@@ -26,6 +26,18 @@ class FakeScopedDb:
             return None
         return dict(item)
 
+    def put_item(self, _table_name: str, item: dict[str, Any]) -> dict[str, Any]:
+        pk = str(item["PK"])
+        sk = str(item["SK"])
+        self.items[(pk, sk)] = dict(item)
+        return {"Attributes": dict(item)}
+
+    def delete_item(self, _table_name: str, key: dict[str, Any]) -> dict[str, Any]:
+        pk = str(key["PK"])
+        sk = str(key["SK"])
+        self.items.pop((pk, sk), None)
+        return {}
+
     def update_item(
         self,
         _table_name: str,
@@ -106,8 +118,25 @@ class FakeScopedDb:
         scan_index_forward: bool = True,
         exclusive_start_key: dict[str, Any] | None = None,
     ) -> PaginatedItems:
-        # Mock query — just return some items
+        # Mock query — return items matching SK prefix if provided
         results = [dict(item) for item in self.items.values()]
+        if sk_condition:
+            cls_name = type(sk_condition).__name__
+            if cls_name == "BeginsWith" and hasattr(sk_condition, "_values"):
+                prefix = sk_condition._values[1]
+                results = [r for r in results if str(r.get("SK", "")).startswith(prefix)]
+            elif cls_name == "Between" and hasattr(sk_condition, "_values"):
+                v_min = sk_condition._values[1]
+                v_max = sk_condition._values[2]
+                results = [r for r in results if v_min <= str(r.get("SK", "")) <= v_max]
+            else:
+                # Fallback to string matching if _values not present or unknown type
+                cond_str = str(sk_condition)
+                if "INVITE#" in cond_str:
+                    results = [r for r in results if str(r.get("SK", "")).startswith("INVITE#")]
+                elif "WEBHOOK#" in cond_str:
+                    results = [r for r in results if str(r.get("SK", "")).startswith("WEBHOOK#")]
+
         return PaginatedItems(items=results)
 
 
@@ -1286,3 +1315,105 @@ def test_invite_user_requires_valid_email(fake_state: dict[str, Any]) -> None:
 
     assert response["statusCode"] == 400
     assert _body(response)["error"]["code"] == "BAD_REQUEST"
+
+
+def test_webhook_management_succeeds(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-webhook", "METADATA")] = {
+        "PK": "TENANT#t-webhook",
+        "SK": "METADATA",
+        "tenantId": "t-webhook",
+        "appId": "app-webhook",
+        "status": "active",
+    }
+
+    # 1. Register a webhook
+    event = _event(
+        method="POST",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+        body={
+            "callbackUrl": "https://example.com/callback",
+            "events": ["job.completed"],
+            "description": "My Webhook",
+        },
+    )
+    event["path"] = "/v1/webhooks"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 201
+    body = _body(response)
+    webhook_id = body["webhookId"]
+    assert body["callbackUrl"] == "https://example.com/callback"
+    assert body["status"] == "active"
+
+    # 2. List webhooks
+    event = _event(
+        method="GET",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+    )
+    event["path"] = "/v1/webhooks"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert len(body["items"]) == 1
+    assert body["items"][0]["webhookId"] == webhook_id
+
+    # 3. Delete webhook
+    event = _event(
+        method="DELETE",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+    )
+    event["path"] = f"/v1/webhooks/{webhook_id}"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 204
+
+    # 4. Verify deleted
+    event = _event(
+        method="GET",
+        tenant_id="t-webhook",
+        caller_tenant_id="t-webhook",
+        roles=["Agent.Invoke"],
+    )
+    event["path"] = "/v1/webhooks"
+
+    response = _invoke(event)
+    body = _body(response)
+    assert len(body["items"]) == 0
+
+
+def test_list_invites_succeeds(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-list-invites", "METADATA")] = {
+        "PK": "TENANT#t-list-invites",
+        "SK": "METADATA",
+        "tenantId": "t-list-invites",
+        "appId": "app-list-invites",
+        "status": "active",
+    }
+    fake_state["db"].items[("TENANT#t-list-invites", "INVITE#inv-1")] = {
+        "PK": "TENANT#t-list-invites",
+        "SK": "INVITE#inv-1",
+        "inviteId": "inv-1",
+        "email": "user1@example.com",
+        "status": "pending",
+    }
+
+    event = _event(
+        method="GET",
+        tenant_id="t-list-invites",
+        caller_tenant_id="t-list-invites",
+        roles=["Agent.Invoke"],
+    )
+    event["path"] = "/v1/tenants/t-list-invites/users/invites"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert len(body["items"]) == 1
+    assert body["items"][0]["inviteId"] == "inv-1"

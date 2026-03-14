@@ -47,7 +47,8 @@ Every significant design choice is documented with context, decision, and reject
 
 ## Operator Runbooks
 
-All runbooks are executable via `make` targets — no AWS console access required.
+Runbooks are centered on `make` targets and scripted flows. Some bootstrap and
+failure-investigation steps still require external consoles or service UIs.
 
 | Runbook | Procedure | Trigger |
 |---------|-----------|---------|

@@ -122,9 +122,7 @@ def invoke(payload):
 
     def background_work():
         # Long-running work here — can take up to 8 hours
-        result = do_long_research(payload.get("prompt"))
-        # Write result to S3 for the platform to retrieve
-        store_result(result, payload.get("job_id"))
+        do_long_research(payload.get("prompt"))
         app.complete_async_task(task_id)
 
     threading.Thread(target=background_work, daemon=True).start()
@@ -145,7 +143,8 @@ if __name__ == "__main__":
 - The session stays alive as long as /ping returns HealthyBusy
 - After app.complete_async_task, /ping returns Healthy
 - The session will be destroyed 15 minutes after returning Healthy
-- Result must be written to S3 — the platform polls for it
+- The platform tracks async work through its job record and completion flow; use
+  webhook or poll delivery at the platform boundary when the agent finishes
 
 ## Dependency Management
 

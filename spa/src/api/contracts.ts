@@ -69,6 +69,65 @@ export type TenantDto = {
   tier: "basic" | "standard" | "premium";
   status: "active" | "suspended" | "deleted";
   runtimeRegion?: string | null;
+  fallbackRegion?: string | null;
+  monthlyBudgetUsd?: number | null;
+  ownerEmail?: string | null;
+  ownerTeam?: string | null;
+  accountId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type TenantUpdateRequestDto = {
+  displayName?: string;
+  tier?: "basic" | "standard" | "premium";
+  status?: "active" | "suspended" | "deleted";
+  runtimeRegion?: string;
+  fallbackRegion?: string;
+  monthlyBudgetUsd?: number | null;
+};
+
+export type AuditExportResponseDto = {
+  tenantId: string;
+  downloadUrl: string;
+  expiresAt: string;
+};
+
+export type TopTenantsResponseDto = {
+  tenants: {
+    tenantId: string;
+    tokens: number;
+  }[];
+};
+
+export type SecurityEventDto = {
+  timestamp: string;
+  type: string;
+  tenantId: string;
+  details: string;
+};
+
+export type SecurityEventsResponseDto = {
+  events: SecurityEventDto[];
+};
+
+export type ErrorRateResponseDto = {
+  errorRate: number;
+  periodMinutes: number;
+  threshold: number;
+};
+
+export type FailoverRequestDto = {
+  targetRegion: string;
+  lockId: string;
+};
+
+export type FailoverResponseDto = {
+  status: "completed";
+  region: string;
+  previousRegion: string;
+  lockId: string;
+  changed: boolean;
 };
 
 export type TenantsListResponseDto = {

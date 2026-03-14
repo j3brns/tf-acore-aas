@@ -78,6 +78,18 @@ class SessionStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class WebhookStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class InviteStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
 # ---------------------------------------------------------------------------
 # Table: platform-tenants
 # PK: TENANT#{tenantId}  SK: METADATA
@@ -413,3 +425,54 @@ class TenantContext:
     app_id: str
     tier: TenantTier
     sub: str  # JWT subject (user ID or machine identity)
+
+
+@dataclass(frozen=True)
+class WebhookRecord:
+    """Webhook registration record.
+
+    Stored under PK: TENANT#{tenantId} SK: WEBHOOK#{webhookId}
+    """
+
+    webhook_id: str
+    tenant_id: str
+    callback_url: str
+    events: list[str]
+    status: WebhookStatus
+    created_at: str  # ISO 8601 UTC
+    updated_at: str  # ISO 8601 UTC
+    description: str | None = None
+    secret_arn: str | None = None
+
+    @property
+    def pk(self) -> str:
+        return f"TENANT#{self.tenant_id}"
+
+    @property
+    def sk(self) -> str:
+        return f"WEBHOOK#{self.webhook_id}"
+
+
+@dataclass(frozen=True)
+class InviteRecord:
+    """Tenant user invitation record.
+
+    Stored under PK: TENANT#{tenantId} SK: INVITE#{inviteId}
+    """
+
+    invite_id: str
+    tenant_id: str
+    email: str
+    role: str
+    status: InviteStatus
+    created_at: str  # ISO 8601 UTC
+    expires_at: str  # ISO 8601 UTC
+    display_name: str | None = None
+
+    @property
+    def pk(self) -> str:
+        return f"TENANT#{self.tenant_id}"
+
+    @property
+    def sk(self) -> str:
+        return f"INVITE#{self.invite_id}"

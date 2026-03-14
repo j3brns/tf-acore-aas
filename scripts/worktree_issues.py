@@ -294,6 +294,43 @@ def reconcile_issue_label_changes(issue: Issue) -> tuple[list[str], list[str]]:
     return add_labels, sorted(set(remove_labels))
 
 
+def edit_issue_labels(root: Path, repo: str, issue_number: int, labels: list[str]) -> None:
+    if not labels:
+        return
+    edit_args = ["issue", "edit", str(issue_number), "-R", repo]
+    for label in labels:
+        if label in STATUS_LABELS:
+            ensure_label_exists(root, repo, label)
+            edit_args += ["--add-label", label]
+        else:
+            edit_args += ["--remove-label", label.removeprefix("-")]
+    gh_text(edit_args, root=root)
+
+
+def normalize_closed_issue_labels(root: Path, repo: str, issue_id: int, info: dict | None) -> bool:
+    if not info:
+        return False
+    labels = [x["name"] for x in info.get("labels", []) if isinstance(x, dict) and "name" in x]
+    issue = Issue(
+        number=issue_id,
+        title=str(info.get("title", "")),
+        state=str(info.get("state", "")).lower(),
+        created_at="",
+        body="",
+        labels=labels,
+        url=str(info.get("url", "")),
+        task_id=None,
+        seq=None,
+        depends_on=[],
+    )
+    add_labels, remove_labels = reconcile_issue_label_changes(issue)
+    label_ops = add_labels + [f"-{label}" for label in remove_labels]
+    if not label_ops:
+        return False
+    edit_issue_labels(root, repo, issue.number, label_ops)
+    return True
+
+
 def assert_issue_startable(issue: Issue, *, allow_blocked: bool) -> None:
     if issue.state != "open":
         raise CliError(f"Issue #{issue.number} is {issue.state}; must be open to start work")
@@ -1306,7 +1343,10 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
         raise CliError("No merged PR found for branch; refusing to close issue without --force")
     info = issue_state_info(root, repo, issue_id)
     if info and str(info.get("state", "")).upper() == "CLOSED":
+        normalized = normalize_closed_issue_labels(root, repo, issue_id, info)
         print(f"Issue #{issue_id} already closed.")
+        if normalized:
+            print("Normalized closed-issue lifecycle labels.")
         return
     args = ["issue", "edit", str(issue_id), "-R", repo]
     if info:

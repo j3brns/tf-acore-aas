@@ -75,6 +75,18 @@ const navigationGroups: NavigationGroup[] = [
         description: "Configure async result delivery.",
         requiresTenant: true,
       },
+      {
+        label: "Audit Exports",
+        path: "/tenant/audit",
+        description: "Export invocation logs to S3.",
+        requiresTenant: true,
+      },
+      {
+        label: "Settings",
+        path: "/tenant/settings",
+        description: "Manage tenant profile.",
+        requiresTenant: true,
+      },
     ],
   },
   {
