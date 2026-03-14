@@ -24,24 +24,24 @@ export default {
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
+          DEFAULT: "hsl(217.2 91.2% 59.8%)", // LoopaaS Primary Blue
+          foreground: "hsl(222.2 47.4% 11.2%)",
         },
         secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: "hsl(210 40% 96.1%)",
+          foreground: "hsl(222.2 47.4% 11.2%)",
         },
         destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
+          DEFAULT: "hsl(0 84.2% 60.2%)",
+          foreground: "hsl(210 40% 98%)",
         },
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: "hsl(210 40% 96.1%)",
+          foreground: "hsl(215.4 16.3% 46.9%)",
         },
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: "hsl(187 94% 42%)", // LoopaaS Accent Cyan
+          foreground: "hsl(222.2 47.4% 11.2%)",
         },
         popover: {
           DEFAULT: "hsl(var(--popover))",
@@ -51,7 +51,16 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        success: {
+          DEFAULT: "hsl(142.1 76.2% 36.3%)",
+          foreground: "hsl(355.7 100% 97.3%)",
+        },
+        warning: {
+          DEFAULT: "hsl(38 92.2% 50%)",
+          foreground: "hsl(48 96.5% 8.8%)",
+        },
       },
+
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",

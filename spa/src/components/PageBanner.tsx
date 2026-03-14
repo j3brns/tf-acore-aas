@@ -1,28 +1,52 @@
 import type { ReactNode } from "react";
+import { Info, CheckCircle2, AlertTriangle, AlertCircle } from "lucide-react";
+import { cn } from "../lib/utils";
 
 type BannerSeverity = "info" | "success" | "warning" | "error";
 
-const severityStyles: Record<BannerSeverity, string> = {
-  info: "border-sky-200 bg-sky-50 text-sky-900",
-  success: "border-emerald-200 bg-emerald-50 text-emerald-900",
-  warning: "border-amber-200 bg-amber-50 text-amber-900",
-  error: "border-rose-200 bg-rose-50 text-rose-900",
+const severityConfig: Record<BannerSeverity, { icon: any; className: string }> = {
+  info: {
+    icon: Info,
+    className: "border-primary/20 bg-primary/5 text-primary-foreground",
+  },
+  success: {
+    icon: CheckCircle2,
+    className: "border-success/20 bg-success/5 text-success",
+  },
+  warning: {
+    icon: AlertTriangle,
+    className: "border-warning/20 bg-warning/5 text-warning",
+  },
+  error: {
+    icon: AlertCircle,
+    className: "border-destructive/20 bg-destructive/5 text-destructive",
+  },
 };
 
 type PageBannerProps = {
   title: string;
   severity?: BannerSeverity;
   children: ReactNode;
+  className?: string;
 };
 
-export function PageBanner({ title, severity = "info", children }: PageBannerProps) {
+export function PageBanner({ title, severity = "info", children, className }: PageBannerProps) {
+  const { icon: Icon, className: severityClass } = severityConfig[severity];
+  
   return (
     <section
-      aria-live="polite"
-      className={`rounded-3xl border px-5 py-4 shadow-sm ${severityStyles[severity]}`}
+      aria-live={severity === "error" || severity === "warning" ? "assertive" : "polite"}
+      className={cn(
+        "flex gap-4 rounded-2xl border p-5 shadow-sm backdrop-blur-sm",
+        severityClass,
+        className
+      )}
     >
-      <p className="text-sm font-semibold uppercase tracking-[0.2em]">{title}</p>
-      <div className="mt-1 text-sm">{children}</div>
+      <Icon className="h-5 w-5 shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="text-xs font-bold uppercase tracking-[0.15em] mb-1">{title}</p>
+        <div className="text-sm font-medium opacity-90 leading-relaxed">{children}</div>
+      </div>
     </section>
   );
 }
