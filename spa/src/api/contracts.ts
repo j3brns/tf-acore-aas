@@ -138,6 +138,7 @@ export type PlatformQuotaResponseDto = {
 export type HealthResponseDto = {
   status: "ok" | "degraded" | "fail";
   version: string;
+  runtimeRegion: string;
   timestamp: string;
 };
 
