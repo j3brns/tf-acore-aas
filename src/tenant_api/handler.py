@@ -413,7 +413,7 @@ def _is_self_service_admin(caller: CallerIdentity) -> bool:
 
 
 def _can_manage_tenant_self_service(caller: CallerIdentity, tenant_id: str) -> bool:
-    return _is_self_service_admin(caller) or caller.tenant_id == tenant_id
+    return _is_self_service_admin(caller)
 
 
 def _ddb_value(value: Any) -> Any:
@@ -838,9 +838,7 @@ def _handle_rotate_api_key(
     tenant_id: str,
 ) -> dict[str, Any]:
     if not _can_manage_tenant_self_service(caller, tenant_id):
-        raise PermissionError(
-            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
-        )
+        raise PermissionError("Caller requires a tenant self-service admin role")
 
     existing = _read_tenant_record(tenant_id=tenant_id, caller=caller)
     if existing is None:
@@ -909,9 +907,7 @@ def _handle_invite_user(
     tenant_id: str,
 ) -> dict[str, Any]:
     if not _can_manage_tenant_self_service(caller, tenant_id):
-        raise PermissionError(
-            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
-        )
+        raise PermissionError("Caller requires a tenant self-service admin role")
 
     existing = _read_tenant_record(tenant_id=tenant_id, caller=caller)
     if existing is None:
@@ -966,9 +962,7 @@ def _handle_list_invites(
     tenant_id: str,
 ) -> dict[str, Any]:
     if not _can_manage_tenant_self_service(caller, tenant_id):
-        raise PermissionError(
-            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
-        )
+        raise PermissionError("Caller requires a tenant self-service admin role")
 
     db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     result = db.query(
@@ -1167,9 +1161,7 @@ def _handle_list_webhooks(
     tenant_id: str,
 ) -> dict[str, Any]:
     if not _can_manage_tenant_self_service(caller, tenant_id):
-        raise PermissionError(
-            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
-        )
+        raise PermissionError("Caller requires a tenant self-service admin role")
 
     db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     result = db.query(
@@ -1192,9 +1184,7 @@ def _handle_register_webhook(
     tenant_id: str,
 ) -> dict[str, Any]:
     if not _can_manage_tenant_self_service(caller, tenant_id):
-        raise PermissionError(
-            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
-        )
+        raise PermissionError("Caller requires a tenant self-service admin role")
 
     body = _require_json_body(event)
     callback_url = _str_or_none(body.get("callbackUrl"))
@@ -1252,9 +1242,7 @@ def _handle_delete_webhook(
     webhook_id: str,
 ) -> dict[str, Any]:
     if not _can_manage_tenant_self_service(caller, tenant_id):
-        raise PermissionError(
-            "Caller may only manage own tenant unless Platform.Admin/Platform.Operator"
-        )
+        raise PermissionError("Caller requires a tenant self-service admin role")
 
     db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     key = {"PK": f"TENANT#{tenant_id}", "SK": f"WEBHOOK#{webhook_id}"}
