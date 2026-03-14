@@ -78,7 +78,10 @@ describe("SessionsPage", () => {
     render(<SessionsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Loading sessions...")).toBeInTheDocument();
+      expect(screen.getByText("Authentication Required")).toBeInTheDocument();
+      expect(
+        screen.getByText("Sign in with your Entra account to view active runtime sessions for this tenant."),
+      ).toBeInTheDocument();
     });
     expect(request).not.toHaveBeenCalled();
   });

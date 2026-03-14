@@ -21,11 +21,21 @@ export const SessionsPage: React.FC = () => {
     const [sessions, setSessions] = useState<SessionRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const { getAccessToken, isAuthenticated } = useAuth();
+    const { getAccessToken, isAuthenticated, isLoading: authLoading } = useAuth();
 
     useEffect(() => {
+        if (authLoading) {
+            return;
+        }
+
+        if (!isAuthenticated) {
+            setSessions([]);
+            setError(null);
+            setLoading(false);
+            return;
+        }
+
         const fetchSessions = async () => {
-            if (!isAuthenticated) return;
             try {
                 const client = getApiClient(getAccessToken);
                 const data = await client.request<SessionsListResponseDto>("/v1/sessions");
@@ -38,9 +48,17 @@ export const SessionsPage: React.FC = () => {
             }
         };
         fetchSessions();
-    }, [getAccessToken, isAuthenticated]);
+    }, [authLoading, getAccessToken, isAuthenticated]);
 
-    if (loading) return <Loading message="Retrieving active sessions..." className="h-[400px]" />;
+    if (loading || authLoading) return <Loading message="Retrieving active sessions..." className="h-[400px]" />;
+
+    if (!isAuthenticated) {
+        return (
+            <PageBanner title="Authentication Required" severity="warning">
+                Sign in with your Entra account to view active runtime sessions for this tenant.
+            </PageBanner>
+        );
+    }
     
     if (error) {
         return (
