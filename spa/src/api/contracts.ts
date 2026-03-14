@@ -12,6 +12,17 @@ export type AgentsListResponseDto = {
   items: AgentSummaryDto[];
 };
 
+export type AgentDetailVersionDto = {
+  version: string;
+  deployedAt: string;
+  invocationMode?: "sync" | "streaming" | "async";
+  streamingEnabled?: boolean;
+};
+
+export type AgentDetailDto = AgentSummaryDto & {
+  versions?: AgentDetailVersionDto[];
+};
+
 export type AgentCatalogueItem = {
   agentName: string;
   version: string;
@@ -105,6 +116,19 @@ export type TenantsListResponseDto = {
   nextToken?: string | null;
 };
 
+export type SessionDto = {
+  sessionId: string;
+  agentName: string;
+  startedAt: string;
+  lastActivityAt: string;
+  status: "active" | "completed" | "expired";
+};
+
+export type SessionsListResponseDto = {
+  items: SessionDto[];
+  nextToken?: string | null;
+};
+
 export type TenantAdminRow = {
   tenantId: string;
   displayName: string;
@@ -186,6 +210,20 @@ export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
       "tierMinimum",
       "invocationMode",
       "streamingEnabled",
+    ],
+  },
+  {
+    name: "agentDetail",
+    path: "/v1/agents/{agentName}",
+    method: "get",
+    statusCode: "200",
+    requiredFields: [
+      "agentName",
+      "latestVersion",
+      "tierMinimum",
+      "invocationMode",
+      "streamingEnabled",
+      "versions",
     ],
   },
   {

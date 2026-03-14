@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { getApiClient } from "../api/client";
+import type { AgentDetailDto } from "../api/contracts";
 import { useAuth } from "../auth/useAuth";
-import { Agent, AgentInvokeResponse } from "../types";
+import { AgentInvokeResponse } from "../types";
 import { useJobPolling } from "../hooks/useJobPolling";
 import { useSessionKeepalive } from "../hooks/useSessionKeepalive";
 import {
@@ -37,7 +38,7 @@ export const InvokePage: React.FC = () => {
     const { agentName } = useParams<{ agentName: string }>();
     const { getAccessToken, isAuthenticated } = useAuth();
     
-    const [agent, setAgent] = useState<Agent | null>(null);
+    const [agent, setAgent] = useState<AgentDetailDto | null>(null);
     const [prompt, setPrompt] = useState("");
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<string | null>(null);
@@ -50,14 +51,14 @@ export const InvokePage: React.FC = () => {
     // Maintain session continuity with keepalive pings
     useSessionKeepalive(sessionId, agentName || null);
 
-    const invocationMode = agent?.invocation_mode ?? "sync";
+    const invocationMode = agent?.invocationMode ?? "sync";
 
     useEffect(() => {
         const fetchAgent = async () => {
             if (!isAuthenticated) return;
             try {
                 const client = getApiClient(getAccessToken);
-                const data = await client.request<Agent>(`/v1/agents/${agentName}`);
+                const data = await client.request<AgentDetailDto>(`/v1/agents/${agentName}`);
                 setAgent(data);
             } catch (err: unknown) {
                 setError(formatApiErrorMessage(err));
@@ -143,14 +144,14 @@ export const InvokePage: React.FC = () => {
                                 <Bot className="h-7 w-7" />
                             </div>
                             <div>
-                                <CardTitle className="text-xl font-bold text-white">Invoke: {agent?.agent_name}</CardTitle>
+                                <CardTitle className="text-xl font-bold text-white">Invoke: {agent?.agentName}</CardTitle>
                                 <CardDescription className="text-slate-400 font-mono text-xs">
-                                    Agent ARN: platform::agent::{agentName} v{agent?.version}
+                                    Agent ARN: platform::agent::{agentName} v{agent?.latestVersion}
                                 </CardDescription>
                             </div>
                         </div>
                         <Badge variant="outline" className="h-6 border-cyan-500/30 text-cyan-400 bg-cyan-500/5">
-                            {agent?.invocation_mode} mode
+                            {agent?.invocationMode} mode
                         </Badge>
                     </CardHeader>
 
@@ -268,11 +269,11 @@ export const InvokePage: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-300">
                          <Zap className="h-4 w-4 text-cyan-400 shrink-0" />
-                         <span>Mode: {agent?.invocation_mode}</span>
+                         <span>Mode: {agent?.invocationMode}</span>
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-300">
                          <Shield className="h-4 w-4 text-cyan-400 shrink-0" />
-                         <span>Tier: {agent?.tier_minimum}+</span>
+                         <span>Tier: {agent?.tierMinimum}+</span>
                       </div>
                    </div>
                 </div>

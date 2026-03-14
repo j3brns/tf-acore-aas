@@ -16,6 +16,7 @@ type OpenApiDoc = {
 
 type OpenApiSchema = {
   $ref?: string;
+  allOf?: OpenApiSchema[];
   type?: string;
   items?: OpenApiSchema;
   properties?: Record<string, OpenApiSchema>;
@@ -45,23 +46,61 @@ function resolveSchema(schema: OpenApiSchema | undefined, doc: OpenApiDoc): Open
   if (!schema || typeof schema !== "object") {
     return schema;
   }
-  if (!schema.$ref) {
-    return schema;
+
+  if (schema.$ref) {
+    const pointer = String(schema.$ref).replace(/^#\//, "").split("/");
+    let resolved: unknown = doc;
+    for (const segment of pointer) {
+      if (!resolved || typeof resolved !== "object") {
+        resolved = undefined;
+        break;
+      }
+      resolved = (resolved as Record<string, unknown>)[segment];
+    }
+    if (!resolved) {
+      throw new Error(`Unresolvable OpenAPI reference: ${schema.$ref}`);
+    }
+    return resolveSchema(resolved as OpenApiSchema, doc);
   }
 
-  const pointer = String(schema.$ref).replace(/^#\//, "").split("/");
-  let resolved: unknown = doc;
-  for (const segment of pointer) {
-    if (!resolved || typeof resolved !== "object") {
-      resolved = undefined;
-      break;
-    }
-    resolved = (resolved as Record<string, unknown>)[segment];
+  if (schema.allOf?.length) {
+    return schema.allOf.reduce<OpenApiSchema>(
+      (merged, part) => {
+        const resolvedPart = resolveSchema(part, doc);
+        if (!resolvedPart) {
+          return merged;
+        }
+
+        return {
+          ...merged,
+          ...resolvedPart,
+          properties: {
+            ...merged.properties,
+            ...resolvedPart.properties,
+          },
+        };
+      },
+      { properties: {} },
+    );
   }
-  if (!resolved) {
-    throw new Error(`Unresolvable OpenAPI reference: ${schema.$ref}`);
+
+  if (schema.items) {
+    return {
+      ...schema,
+      items: resolveSchema(schema.items, doc),
+    };
   }
-  return resolveSchema(resolved as OpenApiSchema, doc);
+
+  if (schema.properties) {
+    return {
+      ...schema,
+      properties: Object.fromEntries(
+        Object.entries(schema.properties).map(([key, value]) => [key, resolveSchema(value, doc) ?? value]),
+      ),
+    };
+  }
+
+  return schema;
 }
 
 describe("SPA/OpenAPI contract drift", () => {
