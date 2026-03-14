@@ -1,11 +1,12 @@
 import type {
+  AgentDetailDto,
   AgentsListResponseDto,
   HealthResponseDto,
   PlatformQuotaResponseDto,
   SessionsListResponseDto,
   TenantsListResponseDto,
 } from "../api/contracts";
-import type { AgentInvokeResponse, Agent } from "../types";
+import type { AgentInvokeResponse } from "../types";
 
 export const catalogueSingleAgent: AgentsListResponseDto = {
   items: [
@@ -122,16 +123,23 @@ export const quotaRows: PlatformQuotaResponseDto = {
   ],
 };
 
-export function buildAgent(invocationMode: Agent["invocation_mode"]): Agent {
+export function buildAgent(invocationMode: AgentDetailDto["invocationMode"]): AgentDetailDto {
   return {
-    agent_name: "echo-agent",
-    version: "1.0.0",
-    owner_team: "platform",
-    tier_minimum: "basic",
-    deployed_at: "2026-03-08T00:00:00Z",
-    invocation_mode: invocationMode,
-    streaming_enabled: invocationMode === "streaming",
-    estimated_duration_seconds: 5,
+    agentName: "echo-agent",
+    latestVersion: "1.0.0",
+    ownerTeam: "platform",
+    tierMinimum: "basic",
+    invocationMode: invocationMode,
+    streamingEnabled: invocationMode === "streaming",
+    estimatedDurationSeconds: 5,
+    versions: [
+      {
+        version: "1.0.0",
+        deployedAt: "2026-03-08T00:00:00Z",
+        invocationMode,
+        streamingEnabled: invocationMode === "streaming",
+      },
+    ],
   };
 }
 

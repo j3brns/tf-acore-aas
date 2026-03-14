@@ -117,6 +117,24 @@ describe("InvokePage", () => {
         expect(getInvokeBody()).toEqual({ input: "ping" });
     });
 
+    it("renders agent metadata from the deployed camelCase detail contract", async () => {
+        requestMock.mockResolvedValueOnce(buildAgent("sync"));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("Invoke: ");
+        expect(pageText).toContain("echo-agent");
+        expect(pageText).toContain("sync mode");
+        expect(pageText).toContain("Tier: ");
+        expect(pageText).toContain("basic+");
+    });
+
     it("uses streaming invoke path with contract-compatible payload", async () => {
         requestMock.mockResolvedValueOnce(buildAgent("streaming"));
         streamMock.mockReturnValue(

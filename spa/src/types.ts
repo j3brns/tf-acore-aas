@@ -5,17 +5,6 @@ export type InvocationStatus = "success" | "error" | "timeout" | "throttled";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
 export type SessionStatus = "active" | "completed" | "expired";
 
-export interface Agent {
-    agent_name: string;
-    version: string;
-    owner_team: string;
-    tier_minimum: TenantTier;
-    deployed_at: string;
-    invocation_mode: InvocationMode;
-    streaming_enabled: boolean;
-    estimated_duration_seconds?: number;
-}
-
 export interface Invocation {
     invocation_id: string;
     tenant_id: string;
