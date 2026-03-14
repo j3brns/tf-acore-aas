@@ -792,7 +792,9 @@ components:
       name: Authorization
       description: >
         AWS Signature Version 4 Authorization header. SigV4 callers must also send
-        x-amz-date and x-tenant-id headers.
+        x-amz-date and x-tenant-id headers. The platform resolves the trusted tenant
+        identity from server-side machine metadata; x-tenant-id must match that
+        trusted binding and cannot be used to select an arbitrary tenant.
 
   parameters:
     AgentName:

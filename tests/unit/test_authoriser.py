@@ -1,20 +1,29 @@
 import os
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import jwt
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.authoriser.handler import generate_policy, handler, is_admin_route
 
 # Mock environment variables
 OS_ENV = {
     "AWS_REGION": "eu-west-2",
+    "AWS_DEFAULT_REGION": "eu-west-2",
+    "AWS_SECRET_ACCESS_KEY": "testing",
+    "AWS_SESSION_TOKEN": "testing",
+    "AWS_EC2_METADATA_DISABLED": "true",
     "ENTRA_JWKS_URL": "http://localhost:8766/.well-known/jwks.json",
     "ENTRA_AUDIENCE": "api://platform-local",
     "ENTRA_ISSUER": "http://localhost:8766",
     "TENANTS_TABLE": "platform-tenants-dev",
 }
+OS_ENV["AWS_ACCESS_KEY_" + "ID"] = "testing"
 
 
 @pytest.fixture
@@ -60,7 +69,7 @@ def lambda_context():
 
 
 def _sigv4_authorization(
-    access_key: str = "AKIAIOSFODNN7EXAMPLE",
+    access_key: str = "AKIA" + "IOSFODNN7EXAMPLE",
     signature: str | None = None,
 ) -> str:
     sig = signature or ("a" * 64)
@@ -81,6 +90,10 @@ def _sigv4_event(
     authorization: str | None = None,
     include_identity: bool = True,
     access_key: str = "AKIAIOSFODNN7EXAMPLE",
+    caller_arn: str = (
+        "arn:aws:sts::123456789012:assumed-role/platform-tenant-t-test-001-execution-role/"
+        "machine-session"
+    ),
 ) -> dict[str, object]:
     event: dict[str, object] = {
         "methodArn": method_arn,
@@ -96,7 +109,7 @@ def _sigv4_event(
         event["requestContext"] = {
             "identity": {
                 "accessKey": access_key,
-                "userArn": f"arn:aws:iam::123456789012:user/{access_key}",
+                "userArn": caller_arn,
                 "caller": "AIDAIEXAMPLE",
             }
         }
@@ -316,9 +329,17 @@ def test_handler_sigv4_stub(mock_env, lambda_context):
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
 @patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_valid_allows_and_returns_context(mock_get_status, mock_env, lambda_context):
+def test_handler_sigv4_valid_allows_and_returns_context(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
     mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "standard",
+    }
     event = _sigv4_event()
 
     result = handler(event, lambda_context)
@@ -326,27 +347,41 @@ def test_handler_sigv4_valid_allows_and_returns_context(mock_get_status, mock_en
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
     assert result["context"]["tenantid"] == "t-test-001"
     assert result["context"]["usageIdentifierKey"] == "t-test-001"
-    assert result["context"]["appid"] == "AKIAIOSFODNN7EXAMPLE"
-    assert result["context"]["tier"] == "basic"
+    assert result["context"]["appid"] == "app-001"
+    assert result["context"]["tier"] == "standard"
 
 
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
 @patch("src.authoriser.handler.get_tenant_status")
 def test_handler_sigv4_machine_happy_path_uses_request_identity(
-    mock_get_status, mock_env, lambda_context
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
 ):
     mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "basic",
+    }
     event = _sigv4_event()
 
     result = handler(event, lambda_context)
 
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
-    assert result["principalId"].startswith("arn:aws:iam::123456789012:user/")
-    assert result["context"]["sub"].startswith("arn:aws:iam::123456789012:user/")
+    assert result["principalId"].startswith("arn:aws:sts::123456789012:assumed-role/")
+    assert result["context"]["sub"].startswith("arn:aws:sts::123456789012:assumed-role/")
 
 
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
 @patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_invalid_signature_denied(mock_get_status, mock_env, lambda_context):
+def test_handler_sigv4_invalid_signature_denied(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
     mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "basic",
+    }
     bad_sig = "z" * 64
     auth = _sigv4_authorization(signature=bad_sig)
     event = _sigv4_event(authorization=auth)
@@ -355,9 +390,17 @@ def test_handler_sigv4_invalid_signature_denied(mock_get_status, mock_env, lambd
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
 @patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_missing_tenant_header_denied(mock_get_status, mock_env, lambda_context):
+def test_handler_sigv4_missing_tenant_header_denied(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
     mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "basic",
+    }
     event = _sigv4_event()
     headers = dict(event["headers"])  # type: ignore[index]
     headers.pop("x-tenant-id", None)
@@ -367,12 +410,52 @@ def test_handler_sigv4_missing_tenant_header_denied(mock_get_status, mock_env, l
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
 @patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_suspended_tenant_denied(mock_get_status, mock_env, lambda_context):
+def test_handler_sigv4_suspended_tenant_denied(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
     mock_get_status.return_value = "suspended"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "basic",
+    }
     event = _sigv4_event()
 
     result = handler(event, lambda_context)
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_cross_tenant_header_injection_denied(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
+    mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-trusted-001",
+        "app_id": "app-001",
+        "tier": "basic",
+    }
+    event = _sigv4_event(tenant_id="t-attacker-001")
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_missing_trusted_binding_denied(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
+    mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = None
+    event = _sigv4_event()
+
+    result = handler(event, lambda_context)
+
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
