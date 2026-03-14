@@ -1758,41 +1758,52 @@ def _dispatch_ops_routes(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
 ) -> dict[str, Any] | None:
-    if not path.startswith("/v1/platform/ops/"):
+    path_lower = path.lower()
+    if not path_lower.startswith("/v1/platform/ops/"):
         return None
 
     _require_admin(caller)
-    if path == "/v1/platform/ops/top-tenants" and method == "GET":
+    if path_lower == "/v1/platform/ops/top-tenants" and method == "GET":
         return _handle_ops_top_tenants(event, caller, deps)
-    if path == "/v1/platform/ops/security-events" and method == "GET":
+    if path_lower == "/v1/platform/ops/security-events" and method == "GET":
         return _handle_ops_security_events(event, caller, deps)
-    if path == "/v1/platform/ops/error-rate" and method == "GET":
+    if path_lower == "/v1/platform/ops/error-rate" and method == "GET":
         return _handle_ops_error_rate(event, caller, deps)
-    if path.startswith("/v1/platform/ops/dlq/"):
-        if path.endswith("/redrive") and method == "POST":
-            queue_name = path.split("/")[-2]
-            return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
-        if method == "GET":
-            queue_name = path.split("/")[-1]
+
+    parts = path.split("/")
+    if path_lower.startswith("/v1/platform/ops/dlq/"):
+        # Expected: /v1/platform/ops/dlq/{queueName} (len 6)
+        # or /v1/platform/ops/dlq/{queueName}/redrive (len 7)
+        if len(parts) == 6 and method == "GET":
+            queue_name = parts[5]
             return _handle_ops_dlq_inspect(caller, deps, queue_name=queue_name)
+        if len(parts) == 7 and parts[6].lower() == "redrive" and method == "POST":
+            queue_name = parts[5]
+            return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
 
-    if path.startswith("/v1/platform/ops/tenants/"):
-        tenant_id = path.split("/")[-2]
-        if path.endswith("/sessions") and method == "GET":
-            return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
-        if path.endswith("/suspend") and method == "POST":
-            return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
-        if path.endswith("/reinstate") and method == "POST":
-            return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
-        if path.endswith("/invocations") and method == "GET":
-            return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
-        if path.endswith("/notify") and method == "POST":
-            return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
+    if path_lower.startswith("/v1/platform/ops/tenants/"):
+        # Expected: /v1/platform/ops/tenants/{tenantId}/{subpath} (len 7)
+        if len(parts) == 7:
+            tenant_id = parts[5]
+            subpath = parts[6].lower()
+            if subpath == "sessions" and method == "GET":
+                return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
+            if subpath == "suspend" and method == "POST":
+                return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
+            if subpath == "reinstate" and method == "POST":
+                return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
+            if subpath == "invocations" and method == "GET":
+                return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
+            if subpath == "notify" and method == "POST":
+                return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
 
-    if path.startswith("/v1/platform/ops/jobs/") and path.endswith("/fail") and method == "POST":
-        job_id = path.split("/")[-2]
-        return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
-    if path == "/v1/platform/ops/security/page" and method == "POST":
+    if path_lower.startswith("/v1/platform/ops/jobs/"):
+        # Expected: /v1/platform/ops/jobs/{jobId}/fail (len 7)
+        if len(parts) == 7 and parts[6].lower() == "fail" and method == "POST":
+            job_id = parts[5]
+            return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
+
+    if path_lower == "/v1/platform/ops/security/page" and method == "POST":
         return _handle_ops_page_security(event, caller, deps)
 
     return None
@@ -1805,7 +1816,8 @@ def _dispatch_webhook_routes(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
 ) -> dict[str, Any] | None:
-    if path == "/v1/webhooks":
+    path_lower = path.lower()
+    if path_lower == "/v1/webhooks":
         if caller.tenant_id is None:
             return _error(400, "BAD_REQUEST", "tenant context required")
         if method == "GET":
@@ -1813,13 +1825,15 @@ def _dispatch_webhook_routes(
         if method == "POST":
             return _handle_register_webhook(event, caller, deps, tenant_id=caller.tenant_id)
 
-    if path.startswith("/v1/webhooks/") and method == "DELETE":
-        if caller.tenant_id is None:
-            return _error(400, "BAD_REQUEST", "tenant context required")
-        webhook_id = path.split("/")[-1]
-        return _handle_delete_webhook(
-            caller, deps, tenant_id=caller.tenant_id, webhook_id=webhook_id
-        )
+    if path_lower.startswith("/v1/webhooks/") and method == "DELETE":
+        parts = path.split("/")
+        if len(parts) == 4:  # /v1/webhooks/{webhookId}
+            if caller.tenant_id is None:
+                return _error(400, "BAD_REQUEST", "tenant context required")
+            webhook_id = parts[3]
+            return _handle_delete_webhook(
+                caller, deps, tenant_id=caller.tenant_id, webhook_id=webhook_id
+            )
 
     return None
 
@@ -1832,28 +1846,31 @@ def _dispatch_tenant_routes(
     deps: TenantApiDependencies,
     tenant_id: str | None,
 ) -> dict[str, Any] | None:
-    if path == "/v1/tenants":
+    path_lower = path.lower()
+    if path_lower == "/v1/tenants":
         if method == "POST":
             return _handle_create(event, caller, deps)
         if method == "GET":
             return _handle_list(event, caller, deps)
 
     if tenant_id is not None:
-        if path.endswith("/api-key/rotate") and method == "POST":
+        tenant_base = f"/v1/tenants/{tenant_id}"
+        if path_lower == f"{tenant_base}/api-key/rotate" and method == "POST":
             return _handle_rotate_api_key(caller, deps, tenant_id=tenant_id)
-        if path.endswith("/users/invites") and method == "GET":
+        if path_lower == f"{tenant_base}/users/invites" and method == "GET":
             return _handle_list_invites(caller, deps, tenant_id=tenant_id)
-        if path.endswith("/users/invite") and method == "POST":
+        if path_lower == f"{tenant_base}/users/invite" and method == "POST":
             return _handle_invite_user(event, caller, deps, tenant_id=tenant_id)
-        if path.endswith("/audit-export") and method == "GET":
+        if path_lower == f"{tenant_base}/audit-export" and method == "GET":
             return _handle_audit_export(event, caller, deps, tenant_id=tenant_id)
 
-        if method == "GET":
-            return _handle_read(event, caller, deps, tenant_id=tenant_id)
-        if method in {"PATCH", "PUT"}:
-            return _handle_update(event, caller, deps, tenant_id=tenant_id)
-        if method == "DELETE":
-            return _handle_delete(caller, deps, tenant_id=tenant_id)
+        if path_lower == tenant_base:
+            if method == "GET":
+                return _handle_read(event, caller, deps, tenant_id=tenant_id)
+            if method in {"PATCH", "PUT"}:
+                return _handle_update(event, caller, deps, tenant_id=tenant_id)
+            if method == "DELETE":
+                return _handle_delete(caller, deps, tenant_id=tenant_id)
 
     return None
 
