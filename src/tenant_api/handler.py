@@ -46,6 +46,7 @@ _AUDIT_EXPORT_PAGE_SIZE = 200
 _TENANT_ID_MIN_LENGTH = 3
 _TENANT_ID_MAX_LENGTH = 32
 _TENANT_ID_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
+_AWS_ACCOUNT_ID_PATTERN = re.compile(r"^[0-9]{12}$")
 _RESERVED_TENANT_IDS = frozenset({"admin", "root", "system", "stub"})
 _DEFAULT_OPS_LOCKS_TABLE = "platform-ops-locks"
 _DEFAULT_RUNTIME_REGION_PARAM = "/platform/config/runtime-region"
@@ -221,6 +222,15 @@ def _canonical_tenant_id(value: Any) -> str:
     if not _TENANT_ID_PATTERN.fullmatch(normalized):
         raise ValueError("tenantId must match ^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
     return normalized
+
+
+def _require_aws_account_id(value: Any, *, field: str) -> str:
+    account_id = _str_or_none(value)
+    if account_id is None:
+        raise ValueError(f"{field} is required")
+    if not _AWS_ACCOUNT_ID_PATTERN.fullmatch(account_id):
+        raise ValueError(f"{field} must match ^[0-9]{{12}}$")
+    return account_id
 
 
 def _parse_utc_timestamp(value: Any, *, field: str) -> datetime:
@@ -1475,10 +1485,10 @@ def _handle_platform_split_accounts(
 
     body = _require_json_body(event)
     tier = _normalize_tier(body.get("tier"))
-    target_account_id = _str_or_none(body.get("targetAccountId"))
-
-    if not target_account_id:
-        raise ValueError("targetAccountId is required")
+    target_account_id = _require_aws_account_id(
+        body.get("targetAccountId"),
+        field="targetAccountId",
+    )
 
     # In a real implementation, this would trigger an Step Function or async job
     # to move tenants of the specified tier to a new account.

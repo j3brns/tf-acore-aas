@@ -1076,6 +1076,25 @@ def test_platform_split_accounts_requires_platform_admin(fake_state: dict[str, A
     assert response["statusCode"] == 403
 
 
+@pytest.mark.parametrize("target_account_id", ["12345678901", "1234567890123", "12345abc9012"])
+def test_platform_split_accounts_rejects_invalid_target_account_id(
+    fake_state: dict[str, Any],
+    target_account_id: str,
+) -> None:
+    event = _event(
+        method="POST",
+        body={"tier": "premium", "targetAccountId": target_account_id},
+    )
+    event["path"] = "/v1/platform/quota/split-accounts"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"] == "targetAccountId must match ^[0-9]{12}$"
+
+
 def test_parse_roles_accepts_json_encoded_array() -> None:
     parsed = tenant_api_handler._parse_roles('["Platform.Admin","Platform.Operator"]')
     assert parsed == frozenset({"Platform.Admin", "Platform.Operator"})
