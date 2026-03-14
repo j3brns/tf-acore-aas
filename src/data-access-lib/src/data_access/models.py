@@ -240,6 +240,7 @@ class JobRecord:
 
     job_id: str
     tenant_id: str
+    app_id: str
     agent_name: str
     status: JobStatus
     created_at: str  # ISO 8601 UTC
@@ -248,8 +249,13 @@ class JobRecord:
     completed_at: str | None = None
     result_s3_key: str | None = None
     error_message: str | None = None
+    webhook_id: str | None = None
     webhook_url: str | None = None
     webhook_delivered: bool = False
+    webhook_delivery_status: str | None = None
+    webhook_delivery_attempts: int = 0
+    webhook_delivery_error: str | None = None
+    webhook_last_attempt_at: str | None = None
 
     @property
     def pk(self) -> str:

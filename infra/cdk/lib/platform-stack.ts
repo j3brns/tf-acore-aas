@@ -72,6 +72,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly bffFn: lambda.Function;
   public readonly authoriserFn: lambda.Function;
   public readonly tenantApiFn: lambda.Function;
+  public readonly webhookDeliveryFn: lambda.Function;
   public readonly requestInterceptorFn: lambda.Function;
   public readonly responseInterceptorFn: lambda.Function;
   public readonly billingFn: lambda.Function;
@@ -192,6 +193,7 @@ export class PlatformStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: props.tenantDataKey,
       timeToLiveAttribute: 'ttl',
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
       pointInTimeRecovery: true,
       deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -260,6 +262,38 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
+    const webhookDeliveryRetryDlq = new sqs.Queue(this, 'webhookDeliveryRetryDlq', {
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(14),
+    });
+    this.dlqs['webhook-delivery-retry'] = webhookDeliveryRetryDlq;
+
+    const webhookDeliveryRetryQueue = new sqs.Queue(this, 'webhookDeliveryRetryQueue', {
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(14),
+      visibilityTimeout: cdk.Duration.seconds(60),
+      deadLetterQueue: {
+        maxReceiveCount: 1,
+        queue: webhookDeliveryRetryDlq,
+      },
+    });
+
+    this.webhookDeliveryFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/webhook_delivery'),
+      handler: 'handler.handler',
+      functionNameSuffix: 'webhook-delivery',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'webhook-delivery',
+        JOBS_TABLE: this.jobsTable.tableName,
+        WEBHOOK_RETRY_QUEUE_URL: webhookDeliveryRetryQueue.queueUrl,
+        WEBHOOK_DLQ_URL: webhookDeliveryRetryDlq.queueUrl,
+        WEBHOOK_MAX_RETRY_ATTEMPTS: '3',
+        WEBHOOK_HTTP_TIMEOUT_SECONDS: '10',
+      },
+    });
+
     this.bffFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bff'),
       handler: 'handler.handler',
@@ -270,6 +304,20 @@ export class PlatformStack extends cdk.Stack {
         POWERTOOLS_SERVICE_NAME: 'bff',
         ENTRA_AUDIENCE: 'platform-api',
       },
+    });
+
+    new lambda.EventSourceMapping(this, 'webhookDeliveryJobsStreamMapping', {
+      target: this.webhookDeliveryFn,
+      eventSourceArn: this.jobsTable.tableStreamArn,
+      startingPosition: lambda.StartingPosition.LATEST,
+      batchSize: 10,
+      bisectBatchOnError: true,
+      retryAttempts: 3,
+    });
+    new lambda.EventSourceMapping(this, 'webhookDeliveryRetryQueueMapping', {
+      target: this.webhookDeliveryFn,
+      eventSourceArn: webhookDeliveryRetryQueue.queueArn,
+      batchSize: 10,
     });
 
     this.authoriserFn = this.createPythonLambda({
@@ -288,6 +336,21 @@ export class PlatformStack extends cdk.Stack {
     });
 
     this.tenantsTable.grantReadData(this.authoriserFn);
+    this.jobsTable.grantReadWriteData(this.webhookDeliveryFn);
+    this.webhookDeliveryFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'dynamodb:DescribeStream',
+          'dynamodb:GetRecords',
+          'dynamodb:GetShardIterator',
+          'dynamodb:ListStreams',
+        ],
+        resources: [`${this.jobsTable.tableArn}/stream/*`],
+      }),
+    );
+    webhookDeliveryRetryQueue.grantConsumeMessages(this.webhookDeliveryFn);
+    webhookDeliveryRetryQueue.grantSendMessages(this.webhookDeliveryFn);
+    webhookDeliveryRetryDlq.grantSendMessages(this.webhookDeliveryFn);
 
     this.requestInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),
