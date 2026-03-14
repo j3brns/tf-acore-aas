@@ -293,6 +293,47 @@ def test_handler_tier_insufficient(setup_data):
     assert body["error"]["code"] == "FORBIDDEN"
 
 
+def test_handler_tier_insufficient_ignores_spoofed_request_header(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#premium-agent",
+            "SK": "VERSION#1.0.0",
+            "agent_name": "premium-agent",
+            "version": "1.0.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "premium",
+            "layer_hash": "0000",
+            "layer_s3_key": "k",
+            "script_s3_key": "s",
+            "deployed_at": "2026-01-01T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+        }
+    )
+
+    event = {
+        "path": "/v1/agents/premium-agent/invoke",
+        "pathParameters": {"agentName": "premium-agent"},
+        "headers": {"x-tier": "premium"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "machine-1",
+            }
+        },
+        "body": json.dumps({"input": "Hello"}),
+    }
+
+    response = handler(event, FakeLambdaContext())
+    assert response["statusCode"] == 403
+    body = json.loads(response["body"])
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
 def test_handler_agent_not_found(setup_data):
     event = {
         "path": "/v1/agents/missing-agent/invoke",

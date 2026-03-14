@@ -16,6 +16,8 @@ OS_ENV = {
     "TENANTS_TABLE": "platform-tenants-dev",
 }
 
+SIGV4_TEST_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret
+
 
 @pytest.fixture
 def mock_env():
@@ -60,7 +62,7 @@ def lambda_context():
 
 
 def _sigv4_authorization(
-    access_key: str = "AKIAIOSFODNN7EXAMPLE",
+    access_key: str = SIGV4_TEST_ACCESS_KEY,
     signature: str | None = None,
 ) -> str:
     sig = signature or ("a" * 64)
@@ -80,7 +82,7 @@ def _sigv4_event(
     tenant_id: str = "t-test-001",
     authorization: str | None = None,
     include_identity: bool = True,
-    access_key: str = "AKIAIOSFODNN7EXAMPLE",
+    access_key: str = SIGV4_TEST_ACCESS_KEY,
 ) -> dict[str, object]:
     event: dict[str, object] = {
         "methodArn": method_arn,
@@ -316,9 +318,11 @@ def test_handler_sigv4_stub(mock_env, lambda_context):
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
-@patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_valid_allows_and_returns_context(mock_get_status, mock_env, lambda_context):
-    mock_get_status.return_value = "active"
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_valid_allows_and_returns_context(
+    mock_get_tenant_record, mock_env, lambda_context
+):
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "basic"}
     event = _sigv4_event()
 
     result = handler(event, lambda_context)
@@ -326,15 +330,15 @@ def test_handler_sigv4_valid_allows_and_returns_context(mock_get_status, mock_en
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
     assert result["context"]["tenantid"] == "t-test-001"
     assert result["context"]["usageIdentifierKey"] == "t-test-001"
-    assert result["context"]["appid"] == "AKIAIOSFODNN7EXAMPLE"
+    assert result["context"]["appid"] == SIGV4_TEST_ACCESS_KEY
     assert result["context"]["tier"] == "basic"
 
 
-@patch("src.authoriser.handler.get_tenant_status")
+@patch("src.authoriser.handler.get_tenant_record")
 def test_handler_sigv4_machine_happy_path_uses_request_identity(
-    mock_get_status, mock_env, lambda_context
+    mock_get_tenant_record, mock_env, lambda_context
 ):
-    mock_get_status.return_value = "active"
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "basic"}
     event = _sigv4_event()
 
     result = handler(event, lambda_context)
@@ -344,9 +348,9 @@ def test_handler_sigv4_machine_happy_path_uses_request_identity(
     assert result["context"]["sub"].startswith("arn:aws:iam::123456789012:user/")
 
 
-@patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_invalid_signature_denied(mock_get_status, mock_env, lambda_context):
-    mock_get_status.return_value = "active"
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_invalid_signature_denied(mock_get_tenant_record, mock_env, lambda_context):
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "basic"}
     bad_sig = "z" * 64
     auth = _sigv4_authorization(signature=bad_sig)
     event = _sigv4_event(authorization=auth)
@@ -355,9 +359,11 @@ def test_handler_sigv4_invalid_signature_denied(mock_get_status, mock_env, lambd
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
-@patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_missing_tenant_header_denied(mock_get_status, mock_env, lambda_context):
-    mock_get_status.return_value = "active"
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_missing_tenant_header_denied(
+    mock_get_tenant_record, mock_env, lambda_context
+):
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "basic"}
     event = _sigv4_event()
     headers = dict(event["headers"])  # type: ignore[index]
     headers.pop("x-tenant-id", None)
@@ -367,13 +373,53 @@ def test_handler_sigv4_missing_tenant_header_denied(mock_get_status, mock_env, l
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
-@patch("src.authoriser.handler.get_tenant_status")
-def test_handler_sigv4_suspended_tenant_denied(mock_get_status, mock_env, lambda_context):
-    mock_get_status.return_value = "suspended"
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_suspended_tenant_denied(mock_get_tenant_record, mock_env, lambda_context):
+    mock_get_tenant_record.return_value = {"status": "suspended", "tier": "basic"}
     event = _sigv4_event()
 
     result = handler(event, lambda_context)
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_ignores_spoofed_tier_header(
+    mock_get_tenant_record, mock_env, lambda_context
+):
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "basic"}
+    event = _sigv4_event()
+    event["headers"]["x-tier"] = "premium"  # type: ignore[index]
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tier"] == "basic"
+
+
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_uses_trusted_premium_tier(mock_get_tenant_record, mock_env, lambda_context):
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "premium"}
+    event = _sigv4_event()
+    event["headers"]["x-tier"] = "basic"  # type: ignore[index]
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tier"] == "premium"
+
+
+@patch("src.authoriser.handler.get_tenant_record")
+def test_handler_sigv4_invalid_metadata_tier_falls_back_to_basic(
+    mock_get_tenant_record, mock_env, lambda_context
+):
+    mock_get_tenant_record.return_value = {"status": "active", "tier": "not-a-tier"}
+    event = _sigv4_event()
+    event["headers"]["x-tier"] = "premium"  # type: ignore[index]
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tier"] == "basic"
 
 
 @patch("src.authoriser.handler.get_jwk_client")
@@ -458,10 +504,11 @@ def test_get_dynamodb_logic(mock_env):
 
 
 def test_get_tenant_status_no_table(mock_env):
-    from src.authoriser.handler import get_tenant_status
+    from src.authoriser.handler import get_tenant_record, get_tenant_status
 
     with patch("src.authoriser.handler.TENANTS_TABLE", None):
         assert get_tenant_status("any") == "active"
+        assert get_tenant_record("any") == {"status": "active", "tier": "basic"}
 
 
 @patch("src.authoriser.handler.get_jwk_client")

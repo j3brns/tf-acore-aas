@@ -20,8 +20,18 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
 from jwt import PyJWKClient
 
+
+class _NoopTracer:
+    def capture_lambda_handler(self, func: Any) -> Any:
+        return func
+
+
 logger = Logger(service="authoriser")
-tracer = Tracer()
+tracer = (
+    _NoopTracer()
+    if os.environ.get("POWERTOOLS_TRACE_DISABLED", "").lower() in {"1", "true", "yes"}
+    else Tracer()
+)
 
 # Environment variables (baked into layer or set in CDK)
 ENTRA_JWKS_URL = os.environ.get("ENTRA_JWKS_URL")
@@ -78,26 +88,43 @@ def generate_policy(
     }
 
 
-def get_tenant_status(tenant_id: str) -> str | None:
-    """Fetch tenant status from DynamoDB.
+def get_tenant_record(tenant_id: str) -> dict[str, str] | None:
+    """Fetch tenant auth metadata from DynamoDB.
 
     The authoriser runs before a TenantContext exists, so it uses the
     system-level DynamoDB client directly.
     """
     if not TENANTS_TABLE:
-        logger.warning("TENANTS_TABLE not set, assuming active (dev mode)")
-        return "active"
+        logger.warning("TENANTS_TABLE not set, assuming active basic tenant (dev mode)")
+        return {"status": "active", "tier": "basic"}
 
     try:
         table = get_dynamodb().Table(TENANTS_TABLE)
         response = table.get_item(Key={"PK": f"TENANT#{tenant_id}", "SK": "METADATA"})
         item = response.get("Item")
         if item:
+            record: dict[str, str] = {}
             status = item.get("status")
-            return str(status) if status is not None else None
+            tier = item.get("tier")
+            app_id = item.get("appId")
+            if status is not None:
+                record["status"] = str(status)
+            if tier is not None:
+                record["tier"] = str(tier)
+            if app_id is not None:
+                record["appId"] = str(app_id)
+            return record
     except Exception:
         logger.exception("Failed to fetch tenant status", extra={"tenant_id": tenant_id})
     return None
+
+
+def get_tenant_status(tenant_id: str) -> str | None:
+    """Fetch only tenant status from DynamoDB."""
+    record = get_tenant_record(tenant_id)
+    if record is None:
+        return None
+    return record.get("status")
 
 
 def _normalise_headers(event: dict[str, Any]) -> dict[str, str]:
@@ -356,7 +383,8 @@ def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> di
         logger.warning("SigV4 caller identity missing from request context")
         return generate_policy("machine", "Deny", method_arn, {})
 
-    status = get_tenant_status(tenant_id)
+    tenant_record = get_tenant_record(tenant_id)
+    status = tenant_record.get("status") if tenant_record else None
     if status != "active":
         logger.error(
             "Tenant not active for SigV4 request",
@@ -368,8 +396,14 @@ def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> di
         logger.warning("SigV4 caller denied on admin route", extra={"tenant_id": tenant_id})
         return generate_policy("machine", "Deny", method_arn, {})
 
+    trusted_tier = None if tenant_record is None else tenant_record.get("tier")
+    if trusted_tier and _normalise_tier(trusted_tier) != trusted_tier.strip().lower():
+        logger.warning(
+            "Invalid tenant tier in metadata for SigV4 request; falling back to basic",
+            extra={"tenant_id": tenant_id, "tenant_tier": trusted_tier},
+        )
     app_id = headers.get("x-app-id") or identity_access_key or parsed["access_key"]
-    tier = _normalise_tier(headers.get("x-tier"))
+    tier = _normalise_tier(trusted_tier)
     actor = caller_arn or caller_id or f"sigv4:{parsed['access_key']}"
     auth_context = {
         "tenantid": tenant_id,
