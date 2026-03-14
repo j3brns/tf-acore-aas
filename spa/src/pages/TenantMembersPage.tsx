@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 
@@ -25,32 +25,10 @@ export const TenantMembersPage: React.FC = () => {
     const tenantId = useMemo(() => resolveTenantId(account?.idTokenClaims), [account?.idTokenClaims]);
 
     const [invites, setInvites] = useState<Invite[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviteRole, setInviteRole] = useState("Agent.Invoke");
     const [submitting, setSubmitting] = useState(false);
     const [inviteMessage, setInviteMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-
-    useEffect(() => {
-        if (!isAuthenticated || !tenantId) {
-            setLoading(false);
-            return;
-        }
-
-        const run = async () => {
-            try {
-                const client = getApiClient(getAccessToken);
-                const data = await client.request<{ items: Invite[] }>(`/v1/tenants/${tenantId}/users/invites`);
-                setInvites(data.items);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : "Failed to load invites.");
-            } finally {
-                setLoading(false);
-            }
-        };
-        void run();
-    }, [getAccessToken, isAuthenticated, tenantId]);
 
     const onInviteSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -74,8 +52,7 @@ export const TenantMembersPage: React.FC = () => {
         }
     };
 
-    if (loading) return <div className="p-8">Loading members...</div>;
-    if (error) return <div className="p-8 text-red-600">Error: {error}</div>;
+    if (!isAuthenticated) return <div className="p-8">Loading members...</div>;
 
     return (
         <div className="space-y-6">
@@ -91,7 +68,9 @@ export const TenantMembersPage: React.FC = () => {
                     </div>
                     <div className="overflow-x-auto">
                         {invites.length === 0 ? (
-                            <div className="p-8 text-center text-gray-500 text-sm">No pending invites.</div>
+                            <div className="p-8 text-center text-gray-500 text-sm">
+                                Pending invites sent from this page will appear here.
+                            </div>
                         ) : (
                             <table className="min-w-full divide-y divide-gray-200">
                                 <thead className="bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wider">
