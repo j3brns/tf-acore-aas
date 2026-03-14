@@ -181,6 +181,55 @@ class FakeMemoryProvisioner:
         return {"memoryStoreArn": f"arn:aws:memory:eu-west-2::store/{tenant_id}"}
 
 
+class FakePlatformQuotaClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.response = [
+            {
+                "region": "eu-west-1",
+                "quotaName": "ConcurrentSessions",
+                "currentValue": 11.0,
+                "limit": 500.0,
+                "utilisationPercentage": 2.2,
+            },
+            {
+                "region": "eu-central-1",
+                "quotaName": "ConcurrentSessions",
+                "currentValue": 3.0,
+                "limit": 500.0,
+                "utilisationPercentage": 0.6,
+            },
+        ]
+
+    def get_utilisation(
+        self,
+        *,
+        active_region: str,
+        fallback_region: str | None,
+    ) -> list[dict[str, Any]]:
+        self.calls.append(
+            {
+                "active_region": active_region,
+                "fallback_region": fallback_region,
+            }
+        )
+        return [dict(item) for item in self.response]
+
+
+class _FailingPlatformQuotaClient:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def get_utilisation(
+        self,
+        *,
+        active_region: str,
+        fallback_region: str | None,
+    ) -> list[dict[str, Any]]:
+        _ = active_region, fallback_region
+        raise self.error
+
+
 class FakeTenantScopedS3:
     def __init__(self) -> None:
         self.put_calls: list[dict[str, Any]] = []
@@ -243,7 +292,10 @@ class FakeLambdaContext:
 
 class FakeSsm:
     def __init__(self) -> None:
-        self.parameters = {"/platform/config/runtime-region": "eu-west-1"}
+        self.parameters = {
+            "/platform/config/runtime-region": "eu-west-1",
+            "/platform/config/fallback-region": "eu-central-1",
+        }
         self.get_calls: list[dict[str, Any]] = []
         self.put_calls: list[dict[str, Any]] = []
         self.put_error: Exception | None = None
@@ -258,6 +310,56 @@ class FakeSsm:
             raise self.put_error
         self.parameters[str(kwargs["Name"])] = str(kwargs["Value"])
         return {"Version": 1}
+
+
+class FakeCloudWatchClient:
+    def __init__(self, datapoints: list[dict[str, Any]], error: Exception | None = None) -> None:
+        self.datapoints = datapoints
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    def get_metric_statistics(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        if self.error is not None:
+            raise self.error
+        return {"Datapoints": [dict(point) for point in self.datapoints]}
+
+
+class FakeServiceQuotasClient:
+    def __init__(self, pages: list[dict[str, Any]], error: Exception | None = None) -> None:
+        self.pages = pages
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+        self.index = 0
+
+    def list_service_quotas(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        if self.error is not None:
+            raise self.error
+        if self.index >= len(self.pages):
+            return {"Quotas": []}
+        page = self.pages[self.index]
+        self.index += 1
+        return dict(page)
+
+
+class FakeAwsSession:
+    def __init__(
+        self,
+        *,
+        cloudwatch_clients: dict[str, FakeCloudWatchClient],
+        service_quotas_clients: dict[str, FakeServiceQuotasClient],
+    ) -> None:
+        self.cloudwatch_clients = cloudwatch_clients
+        self.service_quotas_clients = service_quotas_clients
+
+    def client(self, service_name: str, *, region_name: str | None = None) -> Any:
+        assert region_name is not None
+        if service_name == "cloudwatch":
+            return self.cloudwatch_clients[region_name]
+        if service_name == "service-quotas":
+            return self.service_quotas_clients[region_name]
+        raise AssertionError(f"Unexpected service {service_name}")
 
 
 @pytest.fixture
@@ -275,6 +377,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         ssm=FakeSsm(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
+        platform_quota_client=FakePlatformQuotaClient(),
     )
     monkeypatch.setenv("AWS_REGION", "eu-west-2")
     monkeypatch.setenv("TENANTS_TABLE_NAME", "platform-tenants")
@@ -285,6 +388,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     monkeypatch.setenv("TENANT_API_KEY_SECRET_PREFIX", "platform/tenants")
     monkeypatch.setenv("OPS_LOCKS_TABLE", "platform-ops-locks")
     monkeypatch.setenv("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
+    monkeypatch.setenv("FALLBACK_REGION_PARAM", "/platform/config/fallback-region")
     monkeypatch.setattr(tenant_api_handler, "_dependencies", lambda: deps)
     monkeypatch.setattr(tenant_api_handler, "_db_for_tenant", lambda **_kwargs: db)
     monkeypatch.setattr(tenant_api_handler, "_now_utc", lambda: fixed_now)
@@ -1052,8 +1156,121 @@ def test_platform_quota_report(fake_state: dict[str, Any]) -> None:
 
     assert response["statusCode"] == 200
     utilisation = _body(response)["utilisation"]
-    assert len(utilisation) > 0
-    assert utilisation[0]["region"] == "eu-west-1"
+    assert utilisation == fake_state["deps"].platform_quota_client.response
+    assert fake_state["deps"].platform_quota_client.calls == [
+        {
+            "active_region": "eu-west-1",
+            "fallback_region": "eu-central-1",
+        }
+    ]
+
+
+def test_platform_quota_report_returns_explicit_aws_error(fake_state: dict[str, Any]) -> None:
+    event = _event(method="GET")
+    event["path"] = "/v1/platform/quota"
+    object.__setattr__(
+        fake_state["deps"],
+        "platform_quota_client",
+        _FailingPlatformQuotaClient(
+            tenant_api_handler.ClientError(
+                {"Error": {"Code": "AccessDeniedException", "Message": "nope"}},
+                "GetMetricStatistics",
+            ),
+        ),
+    )
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 502
+    error = _body(response)["error"]
+    assert error["code"] == "AWS_CLIENT_ERROR"
+    assert error["message"] == "AccessDeniedException"
+
+
+def test_aws_platform_quota_client_reads_metrics_and_service_quotas() -> None:
+    session = FakeAwsSession(
+        cloudwatch_clients={
+            "eu-west-1": FakeCloudWatchClient([{"Maximum": 7.0}, {"Maximum": 11.0}]),
+            "eu-central-1": FakeCloudWatchClient([]),
+        },
+        service_quotas_clients={
+            "eu-west-1": FakeServiceQuotasClient(
+                [
+                    {
+                        "Quotas": [{"QuotaName": "Other quota", "Value": 1.0}],
+                        "NextToken": "next-page",
+                    },
+                    {
+                        "Quotas": [
+                            {
+                                "QuotaName": "Active session workloads per account",
+                                "Value": 600.0,
+                            }
+                        ]
+                    },
+                ]
+            ),
+            "eu-central-1": FakeServiceQuotasClient(
+                [
+                    {
+                        "Quotas": [
+                            {
+                                "QuotaName": "Active session workloads per account",
+                                "Value": 400.0,
+                            }
+                        ]
+                    }
+                ]
+            ),
+        },
+    )
+
+    client = tenant_api_handler._AwsPlatformQuotaClient(session)
+
+    utilisation = client.get_utilisation(active_region="eu-west-1", fallback_region="eu-central-1")
+
+    assert utilisation == [
+        {
+            "region": "eu-west-1",
+            "quotaName": "ConcurrentSessions",
+            "currentValue": 11.0,
+            "limit": 600.0,
+            "utilisationPercentage": 1.83,
+        },
+        {
+            "region": "eu-central-1",
+            "quotaName": "ConcurrentSessions",
+            "currentValue": 0.0,
+            "limit": 400.0,
+            "utilisationPercentage": 0.0,
+        },
+    ]
+    eu_west_service_quotas = session.service_quotas_clients["eu-west-1"]
+    assert eu_west_service_quotas.calls == [
+        {"ServiceCode": "bedrock-agentcore"},
+        {"ServiceCode": "bedrock-agentcore", "NextToken": "next-page"},
+    ]
+
+
+def test_aws_platform_quota_client_falls_back_to_documented_default_limit() -> None:
+    session = FakeAwsSession(
+        cloudwatch_clients={"eu-central-1": FakeCloudWatchClient([{"Maximum": 5.0}])},
+        service_quotas_clients={"eu-central-1": FakeServiceQuotasClient([{"Quotas": []}])},
+    )
+
+    client = tenant_api_handler._AwsPlatformQuotaClient(session)
+
+    utilisation = client.get_utilisation(active_region="eu-central-1", fallback_region=None)
+
+    assert utilisation == [
+        {
+            "region": "eu-central-1",
+            "quotaName": "ConcurrentSessions",
+            "currentValue": 5.0,
+            "limit": 500.0,
+            "utilisationPercentage": 1.0,
+        }
+    ]
 
 
 def test_platform_split_accounts_requires_platform_admin(fake_state: dict[str, Any]) -> None:

@@ -35,6 +35,7 @@ _AUDIT_EXPORT_BUCKET_ENV = "AUDIT_EXPORT_BUCKET"
 _API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"  # pragma: allowlist secret
 _OPS_LOCKS_TABLE_ENV = "OPS_LOCKS_TABLE"
 _RUNTIME_REGION_PARAM_ENV = "RUNTIME_REGION_PARAM"
+_FALLBACK_REGION_PARAM_ENV = "FALLBACK_REGION_PARAM"
 _FAILOVER_LOCK_NAME_ENV = "FAILOVER_LOCK_NAME"
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
@@ -49,7 +50,12 @@ _TENANT_ID_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
 _RESERVED_TENANT_IDS = frozenset({"admin", "root", "system", "stub"})
 _DEFAULT_OPS_LOCKS_TABLE = "platform-ops-locks"
 _DEFAULT_RUNTIME_REGION_PARAM = "/platform/config/runtime-region"
+_DEFAULT_FALLBACK_REGION_PARAM = "/platform/config/fallback-region"
 _DEFAULT_FAILOVER_LOCK_NAME = "platform-runtime-failover"
+_AGENTCORE_QUOTA_NAME = "Active session workloads per account"
+_AGENTCORE_CONCURRENT_SESSIONS_NAMESPACE = "AgentCore"
+_AGENTCORE_CONCURRENT_SESSIONS_METRIC = "ConcurrentSessions"
+_AGENTCORE_QUOTA_LOOKBACK_MINUTES = 5
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,7 @@ class TenantApiDependencies:
     ssm: Any
     usage_client: Any
     memory_provisioner: Any
+    platform_quota_client: Any
 
 
 def _now_utc() -> datetime:
@@ -255,6 +262,32 @@ def _coerce_positive_int(value: Any, *, default: int) -> int:
     return max(1, parsed)
 
 
+def _ssm_parameter_value(ssm: Any, name: str, *, required: bool) -> str | None:
+    try:
+        response = ssm.get_parameter(Name=name)
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code")
+        if not required and error_code == "ParameterNotFound":
+            return None
+        raise
+
+    value = _str_or_none(response.get("Parameter", {}).get("Value"))
+    if value is None and required:
+        raise ValueError(f"SSM parameter {name} is empty")
+    return value
+
+
+def _required_ssm_parameter(ssm: Any, name: str) -> str:
+    value = _ssm_parameter_value(ssm, name, required=True)
+    if value is None:
+        raise ValueError(f"SSM parameter {name} is empty")
+    return value
+
+
+def _optional_ssm_parameter(ssm: Any, name: str) -> str | None:
+    return _ssm_parameter_value(ssm, name, required=False)
+
+
 def _tenants_table_name() -> str:
     return os.environ.get(_TENANTS_TABLE_ENV, "platform-tenants")
 
@@ -288,6 +321,10 @@ def _runtime_region_param_name() -> str:
     return os.environ.get(_RUNTIME_REGION_PARAM_ENV, _DEFAULT_RUNTIME_REGION_PARAM)
 
 
+def _fallback_region_param_name() -> str:
+    return os.environ.get(_FALLBACK_REGION_PARAM_ENV, _DEFAULT_FALLBACK_REGION_PARAM)
+
+
 def _failover_lock_name() -> str:
     return os.environ.get(_FAILOVER_LOCK_NAME_ENV, _DEFAULT_FAILOVER_LOCK_NAME)
 
@@ -302,6 +339,7 @@ def _dependencies() -> TenantApiDependencies:
         ssm=session.client("ssm"),
         usage_client=_NoopUsageClient(),
         memory_provisioner=_NoopMemoryProvisioner(),
+        platform_quota_client=_AwsPlatformQuotaClient(session),
     )
 
 
@@ -313,6 +351,77 @@ class _NoopUsageClient:
 class _NoopMemoryProvisioner:
     def provision(self, *, tenant_id: str, app_id: str) -> dict[str, Any]:
         return {}
+
+
+class _AwsPlatformQuotaClient:
+    def __init__(self, session: Any) -> None:
+        self._session = session
+
+    def get_utilisation(
+        self,
+        *,
+        active_region: str,
+        fallback_region: str | None,
+    ) -> list[dict[str, Any]]:
+        regions: list[str] = []
+        for region in (active_region, fallback_region):
+            if region and region not in regions:
+                regions.append(region)
+
+        return [self._build_region_entry(region) for region in regions]
+
+    def _build_region_entry(self, region: str) -> dict[str, Any]:
+        current_value = self._current_sessions(region)
+        limit = self._quota_limit(region)
+        utilisation = 0.0 if limit <= 0 else round((current_value / limit) * 100, 2)
+        return {
+            "region": region,
+            "quotaName": _AGENTCORE_CONCURRENT_SESSIONS_METRIC,
+            "currentValue": current_value,
+            "limit": limit,
+            "utilisationPercentage": utilisation,
+        }
+
+    def _current_sessions(self, region: str) -> float:
+        cloudwatch = self._session.client("cloudwatch", region_name=region)
+        end_time = _now_utc()
+        start_time = end_time - timedelta(minutes=_AGENTCORE_QUOTA_LOOKBACK_MINUTES)
+        response = cloudwatch.get_metric_statistics(
+            Namespace=_AGENTCORE_CONCURRENT_SESSIONS_NAMESPACE,
+            MetricName=_AGENTCORE_CONCURRENT_SESSIONS_METRIC,
+            StartTime=start_time,
+            EndTime=end_time,
+            Period=60,
+            Statistics=["Maximum"],
+        )
+        datapoints = response.get("Datapoints", [])
+        if not datapoints:
+            return 0.0
+        return max(float(point.get("Maximum", 0.0)) for point in datapoints)
+
+    def _quota_limit(self, region: str) -> float:
+        service_quotas = self._session.client("service-quotas", region_name=region)
+        next_token: str | None = None
+
+        while True:
+            request: dict[str, Any] = {"ServiceCode": "bedrock-agentcore"}
+            if next_token:
+                request["NextToken"] = next_token
+
+            response = service_quotas.list_service_quotas(**request)
+            for quota in response.get("Quotas", []):
+                if quota.get("QuotaName") == _AGENTCORE_QUOTA_NAME:
+                    return float(quota.get("Value", 0.0))
+
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+
+        return self._documented_default_limit(region)
+
+    @staticmethod
+    def _documented_default_limit(region: str) -> float:
+        return 1000.0 if region == "us-east-1" else 500.0
 
 
 def _tenant_context_for_scope(
@@ -1438,29 +1547,15 @@ def _handle_platform_quota(
     deps: TenantApiDependencies,
 ) -> dict[str, Any]:
     _require_admin(caller)
-
-    # In a real implementation, this would call AgentCore service quotas
-    # or CloudWatch metrics for ConcurrentSessions.
+    active_region = _required_ssm_parameter(deps.ssm, _runtime_region_param_name())
+    fallback_region = _optional_ssm_parameter(deps.ssm, _fallback_region_param_name())
+    utilisation = deps.platform_quota_client.get_utilisation(
+        active_region=active_region,
+        fallback_region=fallback_region,
+    )
     return _response(
         200,
-        {
-            "utilisation": [
-                {
-                    "region": "eu-west-1",
-                    "quotaName": "ConcurrentSessions",
-                    "currentValue": 5,
-                    "limit": 25,
-                    "utilisationPercentage": 20.0,
-                },
-                {
-                    "region": "eu-central-1",
-                    "quotaName": "ConcurrentSessions",
-                    "currentValue": 0,
-                    "limit": 25,
-                    "utilisationPercentage": 0.0,
-                },
-            ]
-        },
+        {"utilisation": utilisation},
     )
 
 
