@@ -109,7 +109,7 @@ ADR-013: Entra group-to-role claim for RBAC
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **tf-acore-aas** (2410 symbols, 7629 relationships, 196 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **tf-acore-aas** (2553 symbols, 8100 relationships, 207 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
