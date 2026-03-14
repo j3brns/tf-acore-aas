@@ -55,3 +55,15 @@ def test_openapi_tenant_id_contract_is_deterministic_and_env_safe() -> None:
     )
     tenant_id_schema = tenant_create_schema.get("tenantId", {})
     assert tenant_id_schema.get("pattern") == "^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"
+
+
+def test_openapi_bff_token_refresh_contract_restricts_to_platform_scopes() -> None:
+    spec = _load_openapi()
+    schema = spec.get("components", {}).get("schemas", {}).get("BffTokenRefreshRequest", {})
+    properties = schema.get("properties", {})
+
+    assert schema.get("required") == ["scopes"]
+    assert "audience" not in properties
+    assert "sessionId" not in properties
+    scope_items = properties.get("scopes", {}).get("items", {})
+    assert scope_items.get("pattern") == "^api://[A-Za-z0-9-]+/[A-Za-z][A-Za-z0-9._-]{0,127}$"

@@ -715,7 +715,8 @@ paths:
       operationId: refreshBffToken
       summary: Refresh SPA scoped token
       description: >
-        Thin BFF endpoint for Entra on-behalf-of token exchange. Does not invoke agents.
+        Thin BFF endpoint for Entra on-behalf-of token exchange using approved platform API
+        delegated scopes only. Does not invoke agents.
       security:
         - BearerAuth: []
       requestBody:
@@ -1446,10 +1447,8 @@ components:
           minItems: 1
           items:
             type: string
-        sessionId:
-          type: [string, "null"]
-        audience:
-          type: [string, "null"]
+            pattern: "^api://[A-Za-z0-9-]+/[A-Za-z][A-Za-z0-9._-]{0,127}$"
+          description: Approved platform delegated scopes only; `/.default` and non-platform audiences are rejected.
 
     BffTokenRefreshResponse:
       type: object
