@@ -52,10 +52,10 @@ eu-central-1 Frankfurt (EVALUATION + failover)
 ```
 
 All data remains in the EU. The current approved zigzag to Dublin adds ~12ms RTT.
-AWS now supports AgentCore Runtime and Policy in additional EU regions, including London,
-but this platform continues to use the ADR-009 London-home / Dublin-runtime topology.
-That deployment policy remains in force pending an explicit architecture review and
-controlled migration plan.
+AWS documentation now shows AgentCore Runtime and Policy available in multiple EU
+regions, including London, Dublin, and Frankfurt, but this platform continues to use
+the ADR-009 London-home / Dublin-runtime topology. That deployment policy remains in
+force pending an explicit architecture review and controlled migration plan.
 
 Current runtime network posture: `AWS::BedrockAgentCore::Runtime` remains in
 `NetworkMode: PUBLIC` by explicit exception, not by omission. The reason is structural:

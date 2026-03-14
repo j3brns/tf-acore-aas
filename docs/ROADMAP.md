@@ -6,27 +6,32 @@ specialised AI agents without managing infrastructure. Enterprise-grade isolatio
 compliance, and billing. Operable by a small team without developers on-call.
 
 ## Current Status
-Phase 0 — Foundation (documentation and decisions)
+Implementation has moved beyond the documentation-only foundation. The repository
+now contains core Lambda handlers, CDK stacks, guard rules, gateway interceptors,
+async bridge flows, and SPA code. Milestones below remain gated by their stated
+acceptance criteria rather than by file presence alone.
 
 ---
 
 ## MVP (Milestones 1–4)
 
 ### M1: Local Development Loop Working
-Phase 2 complete. Acceptance: `make dev && make test-unit` both pass.
-Echo agent invocable end-to-end locally.
+Substantial implementation present. Acceptance remains: `make dev && make test-unit`
+both pass clean, with the echo agent invocable end-to-end locally.
 
 ### M2: Deployed to Dev AWS Account
-Phase 3 complete. Acceptance: `make infra-deploy ENV=dev` succeeds.
-Operator can run RUNBOOK-001 in dev.
+CDK stacks, tests, and guard rules are present in-repo. Acceptance remains:
+`make infra-deploy ENV=dev` succeeds and the operator can run RUNBOOK-001 in dev.
 
 ### M3: Operable by Ops Team
-Phase 4 complete. Acceptance: all runbooks executable by operator using
-make targets only. No AWS console access required for any runbook.
+Runbooks and operator commands are present in-repo. Acceptance remains: all
+runbooks are executable by the operator using make targets only, with no AWS
+console access required for routine operations.
 
 ### M4: Agent Developer Self-Service
-Phase 5 complete. Acceptance: agent push <30s warm. All three invocation
-modes work end-to-end. Interceptors enforce tier-based tool access.
+Packaging scripts, registration flow, and gateway interceptors are present.
+Acceptance remains: agent push meets the warm-path target, all three invocation
+modes work end-to-end, and interceptors enforce tier-based tool access.
 
 ---
 

@@ -45,10 +45,10 @@ Then seeds LocalStack with two test tenants and all SSM parameters.
 
 ```bash
 make dev-invoke
-# Expected: {"result": "Echo: Hello from local environment"}
 ```
 
-If this works, your local environment is healthy.
+If this exits cleanly, the local invocation path is wired. Use `make test-int`
+for a stronger end-to-end check once the local stack is running.
 
 ## Test Tenants (seeded by dev-bootstrap.py)
 

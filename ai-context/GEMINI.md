@@ -179,6 +179,14 @@ make install-git-hooks              # installs .githooks/pre-push
 
 The pre-push hook runs `make validate-pre-push` (fast path; no CDK synth).
 
+### Issue lifecycle label policy (mandatory)
+
+- Every task issue must have exactly one `status:*` label at all times.
+- Open task issues must never be `status:done`.
+- Closed task issues must always be `status:done` and must never retain `status:in-progress`, `status:not-started`, or `ready`.
+- `make finish-worktree-close` is the required close path even if the issue was already closed manually; it is the normalization step for lifecycle labels.
+- If issue state or labels drift, run `make issues-reconcile` immediately, then re-run `make issues-audit` until it passes.
+
 ### Issue Definition of Done (mandatory)
 
 An issue is done only when all items below are true:
@@ -189,7 +197,8 @@ An issue is done only when all items below are true:
 5. Branch is pushed and PR is open with validation evidence and issue linkage.
 6. PR is merged (not just opened).
 7. Issue is closed only after merge verification (`make finish-worktree-close`).
-8. Worktree cleanup is complete (`git worktree remove ...`, `git branch -d ...`, `git worktree prune`).
+8. `make issues-audit` passes after close; if not, run `make issues-reconcile` and re-audit before declaring the issue complete.
+9. Worktree cleanup is complete (`git worktree remove ...`, `git branch -d ...`, `git worktree prune`).
 
 ### Merge Conflict Rule (mandatory)
 

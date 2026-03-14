@@ -14,7 +14,7 @@ via a local stack .. And a super fast self-service pipeline — no platform rele
 - **Multi-tenant REST API** — per-request data isolation enforced at four independent layers
 - **Entra ID OIDC + SigV4** — human and machine auth; no Cognito anywhere
 - **Three invocation modes** — sync (15 min), streaming SSE (15 min), async with webhooks (8 hr)
-- **Self-service agent pipeline** — `make agent-push` deploys in <30s warm
+- **Self-service agent pipeline** — `make agent-push` supports a fast path when dependencies are unchanged
 - **SPA frontend** — React app with OIDC login, streaming responses, session keepalive
 - **EU-only data residency** — current approved topology keeps data in eu-west-2 London and runtime in eu-west-1 Dublin (~12ms RTT)
 - **LocalStack DevX** — full local inner loop without AWS credentials
@@ -49,9 +49,10 @@ make dev-invoke               # Confirms echo-agent works end-to-end locally
 | **eu-west-1** Dublin | COMPUTE — current primary runtime region by platform policy | AgentCore Runtime (arm64 Firecracker), Observability, Browser, Code Interpreter |
 | **eu-central-1** Frankfurt | EVALUATION + failover | AgentCore Evaluations, runtime failover target |
 
-AWS now supports additional AgentCore features in London, but this platform still runs
-the London-to-Dublin zigzag topology adopted in ADR-009. That deployment policy remains
-in place pending an explicit architecture review and controlled migration decision.
+AWS documentation now shows AgentCore Runtime and related core services available in
+multiple EU regions, including London, Dublin, and Frankfurt, but this platform still
+runs the London-to-Dublin zigzag topology adopted in ADR-009. That deployment policy
+remains in place pending an explicit architecture review and controlled migration decision.
 
 ### Request Lifecycle
 
@@ -153,7 +154,7 @@ make worktree-push-issue      # push with preflight + pre-validate enforced
 ### Agent developer inner loop
 
 ```bash
-make agent-push AGENT=my-agent ENV=dev    # push agent, <30s if deps cached
+make agent-push AGENT=my-agent ENV=dev    # push agent, fast path when deps are unchanged
 make agent-invoke AGENT=my-agent PROMPT="hello"
 make agent-test AGENT=my-agent
 ```

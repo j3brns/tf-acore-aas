@@ -397,3 +397,72 @@ def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypat
     assert "conflict: if merge/rebase conflicts appear:" in out
     assert "cleanup:  git worktree remove <this-worktree-path>" in out
     assert "git worktree prune" in out
+
+
+def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys):
+    root = Path("/tmp/repo")
+    target = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/worktrees/wt153"),
+        head="abc123",
+        branch="wt/task/153-sample",
+        is_primary=False,
+    )
+    primary = worktree_issues.WorktreeInfo(
+        path=root,
+        head="def456",
+        branch="main",
+        is_primary=True,
+    )
+    edits: list[list[str]] = []
+
+    monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [primary, target])
+    monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
+    monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
+    monkeypatch.setattr(worktree_issues, "gh_repo_ready", lambda _root: (True, "owner/repo"))
+    monkeypatch.setattr(
+        worktree_issues,
+        "pr_for_branch",
+        lambda _root, _repo, _branch, _state: {"number": 157},
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "issue_state_info",
+        lambda _root, _repo, _issue_id: {
+            "state": "CLOSED",
+            "title": "TASK-153: sample",
+            "url": "https://example.test/issues/153",
+            "labels": [
+                {"name": "type:task"},
+                {"name": "status:in-progress"},
+                {"name": "ready"},
+            ],
+        },
+    )
+
+    def _gh_text(args, *, root):
+        edits.append(args)
+        return ""
+
+    monkeypatch.setattr(worktree_issues, "gh_text", _gh_text)
+    monkeypatch.setattr(worktree_issues, "ensure_label_exists", lambda *_args, **_kwargs: None)
+
+    worktree_issues.close_issue_done(root, path=target.path, force=False)
+    out = capsys.readouterr().out
+
+    assert edits == [
+        [
+            "issue",
+            "edit",
+            "153",
+            "-R",
+            "owner/repo",
+            "--add-label",
+            "status:done",
+            "--remove-label",
+            "ready",
+            "--remove-label",
+            "status:in-progress",
+        ]
+    ]
+    assert "Issue #153 already closed." in out
+    assert "Normalized closed-issue lifecycle labels." in out

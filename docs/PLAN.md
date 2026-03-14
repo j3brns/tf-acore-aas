@@ -1,5 +1,10 @@
 # Delivery Plan
 
+> This is the phased delivery baseline for the platform. Implementation in the
+> repository has moved beyond the original documentation-only starting point in
+> several areas, but milestone gates remain open until their acceptance criteria
+> pass cleanly.
+
 ## Vision
 
 A fully managed, self-service Agent as a Service platform enabling B2B tenants to invoke
@@ -90,7 +95,7 @@ run `make infra-deploy ENV=dev` and get a working platform.
 - All 6 CDK stacks (Network, Identity, Platform, Tenant, Observability, AgentCore)
 - cfn-guard rules for security policy enforcement
 - CDK construct unit tests for every stack
-- First successful `make bootstrap-dev` execution
+- First successful `make infra-deploy ENV=dev` execution
 
 **Gate**: `cdk synth` passes. `cfn-guard` passes. infra-diff reviewed by operator.
 Operator runs RUNBOOK-001 (failover) in dev and it completes successfully.
