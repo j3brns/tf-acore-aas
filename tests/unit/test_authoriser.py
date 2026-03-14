@@ -540,6 +540,16 @@ def test_get_dynamodb_logic(mock_env):
         assert db is not None
 
 
+def test_get_dynamodb_requires_aws_region(mock_env, monkeypatch):
+    from src.authoriser.handler import get_dynamodb
+
+    monkeypatch.delenv("AWS_REGION", raising=False)
+
+    with patch("src.authoriser.handler._dynamodb_resource", None):
+        with pytest.raises(KeyError, match="AWS_REGION"):
+            get_dynamodb()
+
+
 def test_get_tenant_status_no_table(mock_env):
     from src.authoriser.handler import get_tenant_status
 

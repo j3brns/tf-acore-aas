@@ -748,6 +748,24 @@ def test_get_job_status_hides_other_tenants_job(setup_data):
     assert body["error"]["code"] == "NOT_FOUND"
 
 
+def test_client_initializers_require_aws_region(monkeypatch):
+    import src.bridge.handler as bridge_module
+
+    monkeypatch.delenv("AWS_REGION", raising=False)
+
+    with (
+        patch("src.bridge.handler._ssm_client", None),
+        patch("src.bridge.handler._sts_client", None),
+        patch("src.bridge.handler._dynamodb_resource", None),
+    ):
+        with pytest.raises(KeyError, match="AWS_REGION"):
+            bridge_module.get_ssm()
+        with pytest.raises(KeyError, match="AWS_REGION"):
+            bridge_module.get_sts()
+        with pytest.raises(KeyError, match="AWS_REGION"):
+            bridge_module.get_dynamodb()
+
+
 def test_register_and_delete_webhook(setup_data):
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
     jobs_table = ddb.Table("platform-jobs")
