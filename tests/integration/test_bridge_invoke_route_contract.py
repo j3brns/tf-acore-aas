@@ -95,6 +95,36 @@ def test_contract_invoke_route_uses_agent_name_path_parameter():
     mock_get_agent.assert_called_once_with("echo-agent")
 
 
+def test_contract_invoke_route_uses_authorizer_tenant_context_not_request_header():
+    event = _invoke_event(
+        "/v1/agents/echo-agent/invoke",
+        {"agentName": "echo-agent"},
+        {"agentName": "echo-agent", "input": "hello"},
+    )
+    event["headers"] = {"x-tenant-id": "t-attacker-999"}
+
+    with (
+        patch(
+            "src.bridge.handler.get_agent_record",
+            return_value=_agent("echo-agent"),
+        ),
+        patch(
+            "src.bridge.handler.invoke_agent",
+            return_value={
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"status": "success"}),
+            },
+        ) as mock_invoke_agent,
+    ):
+        response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 200
+    _, tenant_context, *_ = mock_invoke_agent.call_args.args
+    assert tenant_context.tenant_id == "t-001"
+    assert tenant_context.app_id == "app-001"
+
+
 def test_legacy_invoke_route_is_not_accepted():
     event = _invoke_event("/v1/invoke", None, {"agentName": "echo-agent", "input": "hello"})
 

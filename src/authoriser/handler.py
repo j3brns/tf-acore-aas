@@ -38,6 +38,9 @@ SIGV4_MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("SIGV4_MAX_CLOCK_SKEW_SECONDS"
 _SIGV4_SIGNATURE_RE = re.compile(r"^[0-9a-f]{64}$")
 _SIGV4_ACCESS_KEY_RE = re.compile(r"^[A-Z0-9]{16,128}$")
 _SIGV4_TENANT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$")
+_SIGV4_ASSUMED_ROLE_ARN_RE = re.compile(
+    r"^arn:aws:sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/[^/]+$"
+)
 
 
 def get_jwk_client() -> PyJWKClient | None:
@@ -98,6 +101,56 @@ def get_tenant_status(tenant_id: str) -> str | None:
     except Exception:
         logger.exception("Failed to fetch tenant status", extra={"tenant_id": tenant_id})
     return None
+
+
+def _sigv4_caller_role_arns(caller_arn: str) -> set[str]:
+    """Return tenant role ARN candidates for an API Gateway SigV4 caller ARN."""
+    candidates = {caller_arn}
+    match = _SIGV4_ASSUMED_ROLE_ARN_RE.fullmatch(caller_arn)
+    if match:
+        candidates.add(f"arn:aws:iam::{match.group('account_id')}:role/{match.group('role_name')}")
+    return candidates
+
+
+def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
+    """Resolve a SigV4 caller to a trusted tenant using tenant metadata."""
+    if not TENANTS_TABLE:
+        logger.warning("TENANTS_TABLE not set; SigV4 tenant binding unavailable")
+        return None
+
+    candidate_role_arns = _sigv4_caller_role_arns(caller_arn)
+    table = get_dynamodb().Table(TENANTS_TABLE)
+    matches: dict[str, dict[str, str]] = {}
+    scan_kwargs: dict[str, Any] = {}
+
+    try:
+        while True:
+            response = table.scan(**scan_kwargs)
+            for item in response.get("Items", []):
+                role_arn = str(item.get("executionRoleArn") or item.get("execution_role_arn") or "")
+                if role_arn not in candidate_role_arns:
+                    continue
+                tenant_id = str(item.get("tenantId") or item.get("tenant_id") or "").strip()
+                app_id = str(item.get("appId") or item.get("app_id") or "").strip()
+                tier = _normalise_tier(str(item.get("tier") or "basic"))
+                if tenant_id:
+                    matches[tenant_id] = {"tenant_id": tenant_id, "app_id": app_id, "tier": tier}
+            last_evaluated_key = response.get("LastEvaluatedKey")
+            if not last_evaluated_key:
+                break
+            scan_kwargs["ExclusiveStartKey"] = last_evaluated_key
+    except Exception:
+        logger.exception("Failed to resolve SigV4 tenant binding", extra={"caller_arn": caller_arn})
+        return None
+
+    if len(matches) != 1:
+        logger.warning(
+            "SigV4 caller tenant binding not unique",
+            extra={"caller_arn": caller_arn, "match_count": len(matches)},
+        )
+        return None
+
+    return next(iter(matches.values()))
 
 
 def _normalise_headers(event: dict[str, Any]) -> dict[str, str]:
@@ -321,8 +374,8 @@ def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> di
         return generate_policy("machine", "Deny", method_arn, {})
 
     headers = _normalise_headers(event)
-    tenant_id = headers.get("x-tenant-id", "")
-    if not tenant_id or not _SIGV4_TENANT_ID_RE.fullmatch(tenant_id):
+    requested_tenant_id = headers.get("x-tenant-id", "")
+    if not requested_tenant_id or not _SIGV4_TENANT_ID_RE.fullmatch(requested_tenant_id):
         logger.warning("Missing or invalid x-tenant-id for SigV4 request")
         return generate_policy("machine", "Deny", method_arn, {})
 
@@ -356,6 +409,25 @@ def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> di
         logger.warning("SigV4 caller identity missing from request context")
         return generate_policy("machine", "Deny", method_arn, {})
 
+    tenant_binding = resolve_sigv4_tenant_binding(caller_arn)
+    if not tenant_binding:
+        logger.warning(
+            "SigV4 caller has no trusted tenant binding", extra={"caller_arn": caller_arn}
+        )
+        return generate_policy("machine", "Deny", method_arn, {})
+
+    tenant_id = tenant_binding["tenant_id"]
+    if requested_tenant_id != tenant_id:
+        logger.warning(
+            "SigV4 x-tenant-id does not match trusted tenant binding",
+            extra={
+                "caller_arn": caller_arn,
+                "requested_tenant_id": requested_tenant_id,
+                "trusted_tenant_id": tenant_id,
+            },
+        )
+        return generate_policy("machine", "Deny", method_arn, {})
+
     status = get_tenant_status(tenant_id)
     if status != "active":
         logger.error(
@@ -368,8 +440,8 @@ def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> di
         logger.warning("SigV4 caller denied on admin route", extra={"tenant_id": tenant_id})
         return generate_policy("machine", "Deny", method_arn, {})
 
-    app_id = headers.get("x-app-id") or identity_access_key or parsed["access_key"]
-    tier = _normalise_tier(headers.get("x-tier"))
+    app_id = tenant_binding["app_id"] or identity_access_key or parsed["access_key"]
+    tier = tenant_binding["tier"]
     actor = caller_arn or caller_id or f"sigv4:{parsed['access_key']}"
     auth_context = {
         "tenantid": tenant_id,
