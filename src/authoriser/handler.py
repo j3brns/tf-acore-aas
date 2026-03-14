@@ -40,6 +40,10 @@ _SIGV4_ACCESS_KEY_RE = re.compile(r"^[A-Z0-9]{16,128}$")
 _SIGV4_TENANT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$")
 
 
+def _aws_region() -> str:
+    return os.environ["AWS_REGION"]
+
+
 def get_jwk_client() -> PyJWKClient | None:
     """Lazy initialization of PyJWKClient."""
     global _jwk_client
@@ -53,8 +57,7 @@ def get_dynamodb():
     """Lazy initialization of boto3 resource."""
     global _dynamodb_resource
     if _dynamodb_resource is None:
-        region = os.environ.get("AWS_REGION", "eu-west-2")
-        _dynamodb_resource = boto3.resource("dynamodb", region_name=region)
+        _dynamodb_resource = boto3.resource("dynamodb", region_name=_aws_region())
     return _dynamodb_resource
 
 
