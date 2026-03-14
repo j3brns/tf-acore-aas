@@ -259,8 +259,14 @@ export class PlatformStack extends cdk.Stack {
         AGENTS_TABLE: this.agentsTable.tableName,
         INVOCATIONS_TABLE: this.invocationsTable.tableName,
         JOBS_TABLE: this.jobsTable.tableName,
+        TENANTS_TABLE: this.tenantsTable.tableName,
       },
     });
+
+    this.tenantsTable.grantReadData(this.bridgeFn);
+    this.agentsTable.grantReadData(this.bridgeFn);
+    this.invocationsTable.grantReadWriteData(this.bridgeFn);
+    this.jobsTable.grantReadWriteData(this.bridgeFn);
 
     const webhookDeliveryRetryDlq = new sqs.Queue(this, 'webhookDeliveryRetryDlq', {
       encryption: sqs.QueueEncryption.SQS_MANAGED,
@@ -840,13 +846,18 @@ export class PlatformStack extends cdk.Stack {
       securedMethodOptions,
     );
     webhooks.addMethod(
+      'GET',
+      tenantApiIntegration,
+      securedMethodOptions,
+    );
+    webhooks.addMethod(
       'POST',
-      bridgeIntegration,
+      tenantApiIntegration,
       securedMethodOptions,
     );
     webhookById.addMethod(
       'DELETE',
-      bridgeIntegration,
+      tenantApiIntegration,
       securedMethodOptions,
     );
     tokenRefresh.addMethod(

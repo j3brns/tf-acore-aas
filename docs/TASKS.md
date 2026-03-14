@@ -454,10 +454,12 @@ sees results. Admin view shows platform health metrics.
               On exhaustion: update JOB record, alert ops
               ADRs: ADR-010 | Tests: signature verification, retry behaviour
 
-[ ] TASK-048  Job polling and webhook registration APIs
+[x] TASK-048  Job polling and webhook registration APIs
               GET  /v1/jobs/{jobId}: status, presigned result URL when complete
               POST /v1/webhooks: register callback URL
               DELETE /v1/webhooks/{id}: deregister
+              GET /v1/webhooks: list (added in #192)
+              Done: 2026-03-14 (Issue #192)
               ADRs: ADR-010 | Tests: status transitions, presigned URL expiry
 
 **Phase 8 Gate**: Async echo-agent variant completes simulated 30-second background
