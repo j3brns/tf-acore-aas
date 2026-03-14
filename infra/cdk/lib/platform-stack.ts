@@ -268,6 +268,7 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'bff',
+        ENTRA_AUDIENCE: 'platform-api',
       },
     });
 

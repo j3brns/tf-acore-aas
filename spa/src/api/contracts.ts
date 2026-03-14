@@ -173,7 +173,6 @@ export type HealthResponseDto = {
 
 export type BffTokenRefreshRequestDto = {
   scopes: string[];
-  audience?: string | null;
 };
 
 export type BffTokenRefreshResponseDto = {

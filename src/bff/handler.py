@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,9 +33,11 @@ ENTRA_CLIENT_ID = os.environ.get("ENTRA_CLIENT_ID")
 ENTRA_CLIENT_SECRET = os.environ.get("ENTRA_CLIENT_SECRET")
 ENTRA_TENANT_ID = os.environ.get("ENTRA_TENANT_ID", "common")
 ENTRA_TOKEN_ENDPOINT = os.environ.get("ENTRA_TOKEN_ENDPOINT")
+ENTRA_AUDIENCE = os.environ.get("ENTRA_AUDIENCE")
 RUNTIME_PING_URL = os.environ.get("RUNTIME_PING_URL") or os.environ.get("MOCK_RUNTIME_URL")
 RUNTIME_KEEPALIVE_WINDOW_SECONDS = 15 * 60
 RUNTIME_PING_TIMEOUT_SECONDS = 2.0
+_ALLOWED_SCOPE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,127}$")
 
 
 @logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
@@ -98,12 +101,23 @@ def _handle_token_refresh(event: dict[str, Any], *, request_id: str) -> dict[str
         )
 
     audience = _str_or_none(body.get("audience"))
+    if audience is not None:
+        return _error_response(
+            400,
+            "INVALID_REQUEST",
+            "audience is not supported; request only approved platform scopes",
+            request_id,
+        )
+
+    try:
+        approved_scopes = _validate_refresh_scopes(scopes)
+    except ValueError as exc:
+        return _error_response(400, "INVALID_REQUEST", str(exc), request_id)
 
     try:
         token_payload = _exchange_obo_token(
             assertion_token=access_token,
-            scopes=scopes,
-            audience=audience,
+            scopes=approved_scopes,
         )
     except ValueError as exc:
         return _error_response(503, "SERVICE_UNAVAILABLE", str(exc), request_id)
@@ -142,7 +156,7 @@ def _handle_token_refresh(event: dict[str, Any], *, request_id: str) -> dict[str
             request_id,
         )
 
-    scope = _str_or_none(token_payload.get("scope")) or " ".join(scopes)
+    scope = _str_or_none(token_payload.get("scope")) or " ".join(approved_scopes)
 
     return _response(
         200,
@@ -216,22 +230,36 @@ def _exchange_obo_token(
     *,
     assertion_token: str,
     scopes: list[str],
-    audience: str | None,
 ) -> dict[str, Any]:
     endpoint = _entra_token_endpoint()
-    scope_value = " ".join(scopes)
-    if audience and all(not scope.startswith(f"{audience}/") for scope in scopes):
-        scope_value = f"{scope_value} {audience}/.default".strip()
-
     params = {
         "client_id": _required_env_value("ENTRA_CLIENT_ID", ENTRA_CLIENT_ID),
         "client_secret": _required_env_value("ENTRA_CLIENT_SECRET", ENTRA_CLIENT_SECRET),
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
         "requested_token_use": "on_behalf_of",
         "assertion": assertion_token,
-        "scope": scope_value,
+        "scope": " ".join(scopes),
     }
     return _http_post_form(endpoint, params)
+
+
+def _validate_refresh_scopes(scopes: list[str]) -> list[str]:
+    approved_audience = _required_env_value("ENTRA_AUDIENCE", ENTRA_AUDIENCE)
+    approved_prefix = f"{approved_audience}/"
+    validated: list[str] = []
+
+    for scope in scopes:
+        if not scope.startswith(approved_prefix):
+            raise ValueError("scopes must target the approved platform audience")
+
+        scope_name = scope.removeprefix(approved_prefix)
+        if scope_name == ".default":
+            raise ValueError("scopes must not request /.default")
+        if not _ALLOWED_SCOPE_NAME_RE.fullmatch(scope_name):
+            raise ValueError(f"scope '{scope}' is not an approved platform scope")
+        validated.append(scope)
+
+    return validated
 
 
 def _ping_runtime_session(*, tenant_id: str, app_id: str, session_id: str, agent_name: str) -> None:
