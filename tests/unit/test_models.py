@@ -278,6 +278,7 @@ def _make_job(**overrides) -> JobRecord:
     defaults = dict(
         job_id="job-001",
         tenant_id="t-abc123",
+        app_id="app-123",
         agent_name="echo-agent",
         status=JobStatus.PENDING,
         created_at="2026-02-24T12:00:00Z",
@@ -305,8 +306,13 @@ class TestJobRecord:
         assert job.completed_at is None
         assert job.result_s3_key is None
         assert job.error_message is None
+        assert job.webhook_id is None
         assert job.webhook_url is None
         assert job.webhook_delivered is False
+        assert job.webhook_delivery_status is None
+        assert job.webhook_delivery_attempts == 0
+        assert job.webhook_delivery_error is None
+        assert job.webhook_last_attempt_at is None
 
     def test_all_job_statuses_accepted(self):
         for status in JobStatus:

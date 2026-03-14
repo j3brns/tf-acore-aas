@@ -1386,6 +1386,14 @@ components:
         webhookUrl:
           type: [string, "null"]
           format: uri
+        webhookDeliveryStatus:
+          type: [string, "null"]
+          enum: [delivered, retrying, failed, skipped, null]
+        webhookDeliveryAttempts:
+          type: integer
+          minimum: 0
+        webhookDeliveryError:
+          type: [string, "null"]
 
     WebhookEventType:
       type: string

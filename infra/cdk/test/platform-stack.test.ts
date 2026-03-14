@@ -61,6 +61,13 @@ describe('PlatformStack (TASK-023)', () => {
         Enabled: true,
       },
     });
+
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'platform-jobs',
+      StreamSpecification: {
+        StreamViewType: 'NEW_AND_OLD_IMAGES',
+      },
+    });
   });
 
   test('creates REST API with authorizer-backed API key source and usage plans', () => {
@@ -363,5 +370,29 @@ describe('PlatformStack (TASK-023)', () => {
     });
 
     expect(names.some((name) => name.includes('async-runner'))).toBe(false);
+  });
+
+  test('provisions webhook delivery lambda with jobs stream and retry queue wiring', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-webhook-delivery',
+      Handler: 'handler.handler',
+      Environment: {
+        Variables: Match.objectLike({
+          JOBS_TABLE: Match.anyValue(),
+          WEBHOOK_MAX_RETRY_ATTEMPTS: '3',
+        }),
+      },
+    });
+
+    template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      StartingPosition: 'LATEST',
+      BatchSize: 10,
+    });
+
+    template.hasResourceProperties('AWS::SQS::Queue', {
+      RedrivePolicy: Match.objectLike({
+        maxReceiveCount: 1,
+      }),
+    });
   });
 });

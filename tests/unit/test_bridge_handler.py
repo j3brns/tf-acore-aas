@@ -383,6 +383,7 @@ def test_handler_async_accepted(setup_data):
         job_item = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": f"JOB#{body['jobId']}"})
         assert "Item" in job_item
         assert job_item["Item"]["status"] == "pending"
+        assert job_item["Item"]["app_id"] == "app-001"
 
 
 def test_handler_streaming(setup_data):
@@ -865,6 +866,8 @@ def test_handler_async_uses_registered_webhook_callback(setup_data):
 
     job_id = response_body["jobId"]
     job = jobs_table.get_item(Key={"PK": "TENANT#t-001", "SK": f"JOB#{job_id}"})["Item"]
+    assert job["app_id"] == "app-001"
+    assert job["webhook_id"] == "webhook-001"
     assert job["webhook_url"] == "https://example.com/hooks/job"
 
 
