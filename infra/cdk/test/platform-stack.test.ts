@@ -395,4 +395,16 @@ describe('PlatformStack (TASK-023)', () => {
       }),
     });
   });
+
+  test('configures the BFF lambda with the approved Entra audience', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-bff',
+      Environment: {
+        Variables: Match.objectLike({
+          ENTRA_AUDIENCE: 'platform-api',
+          POWERTOOLS_SERVICE_NAME: 'bff',
+        }),
+      },
+    });
+  });
 });
