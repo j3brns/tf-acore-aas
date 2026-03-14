@@ -15,7 +15,7 @@ from src.authoriser.handler import generate_policy, handler, is_admin_route
 OS_ENV = {
     "AWS_REGION": "eu-west-2",
     "AWS_DEFAULT_REGION": "eu-west-2",
-    "AWS_SECRET_ACCESS_KEY": "testing",
+    "AWS_SECRET_ACCESS_KEY": "testing",  # pragma: allowlist secret
     "AWS_SESSION_TOKEN": "testing",
     "AWS_EC2_METADATA_DISABLED": "true",
     "ENTRA_JWKS_URL": "http://localhost:8766/.well-known/jwks.json",
@@ -24,6 +24,8 @@ OS_ENV = {
     "TENANTS_TABLE": "platform-tenants-dev",
 }
 OS_ENV["AWS_ACCESS_KEY_" + "ID"] = "testing"
+
+SIGV4_TEST_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret
 
 
 @pytest.fixture
@@ -69,7 +71,7 @@ def lambda_context():
 
 
 def _sigv4_authorization(
-    access_key: str = "AKIA" + "IOSFODNN7EXAMPLE",
+    access_key: str = SIGV4_TEST_ACCESS_KEY,
     signature: str | None = None,
 ) -> str:
     sig = signature or ("a" * 64)
@@ -89,7 +91,7 @@ def _sigv4_event(
     tenant_id: str = "t-test-001",
     authorization: str | None = None,
     include_identity: bool = True,
-    access_key: str = "AKIAIOSFODNN7EXAMPLE",
+    access_key: str = SIGV4_TEST_ACCESS_KEY,
     caller_arn: str = (
         "arn:aws:sts::123456789012:assumed-role/platform-tenant-t-test-001-execution-role/"
         "machine-session"
@@ -429,6 +431,46 @@ def test_handler_sigv4_suspended_tenant_denied(
 
 @patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
 @patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_ignores_spoofed_tier_header(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
+    mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "basic",
+    }
+    event = _sigv4_event()
+    event["headers"]["x-tier"] = "premium"  # type: ignore[index]
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tier"] == "basic"
+
+
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
+@patch("src.authoriser.handler.get_tenant_status")
+def test_handler_sigv4_uses_trusted_premium_tier(
+    mock_get_status, mock_resolve_binding, mock_env, lambda_context
+):
+    mock_get_status.return_value = "active"
+    mock_resolve_binding.return_value = {
+        "tenant_id": "t-test-001",
+        "app_id": "app-001",
+        "tier": "premium",
+    }
+    event = _sigv4_event()
+    event["headers"]["x-tier"] = "basic"  # type: ignore[index]
+
+    result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert result["context"]["tier"] == "premium"
+
+
+@patch("src.authoriser.handler.resolve_sigv4_tenant_binding")
+@patch("src.authoriser.handler.get_tenant_status")
 def test_handler_sigv4_cross_tenant_header_injection_denied(
     mock_get_status, mock_resolve_binding, mock_env, lambda_context
 ):
@@ -540,11 +582,49 @@ def test_get_dynamodb_logic(mock_env):
         assert db is not None
 
 
+def test_get_dynamodb_requires_aws_region(mock_env, monkeypatch):
+    from src.authoriser.handler import get_dynamodb
+
+    monkeypatch.delenv("AWS_REGION", raising=False)
+
+    with patch("src.authoriser.handler._dynamodb_resource", None):
+        with pytest.raises(KeyError, match="AWS_REGION"):
+            get_dynamodb()
+
+
 def test_get_tenant_status_no_table(mock_env):
     from src.authoriser.handler import get_tenant_status
 
     with patch("src.authoriser.handler.TENANTS_TABLE", None):
         assert get_tenant_status("any") == "active"
+
+
+@patch("src.authoriser.handler.get_dynamodb")
+def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_get_dynamodb, mock_env):
+    from src.authoriser.handler import resolve_sigv4_tenant_binding
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.side_effect = [
+        {
+            "Items": [
+                {
+                    "tenantId": "t-test-001",
+                    "appId": "app-001",
+                    "tier": "not-a-tier",
+                    "executionRoleArn": (
+                        "arn:aws:iam::123456789012:role/platform-tenant-t-test-001-execution-role"
+                    ),
+                }
+            ]
+        }
+    ]
+
+    binding = resolve_sigv4_tenant_binding(
+        "arn:aws:sts::123456789012:assumed-role/platform-tenant-t-test-001-execution-role/machine-session"
+    )
+
+    assert binding == {"tenant_id": "t-test-001", "app_id": "app-001", "tier": "basic"}
 
 
 @patch("src.authoriser.handler.get_jwk_client")

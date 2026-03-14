@@ -56,6 +56,7 @@ def reset_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bff_handler, "ENTRA_CLIENT_SECRET", "client-secret")
     monkeypatch.setattr(bff_handler, "ENTRA_TENANT_ID", "tenant-guid")
     monkeypatch.setattr(bff_handler, "ENTRA_TOKEN_ENDPOINT", None)
+    monkeypatch.setattr(bff_handler, "ENTRA_AUDIENCE", "api://platform-dev")
     monkeypatch.setattr(bff_handler, "RUNTIME_PING_URL", "http://localhost:8765")
 
 
@@ -95,68 +96,67 @@ def test_token_refresh_success() -> None:
     exchange.assert_called_once_with(
         assertion_token="incoming-user-token",
         scopes=["api://platform-dev/Agent.Invoke"],
-        audience=None,
     )
 
 
-def test_token_refresh_with_audience_success() -> None:
+def test_token_refresh_rejects_explicit_audience() -> None:
     event = _event(
         path="/v1/bff/token-refresh",
         body={
             "scopes": ["api://platform-dev/Agent.Invoke"],
-            "audience": "https://api.example.com",
+            "audience": "api://platform-dev",
         },
         headers={"Authorization": "Bearer incoming-user-token"},
     )
 
-    with patch.object(
-        bff_handler,
-        "_exchange_obo_token",
-        return_value={
-            "access_token": "new-token-with-aud",
-            "token_type": "Bearer",
-            "expires_in": 3600,
-        },
-    ) as exchange:
-        response = bff_handler.handler(event, FakeContext())
+    response = bff_handler.handler(event, FakeContext())
 
-    assert response["statusCode"] == 200
-    payload = _body(response)
-    assert payload["accessToken"] == "new-token-with-aud"
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "INVALID_REQUEST"
+    assert "audience is not supported" in str(error["message"])
 
-    exchange.assert_called_once_with(
-        assertion_token="incoming-user-token",
-        scopes=["api://platform-dev/Agent.Invoke"],
-        audience="https://api.example.com",
+
+def test_exchange_obo_token_uses_only_approved_scopes() -> None:
+    with patch.object(bff_handler, "_http_post_form") as http_post:
+        bff_handler._exchange_obo_token(
+            assertion_token="some-token",
+            scopes=["api://platform-dev/Agent.Invoke"],
+        )
+
+    http_post.assert_called_once()
+    _, params = http_post.call_args[0]
+    assert params["scope"] == "api://platform-dev/Agent.Invoke"
+
+
+def test_token_refresh_rejects_scope_outside_platform_audience() -> None:
+    event = _event(
+        path="/v1/bff/token-refresh",
+        body={"scopes": ["User.Read"]},
+        headers={"Authorization": "Bearer incoming-user-token"},
     )
 
+    response = bff_handler.handler(event, FakeContext())
 
-def test_exchange_obo_token_adds_default_scope_for_audience() -> None:
-    with patch.object(bff_handler, "_http_post_form") as http_post:
-        bff_handler._exchange_obo_token(
-            assertion_token="some-token",
-            scopes=["user.read"],
-            audience="api://another-app",
-        )
-
-    http_post.assert_called_once()
-    _, params = http_post.call_args[0]
-    # Should include both user.read and api://another-app/.default
-    assert params["scope"] == "user.read api://another-app/.default"
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "INVALID_REQUEST"
+    assert "approved platform audience" in str(error["message"])
 
 
-def test_exchange_obo_token_skips_default_if_already_scoped() -> None:
-    with patch.object(bff_handler, "_http_post_form") as http_post:
-        bff_handler._exchange_obo_token(
-            assertion_token="some-token",
-            scopes=["api://another-app/User.Read"],
-            audience="api://another-app",
-        )
+def test_token_refresh_rejects_default_scope_requests() -> None:
+    event = _event(
+        path="/v1/bff/token-refresh",
+        body={"scopes": ["api://platform-dev/.default"]},
+        headers={"Authorization": "Bearer incoming-user-token"},
+    )
 
-    http_post.assert_called_once()
-    _, params = http_post.call_args[0]
-    # Should NOT add /.default since a scope starting with audience is already there
-    assert params["scope"] == "api://another-app/User.Read"
+    response = bff_handler.handler(event, FakeContext())
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "INVALID_REQUEST"
+    assert "/.default" in str(error["message"])
 
 
 def test_token_refresh_requires_authorization_header() -> None:

@@ -95,27 +95,28 @@ _config_cache: dict[str, Any] = {}
 _config_cache_expiry: float = 0
 
 
+def _aws_region() -> str:
+    return os.environ["AWS_REGION"]
+
+
 def get_ssm():
     global _ssm_client
     if _ssm_client is None:
-        region = os.environ.get("AWS_REGION", "eu-west-2")
-        _ssm_client = boto3.client("ssm", region_name=region)
+        _ssm_client = boto3.client("ssm", region_name=_aws_region())
     return _ssm_client
 
 
 def get_sts():
     global _sts_client
     if _sts_client is None:
-        region = os.environ.get("AWS_REGION", "eu-west-2")
-        _sts_client = boto3.client("sts", region_name=region)
+        _sts_client = boto3.client("sts", region_name=_aws_region())
     return _sts_client
 
 
 def get_dynamodb():
     global _dynamodb_resource
     if _dynamodb_resource is None:
-        region = os.environ.get("AWS_REGION", "eu-west-2")
-        _dynamodb_resource = boto3.resource("dynamodb", region_name=region)
+        _dynamodb_resource = boto3.resource("dynamodb", region_name=_aws_region())
     return _dynamodb_resource
 
 
@@ -1046,6 +1047,13 @@ def get_job_status(
                 "errorMessage": _coerce_optional_string(record.get("error_message")),
                 "webhookDelivered": bool(record.get("webhook_delivered", False)),
                 "webhookUrl": _coerce_optional_string(record.get("webhook_url")),
+                "webhookDeliveryStatus": _coerce_optional_string(
+                    record.get("webhook_delivery_status")
+                ),
+                "webhookDeliveryAttempts": int(record.get("webhook_delivery_attempts", 0)),
+                "webhookDeliveryError": _coerce_optional_string(
+                    record.get("webhook_delivery_error")
+                ),
             }
         ),
     }
@@ -1458,10 +1466,12 @@ def invoke_real_runtime(
         job_record = JobRecord(
             job_id=job_id,
             tenant_id=tenant_context.tenant_id,
+            app_id=tenant_context.app_id,
             agent_name=agent.agent_name,
             status=JobStatus.PENDING,
             created_at=now_iso,
             ttl=now_ts + JOB_TTL_SECONDS,
+            webhook_id=webhook_id,
             webhook_url=webhook_url,
         )
         log_job(tenant_context, job_record)
@@ -1739,10 +1749,12 @@ def handle_async_invocation(
     job_record = JobRecord(
         job_id=job_id,
         tenant_id=tenant_context.tenant_id,
+        app_id=tenant_context.app_id,
         agent_name=agent.agent_name,
         status=JobStatus.PENDING,
         created_at=now_iso,
         ttl=now_ts + JOB_TTL_SECONDS,
+        webhook_id=webhook_id,
         webhook_url=webhook_url,
     )
     log_job(tenant_context, job_record)
@@ -1864,14 +1876,24 @@ def log_job(tenant_context: TenantContext, record: JobRecord) -> None:
             "SK": record.sk,
             "job_id": record.job_id,
             "tenant_id": record.tenant_id,
+            "app_id": record.app_id,
             "agent_name": record.agent_name,
             "status": str(record.status),
             "created_at": record.created_at,
             "ttl": record.ttl,
         }
+        if record.webhook_id:
+            item["webhook_id"] = record.webhook_id
         if record.webhook_url:
             item["webhook_url"] = record.webhook_url
         item["webhook_delivered"] = bool(record.webhook_delivered)
+        item["webhook_delivery_attempts"] = int(record.webhook_delivery_attempts)
+        if record.webhook_delivery_status:
+            item["webhook_delivery_status"] = record.webhook_delivery_status
+        if record.webhook_delivery_error:
+            item["webhook_delivery_error"] = record.webhook_delivery_error
+        if record.webhook_last_attempt_at:
+            item["webhook_last_attempt_at"] = record.webhook_last_attempt_at
         if record.started_at:
             item["started_at"] = record.started_at
         if record.completed_at:
