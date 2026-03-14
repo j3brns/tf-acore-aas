@@ -1124,18 +1124,20 @@ def test_health_route_returns_openapi_shape(fake_state: dict[str, Any]) -> None:
     body = _body(response)
     assert body["status"] == "ok"
     assert "version" in body
+    assert "runtimeRegion" in body
     assert "timestamp" in body
 
 
-def test_sessions_route_returns_items_list(fake_state: dict[str, Any]) -> None:
+def test_sessions_route_returns_not_implemented(fake_state: dict[str, Any]) -> None:
     event = _event(method="GET", roles=[], caller_tenant_id="t-001", app_id="app-001")
     event["path"] = "/v1/sessions"
     event["queryStringParameters"] = {"limit": "5"}
     response = _invoke(event)
 
-    assert response["statusCode"] == 200
-    body = _body(response)
-    assert body == {"items": []}
+    assert response["statusCode"] == 501
+    error = _body(response)["error"]
+    assert error["code"] == "NOT_IMPLEMENTED"
+    assert "tenant-backed session tracking" in error["message"]
 
 
 def test_sessions_route_rejects_invalid_limit(fake_state: dict[str, Any]) -> None:
@@ -1682,8 +1684,8 @@ def test_webhook_management_succeeds_for_platform_operator(fake_state: dict[str,
     fake_state["db"].items[("TENANT#t-webhook", "METADATA")] = {
         "PK": "TENANT#t-webhook",
         "SK": "METADATA",
-        "tenantId": "t-webhook",
-        "appId": "app-webhook",
+        "tenant_id": "t-webhook",
+        "app_id": "app-webhook",
         "status": "active",
     }
 
@@ -1706,7 +1708,17 @@ def test_webhook_management_succeeds_for_platform_operator(fake_state: dict[str,
     body = _body(response)
     webhook_id = body["webhookId"]
     assert body["callbackUrl"] == "https://example.com/callback"
-    assert body["status"] == "active"
+    assert body["events"] == ["job.completed"]
+    assert "createdAt" in body
+    assert body["signatureHeader"] == "X-Platform-Signature"
+    assert body["signatureAlgorithm"] == "HMAC-SHA256"
+
+    # Verify database item
+    db_item = fake_state["db"].items[("TENANT#t-webhook", f"WEBHOOK#{webhook_id}")]
+    assert db_item["callback_url"] == "https://example.com/callback"
+    assert db_item["events"] == ["job.completed"]
+    assert db_item["status"] == "active"
+    assert "signature_secret" in db_item
 
     # 2. List webhooks
     event = _event(
@@ -1747,6 +1759,54 @@ def test_webhook_management_succeeds_for_platform_operator(fake_state: dict[str,
     response = _invoke(event)
     body = _body(response)
     assert len(body["items"]) == 0
+
+
+def test_webhook_registration_validation(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-val", "METADATA")] = {
+        "PK": "TENANT#t-val",
+        "SK": "METADATA",
+        "tenant_id": "t-val",
+        "app_id": "app-val",
+        "status": "active",
+    }
+
+    test_cases = [
+        ("Missing callbackUrl", {"events": ["job.completed"]}, 400),
+        ("Invalid callbackUrl", {"callbackUrl": "not-a-url", "events": ["job.completed"]}, 422),
+        ("Missing events", {"callbackUrl": "https://example.com"}, 400),
+        ("Empty events", {"callbackUrl": "https://example.com", "events": []}, 400),
+        (
+            "Unsupported event",
+            {"callbackUrl": "https://example.com", "events": ["bad.event"]},
+            422,
+        ),
+        (
+            "Duplicate events",
+            {"callbackUrl": "https://example.com", "events": ["job.completed", "job.completed"]},
+            400,
+        ),
+        (
+            "Description too long",
+            {
+                "callbackUrl": "https://example.com",
+                "events": ["job.completed"],
+                "description": "a" * 257,
+            },
+            422,
+        ),
+    ]
+
+    for name, payload, expected_status in test_cases:
+        event = _event(
+            method="POST",
+            tenant_id="t-val",
+            caller_tenant_id="t-val",
+            roles=["SelfService.Admin"],
+            body=payload,
+        )
+        event["path"] = "/v1/webhooks"
+        response = _invoke(event)
+        assert response["statusCode"] == expected_status, f"Test '{name}' failed"
 
 
 def test_list_invites_succeeds(fake_state: dict[str, Any]) -> None:

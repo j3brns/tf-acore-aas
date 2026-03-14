@@ -11,6 +11,8 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request
 
+import pytest
+
 
 def _load_ops_module() -> Any:
     repo_root = Path(__file__).resolve().parents[2]
@@ -71,6 +73,16 @@ def _write_creds(path: Path, *, env_name: str, token: str, api_base_url: str) ->
         },
     }
     path.write_text(json.dumps(store), encoding="utf-8")
+
+
+def _write_failover_lock_token(path: Path, *, lock_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "lockId": lock_id,
+        "tableName": "platform-ops-locks",
+        "lockName": "platform-runtime-failover",
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_parse_args_top_tenants_defaults() -> None:
@@ -186,6 +198,102 @@ def test_update_tenant_budget_uses_patch_and_json_body(monkeypatch, tmp_path: Pa
     assert seen["body"] == {"monthlyBudgetUsd": 5000.0}
     assert seen["content_type"] == "application/json"
     assert seen["timeout"] == 12
+
+
+def test_set_runtime_region_uses_failover_api_contract(monkeypatch, tmp_path: Path) -> None:
+    creds_path = tmp_path / ".platform" / "credentials"
+    token_path = tmp_path / ".build" / "failover-lock-token.json"
+    monkeypatch.setenv("PLATFORM_CREDENTIALS_PATH", str(creds_path))
+    monkeypatch.setenv("FAILOVER_LOCK_TOKEN_PATH", str(token_path))
+    _write_creds(
+        creds_path,
+        env_name="prod",
+        token="failover-token",
+        api_base_url="https://ops.example.com",
+    )
+    _write_failover_lock_token(token_path, lock_id="lock-123")
+
+    seen: dict[str, Any] = {}
+
+    def _fake_urlopen(request: Request, timeout: int) -> _FakeResponse:
+        seen["url"] = request.full_url
+        seen["method"] = request.get_method()
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        seen["timeout"] = timeout
+        return _FakeResponse(status=200, payload={"status": "completed"})
+
+    monkeypatch.setattr(ops, "urlopen", _fake_urlopen)
+
+    rc = ops.main(["set-runtime-region", "--env", "prod", "--region", "eu-central-1"])
+
+    assert rc == 0
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://ops.example.com/v1/platform/failover"
+    assert seen["body"] == {"targetRegion": "eu-central-1", "lockId": "lock-123"}
+    assert seen["timeout"] == 30
+
+
+def test_set_runtime_region_accepts_explicit_lock_id(monkeypatch, tmp_path: Path) -> None:
+    creds_path = tmp_path / ".platform" / "credentials"
+    monkeypatch.setenv("PLATFORM_CREDENTIALS_PATH", str(creds_path))
+    _write_creds(
+        creds_path,
+        env_name="prod",
+        token="failover-token",
+        api_base_url="https://ops.example.com",
+    )
+
+    seen: dict[str, Any] = {}
+
+    def _fake_urlopen(request: Request, timeout: int) -> _FakeResponse:
+        del timeout
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse(status=200, payload={"status": "completed"})
+
+    monkeypatch.setattr(ops, "urlopen", _fake_urlopen)
+
+    rc = ops.main(
+        [
+            "set-runtime-region",
+            "--env",
+            "prod",
+            "--region",
+            "eu-central-1",
+            "--lock-id",
+            "lock-explicit",
+        ]
+    )
+
+    assert rc == 0
+    assert seen["body"] == {"targetRegion": "eu-central-1", "lockId": "lock-explicit"}
+
+
+def test_set_runtime_region_requires_lock_id_when_no_saved_token(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    creds_path = tmp_path / ".platform" / "credentials"
+    token_path = tmp_path / ".build" / "failover-lock-token.json"
+    monkeypatch.setenv("PLATFORM_CREDENTIALS_PATH", str(creds_path))
+    monkeypatch.setenv("FAILOVER_LOCK_TOKEN_PATH", str(token_path))
+    _write_creds(
+        creds_path,
+        env_name="prod",
+        token="failover-token",
+        api_base_url="https://ops.example.com",
+    )
+
+    rc = ops.main(["set-runtime-region", "--env", "prod", "--region", "eu-central-1"])
+
+    assert rc == 2
+    assert "Failover lock id required" in capsys.readouterr().err
+
+
+def test_parse_args_rejects_removed_failover_lock_api_commands() -> None:
+    with pytest.raises(SystemExit):
+        ops.parse_args(["failover-lock-acquire"])
+
+    with pytest.raises(SystemExit):
+        ops.parse_args(["failover-lock-release"])
 
 
 def test_api_error_returns_nonzero_and_prints_error(monkeypatch, tmp_path: Path, capsys) -> None:

@@ -19,7 +19,7 @@ make ops-service-health ENV=prod
 ### 2. Acquire distributed lock
 ```bash
 make failover-lock-acquire ENV=prod
-# IMPORTANT: must succeed before touching SSM
+# IMPORTANT: must succeed before calling the failover API
 # If lock already held: another operator is acting — coordinate before proceeding
 # Expected output: Lock acquired: platform-runtime-failover
 ```
@@ -27,7 +27,8 @@ make failover-lock-acquire ENV=prod
 ### 3. Switch runtime region
 ```bash
 make infra-set-runtime-region REGION=eu-central-1 ENV=prod
-# Updates SSM /platform/config/runtime-region
+# Calls POST /v1/platform/failover
+# Uses the saved lock token from step 2 unless LOCK_ID is passed explicitly
 # Bridge Lambda caches this for 60s — allow 90s for all instances to pick up
 # Expected output: Runtime region updated to eu-central-1
 ```

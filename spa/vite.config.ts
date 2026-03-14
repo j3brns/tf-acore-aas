@@ -13,7 +13,6 @@ export default defineConfig({
       include: [
         "src/pages/AgentCataloguePage.tsx",
         "src/pages/InvokePage.tsx",
-        "src/pages/SessionsPage.tsx",
         "src/pages/AdminPage.tsx",
         "src/hooks/useJobPolling.ts",
       ],

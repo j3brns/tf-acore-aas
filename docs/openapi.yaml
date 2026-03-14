@@ -170,35 +170,6 @@ paths:
         "504":
           $ref: "#/components/responses/GatewayTimeout"
 
-  /v1/sessions:
-    get:
-      tags: [Sessions]
-      operationId: listSessions
-      summary: List active sessions
-      description: >
-        Returns active sessions for the caller's tenant.
-      responses:
-        "200":
-          description: Session list
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/SessionSummary"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-
   /v1/tenants:
     post:
       tags: [Tenants]

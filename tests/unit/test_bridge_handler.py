@@ -85,6 +85,18 @@ def setup_data(mock_aws_services):
         ],
         BillingMode="PAY_PER_REQUEST",
     )
+    ddb.create_table(
+        TableName="platform-tenants",
+        KeySchema=[
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
 
     # Seed agent
     agents_table = ddb.Table("platform-agents")
@@ -102,6 +114,19 @@ def setup_data(mock_aws_services):
             "deployed_at": "2026-01-01T00:00:00Z",
             "invocation_mode": "sync",
             "streaming_enabled": True,
+        }
+    )
+
+    # Seed tenant
+    tenants_table = ddb.Table("platform-tenants")
+    tenants_table.put_item(
+        Item={
+            "PK": "TENANT#t-001",
+            "SK": "METADATA",
+            "tenant_id": "t-001",
+            "app_id": "app-001",
+            "status": "active",
+            "account_id": "123456789012",
         }
     )
 
@@ -863,68 +888,10 @@ def test_client_initializers_require_aws_region(monkeypatch):
             bridge_module.get_dynamodb()
 
 
-def test_register_and_delete_webhook(setup_data):
-    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
-    jobs_table = ddb.Table("platform-jobs")
-
-    register_event = {
-        "httpMethod": "POST",
-        "path": "/v1/webhooks",
-        "requestContext": {
-            "authorizer": {
-                "tenantid": "t-001",
-                "appid": "app-001",
-                "tier": "basic",
-                "sub": "user-1",
-            }
-        },
-        "body": json.dumps(
-            {
-                "callbackUrl": "https://example.com/webhooks/platform",
-                "events": ["job.completed", "job.failed"],
-                "description": "Ops endpoint",
-            }
-        ),
-    }
-
-    register_response = handler(register_event, FakeLambdaContext())
-    assert register_response["statusCode"] == 201
-    register_body = json.loads(register_response["body"])
-
-    webhook_id = register_body["webhookId"]
-    assert register_body["callbackUrl"] == "https://example.com/webhooks/platform"
-    assert register_body["events"] == ["job.completed", "job.failed"]
-    assert register_body["signatureHeader"] == "X-Platform-Signature"
-
-    webhook_record = jobs_table.get_item(Key={"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"})
-    assert webhook_record["Item"]["tenant_id"] == "t-001"
-    assert webhook_record["Item"]["callback_url"] == "https://example.com/webhooks/platform"
-    assert "signature_secret" in webhook_record["Item"]
-    assert "signature_secret" not in register_body
-
-    delete_event = {
-        "httpMethod": "DELETE",
-        "path": f"/v1/webhooks/{webhook_id}",
-        "pathParameters": {"webhookId": webhook_id},
-        "requestContext": {
-            "authorizer": {
-                "tenantid": "t-001",
-                "appid": "app-001",
-                "tier": "basic",
-                "sub": "user-1",
-            }
-        },
-    }
-
-    delete_response = handler(delete_event, FakeLambdaContext())
-    assert delete_response["statusCode"] == 204
-    deleted = jobs_table.get_item(Key={"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"})
-    assert "Item" not in deleted
-
-
 def test_handler_async_uses_registered_webhook_callback(setup_data):
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
     agents_table = ddb.Table("platform-agents")
+    tenants_table = ddb.Table("platform-tenants")
     jobs_table = ddb.Table("platform-jobs")
 
     agents_table.put_item(
@@ -943,10 +910,10 @@ def test_handler_async_uses_registered_webhook_callback(setup_data):
             "streaming_enabled": False,
         }
     )
-    jobs_table.put_item(
+    tenants_table.put_item(
         Item={
-            "PK": "WEBHOOK#webhook-001",
-            "SK": "METADATA",
+            "PK": "TENANT#t-001",
+            "SK": "WEBHOOK#webhook-001",
             "webhook_id": "webhook-001",
             "tenant_id": "t-001",
             "app_id": "app-001",

@@ -71,12 +71,14 @@ export const sessionsList: SessionsListResponseDto = {
 export const healthOk: HealthResponseDto = {
   status: "ok",
   version: "0.1.0",
+  runtimeRegion: "eu-west-1",
   timestamp: "2026-03-01T09:00:00Z",
 };
 
 export const healthFail: HealthResponseDto = {
   status: "fail",
   version: "0.1.0",
+  runtimeRegion: "eu-west-1",
   timestamp: "2026-03-01T09:00:00Z",
 };
 

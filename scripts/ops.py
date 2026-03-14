@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 DEFAULT_ENV = "dev"
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_TOKEN_TTL_SECONDS = 3600
+DEFAULT_FAILOVER_LOCK_TOKEN_PATH = ".build/failover-lock-token.json"
 _TOKEN_ENV_NAMES = ("OPS_ACCESS_TOKEN", "PLATFORM_ACCESS_TOKEN", "BEARER_TOKEN")
 
 
@@ -36,6 +37,11 @@ class ApiOperation:
 class ApiResponse:
     status_code: int
     payload: Any
+
+
+@dataclass(frozen=True)
+class FailoverLockToken:
+    lock_id: str
 
 
 class OpsCliError(RuntimeError):
@@ -97,6 +103,29 @@ def _load_credentials_store(path: Path) -> dict[str, Any]:
     if not isinstance(profiles, dict):
         parsed["profiles"] = {}
     return parsed
+
+
+def _failover_lock_token_path() -> Path:
+    override = os.environ.get("FAILOVER_LOCK_TOKEN_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _repo_root() / DEFAULT_FAILOVER_LOCK_TOKEN_PATH
+
+
+def _load_failover_lock_token() -> FailoverLockToken | None:
+    path = _failover_lock_token_path()
+    if not path.exists():
+        return None
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return None
+
+    lock_id = str(raw.get("lockId", "")).strip()
+    if not lock_id:
+        return None
+
+    return FailoverLockToken(lock_id=lock_id)
 
 
 def _save_credentials_store(path: Path, store: dict[str, Any]) -> None:
@@ -348,15 +377,20 @@ def _command_to_operation(args: argparse.Namespace) -> ApiOperation:
             path="/v1/platform/ops/error-rate",
             query={"minutes": str(args.minutes)},
         )
-    if args.command == "failover-lock-acquire":
-        return ApiOperation(method="POST", path="/v1/platform/failover/lock/acquire")
-    if args.command == "failover-lock-release":
-        return ApiOperation(method="POST", path="/v1/platform/failover/lock/release")
     if args.command == "set-runtime-region":
+        lock_id = args.lock_id
+        if not lock_id:
+            token = _load_failover_lock_token()
+            if token is not None:
+                lock_id = token.lock_id
+        if not lock_id:
+            raise OpsCliError(
+                "Failover lock id required. Acquire the lock first or pass --lock-id."
+            )
         return ApiOperation(
             method="POST",
             path="/v1/platform/failover",
-            body={"runtimeRegion": args.region},
+            body={"targetRegion": args.region, "lockId": lock_id},
         )
     if args.command == "notify-tenant":
         tenant = quote(args.tenant, safe="")
@@ -474,24 +508,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_api_common_arguments(error_rate)
     error_rate.add_argument("--minutes", type=int, default=5)
 
-    failover_lock_acquire = subparsers.add_parser(
-        "failover-lock-acquire",
-        help="Acquire failover lock.",
-    )
-    _add_api_common_arguments(failover_lock_acquire)
-
-    failover_lock_release = subparsers.add_parser(
-        "failover-lock-release",
-        help="Release failover lock.",
-    )
-    _add_api_common_arguments(failover_lock_release)
-
     set_runtime_region = subparsers.add_parser(
         "set-runtime-region",
-        help="Set active runtime region.",
+        help="Trigger runtime region failover via the Admin API.",
     )
     _add_api_common_arguments(set_runtime_region)
     set_runtime_region.add_argument("--region", required=True)
+    set_runtime_region.add_argument(
+        "--lock-id",
+        default=None,
+        help="Failover lock id. Defaults to the saved token from failover-lock-acquire.",
+    )
 
     notify_tenant = subparsers.add_parser("notify-tenant", help="Notify tenant owner.")
     _add_api_common_arguments(notify_tenant)

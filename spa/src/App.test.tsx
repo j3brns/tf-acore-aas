@@ -16,10 +16,6 @@ vi.mock("./pages/AgentCataloguePage", () => ({
   AgentCataloguePage: () => <div>Agent Catalogue Page</div>,
 }));
 
-vi.mock("./pages/SessionsPage", () => ({
-  SessionsPage: () => <div>Sessions Page</div>,
-}));
-
 vi.mock("./pages/InvokePage", () => ({
   InvokePage: () => <div>Invoke Page</div>,
 }));
@@ -102,9 +98,9 @@ describe("AppRoutes", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Access Denied")).toBeInTheDocument();
+    expect(screen.getByText("Unauthorized Access")).toBeInTheDocument();
     expect(
-      screen.getByText(/Platform operator routes require the `Platform\.Admin` or `Platform\.Operator` role\./i),
+      screen.getByText(/You do not have the required/i),
     ).toBeInTheDocument();
   });
 
@@ -126,7 +122,7 @@ describe("AppRoutes", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Tenant Route Unavailable")).toBeInTheDocument();
-    expect(screen.getByText(/token does not contain tenant context/i)).toBeInTheDocument();
+    expect(screen.getByText("Provisioning Required")).toBeInTheDocument();
+    expect(screen.getByText(/has not yet been assigned to a tenant/i)).toBeInTheDocument();
   });
 });

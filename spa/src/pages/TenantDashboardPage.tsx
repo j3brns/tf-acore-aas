@@ -121,12 +121,11 @@ export const TenantDashboardPage: React.FC = () => {
                 </section>
 
                 <section className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
                         <h2 className="font-semibold text-gray-900">Recent Sessions</h2>
-                        <Link to="/sessions" className="text-xs text-blue-600 hover:underline">View all</Link>
                     </div>
                     <div className="p-6 text-center text-gray-500 text-sm">
-                        No active sessions found.
+                        Session listing will return once tenant-backed session tracking is implemented.
                     </div>
                 </section>
             </div>

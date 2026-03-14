@@ -17,6 +17,12 @@ vi.mock("../auth/useAuth", () => ({
   useAuth: vi.fn(),
 }));
 
+vi.mock("../components/Notifications", () => ({
+  useNotifications: vi.fn(() => ({
+    notify: vi.fn(),
+  })),
+}));
+
 describe("AdminPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -33,7 +39,10 @@ describe("AdminPage", () => {
       .fn()
       .mockResolvedValueOnce(healthOk)
       .mockResolvedValueOnce(tenantRows)
-      .mockResolvedValueOnce(quotaRows);
+      .mockResolvedValueOnce(quotaRows)
+      .mockResolvedValueOnce({ tenants: [] })
+      .mockResolvedValueOnce({ events: [] })
+      .mockResolvedValueOnce(null);
     vi.mocked(getApiClient).mockReturnValue(createApiClientMock({ request }) as never);
 
     render(<AdminPage />);
@@ -57,7 +66,10 @@ describe("AdminPage", () => {
       .fn()
       .mockResolvedValueOnce(healthFail)
       .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ utilisation: [] });
+      .mockResolvedValueOnce({ utilisation: [] })
+      .mockResolvedValueOnce({ tenants: [] })
+      .mockResolvedValueOnce({ events: [] })
+      .mockResolvedValueOnce(null);
     vi.mocked(getApiClient).mockReturnValue(createApiClientMock({ request }) as never);
 
     render(<AdminPage />);
