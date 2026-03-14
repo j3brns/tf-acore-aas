@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.tenant_api import handler as tenant_api_handler
 
 
 def _load_openapi() -> dict:
@@ -67,3 +72,20 @@ def test_openapi_bff_token_refresh_contract_restricts_to_platform_scopes() -> No
     assert "sessionId" not in properties
     scope_items = properties.get("scopes", {}).get("items", {})
     assert scope_items.get("pattern") == "^api://[A-Za-z0-9-]+/[A-Za-z][A-Za-z0-9._-]{0,127}$"
+
+
+def test_openapi_split_accounts_target_account_id_pattern_matches_runtime_validator() -> None:
+    spec = _load_openapi()
+    schema = (
+        spec.get("paths", {})
+        .get("/v1/platform/quota/split-accounts", {})
+        .get("post", {})
+        .get("requestBody", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+    )
+    target_account_schema = schema.get("properties", {}).get("targetAccountId", {})
+
+    assert target_account_schema.get("pattern") == "^[0-9]{12}$"
+    assert tenant_api_handler._AWS_ACCOUNT_ID_PATTERN.pattern == "^[0-9]{12}$"
