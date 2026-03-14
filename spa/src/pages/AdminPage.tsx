@@ -131,7 +131,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ initialSection = "overview
   };
 
   const handleFailover = async () => {
-    const targetRegion = health?.version.includes("eu-west-1") ? "eu-central-1" : "eu-west-1";
+    const targetRegion = health?.runtimeRegion.includes("eu-west-1") ? "eu-central-1" : "eu-west-1";
     if (!window.confirm(`Are you sure you want to trigger failover to ${targetRegion}?`)) {
       return;
     }
@@ -322,7 +322,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ initialSection = "overview
         <div className="px-4 py-5 sm:p-6 flex flex-wrap gap-x-12 gap-y-6">
           <div className="flex flex-col">
             <span className="text-xs text-gray-500 uppercase font-bold">Runtime Region</span>
-            <span className="text-sm text-gray-900">{health?.version ?? "N/A"}</span>
+            <span className="text-sm text-gray-900">{health?.runtimeRegion ?? "N/A"}</span>
           </div>
           <div className="flex flex-col">
             <span className="text-xs text-gray-500 uppercase font-bold">Health Checks</span>

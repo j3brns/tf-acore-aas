@@ -1020,6 +1020,7 @@ def test_health_route_returns_openapi_shape(fake_state: dict[str, Any]) -> None:
     body = _body(response)
     assert body["status"] == "ok"
     assert "version" in body
+    assert "runtimeRegion" in body
     assert "timestamp" in body
 
 

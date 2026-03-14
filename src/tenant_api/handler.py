@@ -1415,12 +1415,20 @@ def _handle_platform_failover(
     )
 
 
-def _handle_health() -> dict[str, Any]:
+def _handle_health(deps: TenantApiDependencies) -> dict[str, Any]:
+    try:
+        region_param = deps.ssm.get_parameter(Name=_runtime_region_param_name())
+        runtime_region = region_param["Parameter"]["Value"]
+    except Exception:
+        logger.warning("Failed to fetch runtime region from SSM, using default")
+        runtime_region = os.environ.get("RUNTIME_REGION_DEFAULT", "eu-west-1")
+
     return _response(
         200,
         {
             "status": "ok",
             "version": os.environ.get("SERVICE_VERSION", "0.1.0"),
+            "runtimeRegion": runtime_region,
             "timestamp": _iso(_now_utc()),
             "checks": {"tenantApi": {"status": "ok"}},
         },
@@ -1885,7 +1893,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     try:
         tenant_id = _validated_path_tenant_id(event)
         if path == "/v1/health" and method == "GET":
-            return _handle_health()
+            return _handle_health(deps)
         if path == "/v1/sessions" and method == "GET":
             return _handle_sessions(event, caller)
 
