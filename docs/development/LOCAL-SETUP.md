@@ -78,6 +78,16 @@ Testing fixture screenshot for the Admin console:
 
 The screenshot uses synthetic test data for documentation and QA walkthroughs.
 
+Additional SPA previews for docs and onboarding:
+
+- ![Tenant dashboard preview](../images/tf_acore_aas_portal_tenant_dashboard.svg)
+- ![Admin overview preview](../images/tf_acore_aas_portal_admin_overview.svg)
+- ![Members and invites preview](../images/tf_acore_aas_portal_members.svg)
+- ![Webhooks preview](../images/tf_acore_aas_portal_webhooks.svg)
+- ![Invoke flow preview](../images/tf_acore_aas_portal_invoke.svg)
+
+These are stable fixture-based renders derived from the current SPA page structure, not browser screenshots from a live environment.
+
 ## Common Issues
 
 **LocalStack not starting**: ensure Docker is running (`docker ps` should work).

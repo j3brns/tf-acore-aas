@@ -44,6 +44,7 @@ Every significant design choice is documented with context, decision, and reject
 | [ADR-011](decisions/ADR-011-thin-bff.md) | Thin BFF for token refresh and session keepalive only |
 | [ADR-012](decisions/ADR-012-dynamodb-capacity.md) | On-demand for invocations; provisioned for config tables |
 | [ADR-013](decisions/ADR-013-entra-rbac-roles-claim.md) | Entra group membership as JWT roles claim for RBAC |
+| [ADR-014](decisions/ADR-014-minimise-vpc-bound-services.md) | Default non-VPC control plane; VPC attachment only for genuine private dependencies |
 
 ## Operator Runbooks
 
@@ -116,6 +117,16 @@ Deployment order, cross-stack resource wiring, and environment boundaries.
 | Engineer | Engineers | [tf_acore_aas_cdk_dependencies_engineer.drawio.png](images/tf_acore_aas_cdk_dependencies_engineer.drawio.png) |
 | Executive | Leadership | [tf_acore_aas_cdk_dependencies_exec.drawio.png](images/tf_acore_aas_cdk_dependencies_exec.drawio.png) |
 
+### VPC Dependency Policy
+
+Decision picture for ADR-014: shared control-plane Lambdas stay outside the VPC by default, while private-only dependencies are isolated behind narrow VPC adapters.
+
+![VPC dependency policy: default non-VPC control plane with narrow VPC exceptions](images/tf_acore_aas_vpc_dependency_policy.drawio.png)
+
+| Variant | Audience | File |
+|---------|----------|------|
+| Standard | Engineers / reviewers | [tf_acore_aas_vpc_dependency_policy.drawio.png](images/tf_acore_aas_vpc_dependency_policy.drawio.png) |
+
 ### Entity State Diagram
 
 Core platform entities — tenants, agents, invocations, jobs, sessions — and their lifecycle state transitions.
@@ -135,6 +146,20 @@ Admin console snapshot for testing documentation and demos.
 | View | Audience | File | Notes |
 |------|----------|------|-------|
 | Admin console | Engineers / QA | [tf_acore_aas_admin_console_testing.png](images/tf_acore_aas_admin_console_testing.png) | Synthetic test fixture data (not production tenant data). |
+
+### Portal Page Previews
+
+Fixture-based SVG previews of the main SPA views. These are documentation assets derived from the current page structure and synthetic test data; they are not live browser screenshots.
+
+![Tenant portal dashboard preview](images/tf_acore_aas_portal_tenant_dashboard.svg)
+
+| View | Audience | File | Notes |
+|------|----------|------|-------|
+| Tenant dashboard | Engineers / QA | [tf_acore_aas_portal_tenant_dashboard.svg](images/tf_acore_aas_portal_tenant_dashboard.svg) | Overview cards and quick actions from `TenantDashboardPage`. |
+| Admin overview | Engineers / operators | [tf_acore_aas_portal_admin_overview.svg](images/tf_acore_aas_portal_admin_overview.svg) | Platform health, quota, and tenant portfolio preview. |
+| Members & invites | Engineers / QA | [tf_acore_aas_portal_members.svg](images/tf_acore_aas_portal_members.svg) | Invitation workflow and pending invite table. |
+| Webhooks | Engineers / QA | [tf_acore_aas_portal_webhooks.svg](images/tf_acore_aas_portal_webhooks.svg) | Registered webhooks plus create form preview. |
+| Invoke flow | Engineers / agent developers | [tf_acore_aas_portal_invoke.svg](images/tf_acore_aas_portal_invoke.svg) | Prompt form with async job status panel. |
 
 ## Diagram Semantics
 

@@ -19,6 +19,26 @@ via a local stack .. And a super fast self-service pipeline — no platform rele
 - **EU-only data residency** — current approved topology keeps data in eu-west-2 London and runtime in eu-west-1 Dublin (~12ms RTT)
 - **LocalStack DevX** — full local inner loop without AWS credentials
 
+## Portal Experience
+
+The SPA is the operator and tenant-facing control surface for the platform. It covers:
+
+- **Tenant dashboard** — daily usage, budget posture, tier/status, and quick actions for keys, members, webhooks, and audit export
+- **Platform admin** — cross-region health, quota headroom, tenant portfolio status, and operator actions
+- **Members and invites** — tenant-scoped user access and invitation workflow
+- **Webhooks** — async job callback registration and lifecycle management
+- **Invoke flow** — prompt submission, streaming or async status tracking, and session continuity
+
+Portal previews in the docs:
+
+- [Tenant dashboard preview](docs/images/tf_acore_aas_portal_tenant_dashboard.svg)
+- [Admin overview preview](docs/images/tf_acore_aas_portal_admin_overview.svg)
+- [Members and invites preview](docs/images/tf_acore_aas_portal_members.svg)
+- [Webhooks preview](docs/images/tf_acore_aas_portal_webhooks.svg)
+- [Invoke flow preview](docs/images/tf_acore_aas_portal_invoke.svg)
+
+These are fixture-based documentation renders derived from the current SPA page structure, not live production screenshots.
+
 ## Quick Start
 
 **Prerequisites**: [uv](https://docs.astral.sh/uv/) (>=0.4), Docker (>=24), AWS CLI v2, Node 20 LTS, npm, GitLab access, Entra group membership.
@@ -100,7 +120,7 @@ tf-acore-aas/
 │   ├── TASKS.md               Task snapshot (GitHub Issues are canonical)
 │   ├── bootstrap-guide.md     Day-zero deployment
 │   ├── entra-setup.md         Entra app registration
-│   ├── decisions/             ADR-001..013
+│   ├── decisions/             ADR-001..014
 │   ├── operations/            RUNBOOK-000..009
 │   ├── security/              Threat model, compliance checklist
 │   ├── development/           Local setup, agent developer guide
@@ -209,6 +229,7 @@ See [CLAUDE.md](CLAUDE.md) for full conventions and branch naming patterns.
 | Document | Audience | Description |
 |----------|----------|-------------|
 | [Documentation Suite](docs/README.md) | All | Entry point, diagram catalog, role-based reading guide |
+| [Portal Previews](docs/README.md#portal-page-previews) | Engineers / QA / Ops | Fixture-based previews of the tenant and admin SPA views |
 | [Architecture](docs/ARCHITECTURE.md) | Engineers | System topology, data model, scaling, failure modes |
 | [Roadmap](docs/ROADMAP.md) | All | Vision, milestones M1–M7, V1.x backlog |
 | [Delivery Plan](docs/PLAN.md) | Engineers | Phased plan with gates and success criteria |
@@ -219,7 +240,7 @@ See [CLAUDE.md](CLAUDE.md) for full conventions and branch naming patterns.
 | [Threat Model](docs/security/THREAT-MODEL.md) | Security | Threat analysis and mitigations |
 | [Compliance Checklist](docs/security/COMPLIANCE-CHECKLIST.md) | Security | Controls and evidence tracking |
 | [Operator Runbooks](docs/operations/) | Ops | RUNBOOK-000..009 incident procedures |
-| [Architecture Decisions](docs/decisions/) | Engineers | ADR-001..013 |
+| [Architecture Decisions](docs/decisions/) | Engineers | ADR-001..014 |
 | [GitHub Issues](https://github.com/j3brns/tf-acore-aas/issues) | All | Canonical task queue |
 
 ## Contacts

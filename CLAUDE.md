@@ -343,7 +343,7 @@ git worktree prune
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **tf-acore-aas** (2050 symbols, 6290 relationships, 165 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **tf-acore-aas** (2410 symbols, 7629 relationships, 196 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -410,24 +410,6 @@ Before completing any code modification task, verify:
 2. No HIGH/CRITICAL risk warnings were ignored
 3. `gitnexus_detect_changes()` confirms changes match expected scope
 4. All d=1 (WILL BREAK) dependents were updated
-
-## Keeping the Index Fresh
-
-After every local `git commit` and after every merge into your working branch, the GitNexus index becomes stale. Re-run analyze to update it immediately:
-
-```bash
-npx gitnexus analyze
-```
-
-If the index previously included embeddings, preserve them by adding `--embeddings`:
-
-```bash
-npx gitnexus analyze --embeddings
-```
-
-To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
-
-This is mandatory. Do not assume a local hook or client automation exists; if you make a commit or complete a merge, run the appropriate `gitnexus analyze` command yourself before continuing.
 
 ## CLI
 

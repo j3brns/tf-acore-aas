@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="980" viewBox="0 0 1440 980" role="img" aria-labelledby="title desc">
+  <title id="title">Tenant members page preview</title>
+  <desc id="desc">Synthetic render of the members and invites page using SPA structure and sample invite rows.</desc>
+  <rect width="1440" height="980" fill="#f3f4f6"/>
+  <text x="48" y="70" fill="#111827" font-family="Arial, sans-serif" font-size="34" font-weight="700">Members &amp; Invites</text>
+  <text x="48" y="102" fill="#6b7280" font-family="Arial, sans-serif" font-size="18">Manage user access for test-tenant</text>
+  <rect x="40" y="148" width="910" height="742" rx="18" fill="#ffffff" stroke="#d1d5db"/>
+  <rect x="40" y="148" width="910" height="72" rx="18" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="72" y="192" fill="#111827" font-family="Arial, sans-serif" font-size="24" font-weight="700">Pending Invitations</text>
+  <text x="72" y="262" fill="#6b7280" font-family="Arial, sans-serif" font-size="16" font-weight="700">EMAIL</text>
+  <text x="440" y="262" fill="#6b7280" font-family="Arial, sans-serif" font-size="16" font-weight="700">ROLE</text>
+  <text x="650" y="262" fill="#6b7280" font-family="Arial, sans-serif" font-size="16" font-weight="700">STATUS</text>
+  <text x="790" y="262" fill="#6b7280" font-family="Arial, sans-serif" font-size="16" font-weight="700">EXPIRES</text>
+  <line x1="72" y1="286" x2="918" y2="286" stroke="#e5e7eb"/>
+  <text x="72" y="338" fill="#111827" font-family="Arial, sans-serif" font-size="20">alice@example.com</text>
+  <text x="440" y="338" fill="#6b7280" font-family="Arial, sans-serif" font-size="20">Agent.Invoke</text>
+  <rect x="650" y="312" width="94" height="34" rx="17" fill="#fef3c7"/>
+  <text x="674" y="334" fill="#92400e" font-family="Arial, sans-serif" font-size="16" font-weight="700">pending</text>
+  <text x="790" y="338" fill="#6b7280" font-family="Arial, sans-serif" font-size="20">2026-03-20</text>
+  <line x1="72" y1="362" x2="918" y2="362" stroke="#e5e7eb"/>
+  <text x="72" y="414" fill="#111827" font-family="Arial, sans-serif" font-size="20">ops@example.com</text>
+  <text x="440" y="414" fill="#6b7280" font-family="Arial, sans-serif" font-size="20">Platform.Operator</text>
+  <rect x="650" y="388" width="94" height="34" rx="17" fill="#fef3c7"/>
+  <text x="674" y="410" fill="#92400e" font-family="Arial, sans-serif" font-size="16" font-weight="700">pending</text>
+  <text x="790" y="414" fill="#6b7280" font-family="Arial, sans-serif" font-size="20">2026-03-22</text>
+  <rect x="980" y="148" width="420" height="468" rx="18" fill="#ffffff" stroke="#d1d5db"/>
+  <rect x="980" y="148" width="420" height="72" rx="18" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="1012" y="192" fill="#111827" font-family="Arial, sans-serif" font-size="24" font-weight="700">Invite New User</text>
+  <text x="1012" y="270" fill="#374151" font-family="Arial, sans-serif" font-size="18" font-weight="700">Email Address</text>
+  <rect x="1012" y="286" width="356" height="52" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="1030" y="318" fill="#9ca3af" font-family="Arial, sans-serif" font-size="18">name@example.com</text>
+  <text x="1012" y="392" fill="#374151" font-family="Arial, sans-serif" font-size="18" font-weight="700">Role</text>
+  <rect x="1012" y="408" width="356" height="52" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="1030" y="440" fill="#111827" font-family="Arial, sans-serif" font-size="18">Agent.Invoke (Basic Access)</text>
+  <rect x="1012" y="504" width="356" height="52" rx="12" fill="#2563eb"/>
+  <text x="1140" y="536" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Send Invite</text>
+  <rect x="980" y="648" width="420" height="242" rx="18" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="1012" y="700" fill="#111827" font-family="Arial, sans-serif" font-size="24" font-weight="700">Access Pattern Note</text>
+  <text x="1012" y="742" fill="#4b5563" font-family="Arial, sans-serif" font-size="18">This preview reflects the current page structure</text>
+  <text x="1012" y="772" fill="#4b5563" font-family="Arial, sans-serif" font-size="18">and fixture content used in documentation.</text>
+  <text x="1012" y="822" fill="#6b7280" font-family="Arial, sans-serif" font-size="16">Role options shown here mirror the SPA today,</text>
+  <text x="1012" y="846" fill="#6b7280" font-family="Arial, sans-serif" font-size="16">including the admin-role invite path under review.</text>
+</svg>

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="980" viewBox="0 0 1440 980" role="img" aria-labelledby="title desc">
+  <title id="title">Invoke page preview</title>
+  <desc id="desc">Synthetic render of the agent invoke page showing the prompt form and async job status.</desc>
+  <rect width="1440" height="980" fill="#f3f4f6"/>
+  <text x="72" y="74" fill="#2563eb" font-family="Arial, sans-serif" font-size="18">← Back to Catalogue</text>
+  <rect x="56" y="108" width="1328" height="462" rx="18" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="96" y="170" fill="#111827" font-family="Arial, sans-serif" font-size="34" font-weight="700">Invoke: echo-agent</text>
+  <text x="96" y="204" fill="#6b7280" font-family="Arial, sans-serif" font-size="18">Version 1.0.0 • async mode</text>
+  <text x="96" y="278" fill="#374151" font-family="Arial, sans-serif" font-size="18" font-weight="700">Prompt</text>
+  <rect x="96" y="296" width="1248" height="146" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="122" y="336" fill="#9ca3af" font-family="Arial, sans-serif" font-size="18">Enter your instructions for the agent...</text>
+  <text x="96" y="492" fill="#4b5563" font-family="Arial, sans-serif" font-size="18">Invocation mode is configured by the agent:</text>
+  <text x="430" y="492" fill="#111827" font-family="Arial, sans-serif" font-size="18" font-weight="700">async</text>
+  <rect x="96" y="522" width="1248" height="52" rx="12" fill="#2563eb"/>
+  <text x="664" y="554" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Submit</text>
+  <rect x="56" y="610" width="1328" height="138" rx="18" fill="#eff6ff" stroke="#60a5fa"/>
+  <text x="88" y="662" fill="#1e3a8a" font-family="Arial, sans-serif" font-size="22" font-weight="700">Async Job Started</text>
+  <text x="88" y="700" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="18">Job ID: job-777</text>
+  <text x="88" y="730" fill="#1d4ed8" font-family="Arial, sans-serif" font-size="18" font-weight="700">Status: pending</text>
+  <rect x="56" y="782" width="1328" height="154" rx="18" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="88" y="832" fill="#111827" font-family="Arial, sans-serif" font-size="24" font-weight="700">Response</text>
+  <rect x="88" y="850" width="1264" height="58" rx="10" fill="#f9fafb" stroke="#e5e7eb"/>
+  <text x="112" y="886" fill="#6b7280" font-family="Courier New, monospace" font-size="18">Result stream or final output appears here once the invocation completes.</text>
+</svg>
