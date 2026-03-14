@@ -4,7 +4,6 @@ import { NotificationProvider } from "./components/Notifications";
 import { PageBanner } from "./components/PageBanner";
 import { AgentCataloguePage } from "./pages/AgentCataloguePage";
 import { InvokePage } from "./pages/InvokePage";
-import { SessionsPage } from "./pages/SessionsPage";
 import { AdminPage } from "./pages/AdminPage";
 import { TenantDashboardPage } from "./pages/TenantDashboardPage";
 import { TenantApiKeysPage } from "./pages/TenantApiKeysPage";
@@ -57,8 +56,6 @@ export function AppRoutes() {
       <Route path="/" element={<Navigate to={isOperator ? "/operations/overview" : "/agents"} replace />} />
       <Route path="/agents" element={<AgentCataloguePage />} />
       <Route path="/invoke/:agentName" element={<InvokePage />} />
-      <Route path="/sessions" element={<SessionsPage />} />
-      <Route path="/jobs" element={<SessionsPage />} /> {/* Placeholder until JobsPage exists */}
       <Route path="/tenant" element={<Navigate to="/tenant/overview" replace />} />
       
       <Route path="/tenant/overview" element={

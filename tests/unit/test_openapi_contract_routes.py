@@ -23,6 +23,7 @@ def test_openapi_declares_canonical_invoke_and_jobs_routes() -> None:
     assert "/v1/agents/{agentName}/invoke" in paths
     assert "/v1/jobs/{jobId}" in paths
     assert "/v1/invoke" not in paths
+    assert "/v1/sessions" not in paths
 
     invoke_operation = paths["/v1/agents/{agentName}/invoke"].get("post", {})
     assert invoke_operation.get("operationId") == "invokeAgent"

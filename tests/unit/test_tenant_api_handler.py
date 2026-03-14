@@ -1127,15 +1127,16 @@ def test_health_route_returns_openapi_shape(fake_state: dict[str, Any]) -> None:
     assert "timestamp" in body
 
 
-def test_sessions_route_returns_items_list(fake_state: dict[str, Any]) -> None:
+def test_sessions_route_returns_not_implemented(fake_state: dict[str, Any]) -> None:
     event = _event(method="GET", roles=[], caller_tenant_id="t-001", app_id="app-001")
     event["path"] = "/v1/sessions"
     event["queryStringParameters"] = {"limit": "5"}
     response = _invoke(event)
 
-    assert response["statusCode"] == 200
-    body = _body(response)
-    assert body == {"items": []}
+    assert response["statusCode"] == 501
+    error = _body(response)["error"]
+    assert error["code"] == "NOT_IMPLEMENTED"
+    assert "tenant-backed session tracking" in error["message"]
 
 
 def test_sessions_route_rejects_invalid_limit(fake_state: dict[str, Any]) -> None:

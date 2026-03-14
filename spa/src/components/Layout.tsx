@@ -37,11 +37,6 @@ const navigationGroups: NavigationGroup[] = [
         description: "Browse and invoke platform agents.",
       },
       {
-        label: "Sessions",
-        path: "/sessions",
-        description: "Review current and recent activity.",
-      },
-      {
         label: "Jobs",
         path: "/jobs",
         description: "Track long-running async tasks.",

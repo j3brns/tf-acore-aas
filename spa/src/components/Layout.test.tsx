@@ -44,10 +44,10 @@ describe("Layout", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: /agents/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /access/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /quota/i })).toBeInTheDocument();
-    expect(screen.getAllByText("tenant-acme").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /agents/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /access control/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /infrastructure/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("tenant-a").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Platform Operator").length).toBeGreaterThan(0);
   });
 
@@ -75,13 +75,17 @@ describe("Layout", () => {
     );
 
     const [trigger] = screen.getAllByRole("button", { name: /open navigation/i });
+    const navigation = document.getElementById("mobile-navigation");
+
+    expect(navigation).not.toBeNull();
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(navigation).toHaveClass("-translate-x-full");
 
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("dialog", { name: /primary navigation/i })).toBeInTheDocument();
+    expect(navigation).toHaveClass("translate-x-0");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: /primary navigation/i })).not.toBeInTheDocument();
+    expect(navigation).toHaveClass("-translate-x-full");
   });
 });
