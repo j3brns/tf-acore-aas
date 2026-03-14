@@ -15,7 +15,7 @@ from src.authoriser.handler import generate_policy, handler, is_admin_route
 OS_ENV = {
     "AWS_REGION": "eu-west-2",
     "AWS_DEFAULT_REGION": "eu-west-2",
-    "AWS_SECRET_ACCESS_KEY": "testing",
+    "AWS_SECRET_ACCESS_KEY": "testing",  # pragma: allowlist secret
     "AWS_SESSION_TOKEN": "testing",
     "AWS_EC2_METADATA_DISABLED": "true",
     "ENTRA_JWKS_URL": "http://localhost:8766/.well-known/jwks.json",
@@ -590,9 +590,7 @@ def test_get_tenant_status_no_table(mock_env):
 
 
 @patch("src.authoriser.handler.get_dynamodb")
-def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(
-    mock_get_dynamodb, mock_env
-):
+def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_get_dynamodb, mock_env):
     from src.authoriser.handler import resolve_sigv4_tenant_binding
 
     mock_table = MagicMock()
@@ -605,8 +603,7 @@ def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(
                     "appId": "app-001",
                     "tier": "not-a-tier",
                     "executionRoleArn": (
-                        "arn:aws:iam::123456789012:role/"
-                        "platform-tenant-t-test-001-execution-role"
+                        "arn:aws:iam::123456789012:role/platform-tenant-t-test-001-execution-role"
                     ),
                 }
             ]
