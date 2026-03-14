@@ -1428,9 +1428,12 @@ def _handle_sessions(event: dict[str, Any], caller: CallerIdentity) -> dict[str,
     except (TypeError, ValueError):
         return _error(400, "BAD_REQUEST", "limit must be an integer between 1 and 100")
 
-    # Session tracking table wiring is pending. Keep schema-compatible list shape for SPA consumers.
     _ = limit
-    return _response(200, {"items": []})
+    return _error(
+        501,
+        "NOT_IMPLEMENTED",
+        "Session listing is not available until tenant-backed session tracking is implemented",
+    )
 
 
 def _handle_platform_quota(

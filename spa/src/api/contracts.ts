@@ -32,36 +32,6 @@ export function toAgentCatalogueItem(dto: AgentSummaryDto): AgentCatalogueItem {
   };
 }
 
-export type SessionSummaryDto = {
-  sessionId: string;
-  agentName: string;
-  startedAt: string;
-  lastActivityAt: string;
-  status: "active" | "completed" | "expired";
-};
-
-export type SessionsListResponseDto = {
-  items: SessionSummaryDto[];
-};
-
-export type SessionRow = {
-  sessionId: string;
-  agentName: string;
-  startedAt: string;
-  lastActivityAt: string;
-  status: "active" | "completed" | "expired";
-};
-
-export function toSessionRow(dto: SessionSummaryDto): SessionRow {
-  return {
-    sessionId: dto.sessionId,
-    agentName: dto.agentName,
-    startedAt: dto.startedAt,
-    lastActivityAt: dto.lastActivityAt,
-    status: dto.status,
-  };
-}
-
 export type TenantDto = {
   tenantId: string;
   appId: string;
@@ -216,14 +186,6 @@ export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
       "invocationMode",
       "streamingEnabled",
     ],
-  },
-  {
-    name: "sessions",
-    path: "/v1/sessions",
-    method: "get",
-    statusCode: "200",
-    collectionProperty: "items",
-    requiredFields: ["sessionId", "agentName", "startedAt", "lastActivityAt", "status"],
   },
   {
     name: "tenants",
