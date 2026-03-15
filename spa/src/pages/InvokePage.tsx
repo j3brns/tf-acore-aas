@@ -53,9 +53,16 @@ export const InvokePage: React.FC = () => {
 
     const invocationMode = agent?.invocationMode ?? "sync";
 
+    if (!isAuthenticated) {
+        return (
+            <PageBanner title="Authentication Required" severity="warning">
+                Your session is no longer authenticated. Sign in again to load this agent and continue.
+            </PageBanner>
+        );
+    }
+
     useEffect(() => {
         const fetchAgent = async () => {
-            if (!isAuthenticated) return;
             try {
                 const client = getApiClient(getAccessToken);
                 const data = await client.request<AgentDetailDto>(`/v1/agents/${agentName}`);
@@ -65,7 +72,7 @@ export const InvokePage: React.FC = () => {
             }
         };
         void fetchAgent();
-    }, [agentName, getAccessToken, isAuthenticated]);
+    }, [agentName, getAccessToken]);
 
     const handleInvoke = async (e: React.FormEvent) => {
         e.preventDefault();
