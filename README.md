@@ -4,11 +4,11 @@
 
 **a5c-cell** is a personal exploratory project: Production-informed, its a free formed framework for packaging agent workloads into repeatable, operable service cells on AWS-managed infrastructure.
 
+> _**a5c??** a5c is just a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I did need a name.._
+
 At its core, this project asks a practical question: can a bootable, paved, end-to-end stack for operations, tooling, agent development inner loops, and tenancy act as a reusable cellular platform layer, and is that layer worth the operational overhead when compared with runbooks, SOPs, and business-as-usual DevOps procedure?
 
 > The squeeze is real: overhead, maintenance, roadmap pressure, resourcing, operational demarcation, developer experience, inner loop speed, lifecycle management of hosted agents, and the continuing care and feeding of the framework itself.
-
-> **a5c** is a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I needed a name..
 
 Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and AgentCore to provide each cell with partitionable tenancy, operational tooling, logging, control points, a fast development inner loop, and for human users - a scaffolded single-page application exposure layer, on Cloudfront.
 
