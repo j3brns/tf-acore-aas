@@ -17,6 +17,7 @@ import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { resolveEntraConfiguration } from './entra-config';
 
 type PipelineRoleKey = 'validate' | 'deployDev' | 'deployStaging' | 'deployProd';
 
@@ -40,7 +41,7 @@ export class IdentityStack extends cdk.Stack {
     const gitlabOidcAudience = this.optionalContext('gitlabOidcAudience') ?? 'sts.amazonaws.com';
     const cdkBootstrapQualifier = this.optionalContext('cdkBootstrapQualifier') ?? 'hnb659fds';
     const deployBranch = this.optionalContext('gitlabDeployBranch') ?? 'main';
-    const entraJwksUrl = this.resolveEntraJwksUrl();
+    const entra = resolveEntraConfiguration(this);
 
     const gitlabOidcProvider = new iam.OpenIdConnectProvider(this, 'GitLabOidcProvider', {
       url: 'https://gitlab.com',
@@ -117,7 +118,7 @@ export class IdentityStack extends cdk.Stack {
 
     const entraJwksLayer = this.createEntraJwksLayer({
       envName,
-      jwksUrl: entraJwksUrl,
+      jwksUrl: entra.jwksUrl,
     });
 
     this.tenantDataKey = this.createPlatformKey({
@@ -162,7 +163,7 @@ export class IdentityStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'EntraJwksUrl', {
       description: 'Resolved Entra JWKS URL baked into the Lambda layer',
-      value: entraJwksUrl,
+      value: entra.jwksUrl,
     });
     new cdk.CfnOutput(this, 'TenantDataKmsKeyArn', {
       value: this.tenantDataKey.keyArn,
@@ -201,16 +202,6 @@ export class IdentityStack extends cdk.Stack {
       return undefined;
     }
     return value;
-  }
-
-  private resolveEntraJwksUrl(): string {
-    const explicitJwksUrl = this.optionalContext('entraJwksUrl');
-    if (explicitJwksUrl) {
-      return explicitJwksUrl;
-    }
-
-    const entraTenantId = this.optionalContext('entraTenantId') ?? 'common';
-    return `https://login.microsoftonline.com/${entraTenantId}/discovery/v2.0/keys`;
   }
 
   private cdkBootstrapRoleArn(qualifier: string, roleType: string): string {

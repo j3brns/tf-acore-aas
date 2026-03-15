@@ -12,6 +12,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import { resolveEntraConfiguration } from './entra-config';
 
 export interface AgentCoreStackProps extends cdk.StackProps {
   readonly homeRegion: string;
@@ -23,8 +24,7 @@ export class AgentCoreStack extends cdk.Stack {
     super(scope, id, props);
 
     const envName = this.requiredContext('env');
-    const entraTenantId = this.optionalContext('entraTenantId') ?? 'common';
-    const entraAudience = this.optionalContext('entraAudience') ?? 'platform-api';
+    const entra = resolveEntraConfiguration(this);
     const runtimeRegion = cdk.Stack.of(this).region;
 
     if (!cdk.Token.isUnresolved(runtimeRegion) && runtimeRegion !== 'eu-west-1') {
@@ -61,7 +61,6 @@ export class AgentCoreStack extends cdk.Stack {
 
     const runtimeName = this.runtimeName(envName);
     const runtimeEndpointName = this.runtimeEndpointName(envName);
-    const entraJwksUrl = this.resolveEntraJwksUrl(entraTenantId);
 
     const runtime = new cdk.CfnResource(this, 'AgentCoreRuntime', {
       type: 'AWS::BedrockAgentCore::Runtime',
@@ -87,8 +86,8 @@ export class AgentCoreStack extends cdk.Stack {
         ProtocolConfiguration: 'HTTP',
         AuthorizerConfiguration: {
           CustomJWTAuthorizer: {
-            DiscoveryUrl: this.resolveEntraDiscoveryUrl(entraTenantId),
-            AllowedAudience: [entraAudience],
+            DiscoveryUrl: entra.discoveryUrl,
+            AllowedAudience: [entra.audience],
           },
         },
         RequestHeaderConfiguration: {
@@ -156,7 +155,7 @@ export class AgentCoreStack extends cdk.Stack {
     new ssm.StringParameter(this, 'EntraJwksUrlParameter', {
       parameterName: '/platform/auth/jwks-url',
       description: 'Entra JWKS URL consumed by platform identity and runtime integrations',
-      stringValue: entraJwksUrl,
+      stringValue: entra.jwksUrl,
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -214,7 +213,7 @@ export class AgentCoreStack extends cdk.Stack {
       value: metricStream.ref,
     });
     new cdk.CfnOutput(this, 'EntraJwksUrl', {
-      value: entraJwksUrl,
+      value: entra.jwksUrl,
     });
   }
 
@@ -224,22 +223,6 @@ export class AgentCoreStack extends cdk.Stack {
       throw new Error(`CDK context "${name}" is required`);
     }
     return value;
-  }
-
-  private optionalContext(name: string): string | undefined {
-    const value = this.node.tryGetContext(name);
-    if (typeof value !== 'string' || value.trim() === '') {
-      return undefined;
-    }
-    return value;
-  }
-
-  private resolveEntraJwksUrl(entraTenantId: string): string {
-    return `https://login.microsoftonline.com/${entraTenantId}/discovery/v2.0/keys`;
-  }
-
-  private resolveEntraDiscoveryUrl(entraTenantId: string): string {
-    return `https://login.microsoftonline.com/${entraTenantId}/v2.0/.well-known/openid-configuration`;
   }
 
   private runtimeName(envName: string): string {
