@@ -51,14 +51,20 @@ export class TenantStack extends cdk.Stack {
       throw new Error('env context is required');
     }
 
-    const tenantId = this.node.tryGetContext('tenantId') || 'stub';
-    const tier = this.node.tryGetContext('tier') || 'basic';
+    const tenantId = this.node.tryGetContext('tenantId');
+    if (!tenantId) {
+      throw new Error('tenantId context is required for TenantStack');
+    }
+
+    const tier = this.node.tryGetContext('tier');
+    if (!tier) {
+      throw new Error('tier context is required for TenantStack');
+    }
+
     const accountId = this.node.tryGetContext('accountId') || cdk.Aws.ACCOUNT_ID;
     const authorizedRuntimeRegions = resolveAuthorizedRuntimeRegions(
       props?.authorizedRuntimeRegions,
     );
-
-    const isStub = tenantId === 'stub';
 
     // 1. Look up shared resources from SSM
     const tenantDataKeyArn = ssm.StringParameter.valueForStringParameter(

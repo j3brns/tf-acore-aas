@@ -567,7 +567,6 @@ def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, A
         ("a" * 33, "tenantId must be 3-32 characters"),
         ("tenant--one", "tenantId must not contain consecutive hyphens"),
         ("tenant_one", "tenantId must match ^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"),
-        ("stub", "tenantId is reserved"),
     ],
 )
 def test_create_tenant_rejects_invalid_tenant_id_values(
@@ -703,7 +702,7 @@ def test_read_own_tenant_canonicalizes_mixed_case_path_tenant_id(
 
 
 @pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
-@pytest.mark.parametrize("tenant_id", ["ab", "tenant--one", "tenant_one", "stub"])
+@pytest.mark.parametrize("tenant_id", ["ab", "tenant--one", "tenant_one"])
 def test_path_based_tenant_routes_reject_invalid_tenant_ids_deterministically(
     fake_state: dict[str, Any],
     method: str,
@@ -1662,7 +1661,6 @@ def test_invite_user_canonicalizes_mixed_case_path_tenant_id(fake_state: dict[st
 @pytest.mark.parametrize(
     ("path", "tenant_id"),
     [
-        ("/v1/tenants/stub/api-key/rotate", "stub"),
         ("/v1/tenants/tenant_one/users/invite", "tenant_one"),
         ("/v1/tenants/tenant--one/audit-export", "tenant--one"),
     ],

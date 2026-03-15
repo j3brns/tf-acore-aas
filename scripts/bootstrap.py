@@ -60,7 +60,6 @@ STACKS_HOME: tuple[str, ...] = (
     "platform-network-{env}",
     "platform-identity-{env}",
     "platform-core-{env}",
-    "platform-tenant-stub-{env}",
     "platform-observability-{env}",
 )
 STACKS_RUNTIME: tuple[str, ...] = ("platform-agentcore-{env}",)

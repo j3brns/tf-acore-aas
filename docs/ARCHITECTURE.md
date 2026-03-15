@@ -156,7 +156,7 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 - Tenant ID policy (create boundary):
   - Canonicalized to lowercase before persistence
   - Regex: `^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$` (3–32 chars)
-  - No consecutive hyphens; reserved IDs rejected (`admin`, `root`, `system`, `stub`)
+  - No consecutive hyphens; reserved IDs rejected (`admin`, `root`, `system`)
   - Existing pre-policy tenant IDs remain valid; policy enforced for new creates only
 
 **platform-agents** — agent registry

@@ -65,17 +65,13 @@ const platformStack = new PlatformStack(app, `platform-core-${env}`, {
 
 // 4. TenantStack (real deployments triggered by EventBridge per-tenant)
 const tenantId = app.node.tryGetContext('tenantId');
-const stackId = tenantId
-  ? `platform-tenant-${tenantId}-${env}`
-  : `platform-tenant-stub-${env}`;
-
-new TenantStack(app, stackId, {
-  env: awsEnv,
-  description: tenantId
-    ? `Platform resources for tenant ${tenantId} — ${env}`
-    : `Platform per-tenant resources stub — ${env}`,
-  authorizedRuntimeRegions: [PRIMARY_RUNTIME_REGION, FAILOVER_RUNTIME_REGION],
-});
+if (tenantId) {
+  new TenantStack(app, `platform-tenant-${tenantId}-${env}`, {
+    env: awsEnv,
+    description: `Platform resources for tenant ${tenantId} — ${env}`,
+    authorizedRuntimeRegions: [PRIMARY_RUNTIME_REGION, FAILOVER_RUNTIME_REGION],
+  });
+}
 
 // 5. ObservabilityStack
 new ObservabilityStack(app, `platform-observability-${env}`, {
