@@ -1,14 +1,15 @@
 # a5c-cell-let: A cellular managed agents deployment framework.
-## An e2e unit deployable, cellular atomic agentic stack - built on AWS. Boot-strap in 70 mins.
+## An e2e unit deployable, atomic and cellular agentic stack - built on AWS. Boot-strap in 70 mins.
 
-> *Built it to run it* with an ops task and automations layer, usable federated ownership is mobile, standardised and readily novates to AI operations strategies.
+> *Built it to run it* delivers an agentic operable task and automations layer, usable federated ownership is mobile, standardised and readily novates to AI operations strategies.
 
 Each **a5c-cell-let** builds a layer on Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and an exposition layer. 
 
 > Each **a5c-cell-let** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
 
 Its an early *experimental* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy as a cellular framework layer is worth the squeeze.
->Squueeze is: Overhead, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
+
+>The Squueeze is real: Overhead, Mntnce, Roadmap and resoures, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
 
 
 Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
