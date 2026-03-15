@@ -2,11 +2,13 @@
 
 import importlib.util
 import sys
+import types
 import zipfile
 from pathlib import Path
 from typing import Any
 
 import boto3
+import pytest
 from moto import mock_aws
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +33,28 @@ deploy_agent = _load_module("deploy_agent")
 register_agent = _load_module("register_agent")
 
 _REGION = "eu-west-2"
+
+
+class _FakeAgentCoreClient:
+    def __init__(self, *, response: dict[str, Any] | None = None, error: Exception | None = None):
+        self._response = response or {}
+        self._error = error
+
+    def update_agent_code(self, **_: Any) -> dict[str, Any]:
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
+def _patch_deploy_agentcore(monkeypatch, fake_client: _FakeAgentCoreClient) -> None:
+    real_client = boto3.client
+
+    def _client(service_name: str, *args: Any, **kwargs: Any) -> Any:
+        if service_name == "bedrock-agentcore":
+            return fake_client
+        return real_client(service_name, *args, **kwargs)
+
+    monkeypatch.setattr(deploy_agent, "boto3", types.SimpleNamespace(client=_client))
 
 
 # ---------------------------------------------------------------------------
@@ -69,12 +93,9 @@ def test_package_agent_creates_zip(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@mock_aws
-def test_deploy_agent_zip(tmp_path, monkeypatch):
+def _prepare_deploy_agent_fixture(tmp_path, monkeypatch) -> tuple[str, str, str]:
     monkeypatch.setenv("AWS_REGION", _REGION)
-    monkeypatch.setenv("CI", "true")
 
-    # Monkeypatch REPO_ROOT and BUILD_DIR
     monkeypatch.setattr(deploy_agent, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(deploy_agent, "BUILD_DIR", tmp_path / ".build")
 
@@ -113,19 +134,54 @@ version = "1.2.3"
 type = "zip"
 """)
 
-    deploy_agent.deploy_agent(agent_name, env)
+    return agent_name, env, bucket_name
 
-    # Verify S3 upload
+
+@mock_aws
+def test_deploy_agent_zip_stores_runtime_arn_on_success(tmp_path, monkeypatch):
+    agent_name, env, bucket_name = _prepare_deploy_agent_fixture(tmp_path, monkeypatch)
+    _patch_deploy_agentcore(
+        monkeypatch,
+        _FakeAgentCoreClient(
+            response={
+                "agentArn": "arn:aws:bedrock-agentcore:eu-west-2:210987654321:runtime/echo-agent"
+            }
+        ),
+    )
+
+    assert deploy_agent.deploy_agent(agent_name, env) is True
+
+    s3 = boto3.client("s3", region_name=_REGION)
     response = s3.list_objects_v2(Bucket=bucket_name)
     keys = [obj["Key"] for obj in response.get("Contents", [])]
     expected_script_key = f"scripts/{agent_name}/1.2.3.zip"
     assert expected_script_key in keys
 
-    # Verify SSM parameters (environment-scoped)
+    ssm = boto3.client("ssm", region_name=_REGION)
     s3_key_param = ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/script-s3-key")
     assert s3_key_param["Parameter"]["Value"] == expected_script_key
-    # runtime-arn might not be written if acore.update_agent_code fails (it fails in mock)
-    # But let's check if it was intended.
+    runtime_arn_param = ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/runtime-arn")
+    assert (
+        runtime_arn_param["Parameter"]["Value"]
+        == "arn:aws:bedrock-agentcore:eu-west-2:210987654321:runtime/echo-agent"
+    )
+
+
+@mock_aws
+def test_deploy_agent_returns_false_when_runtime_update_fails(tmp_path, monkeypatch):
+    agent_name, env, _ = _prepare_deploy_agent_fixture(tmp_path, monkeypatch)
+    _patch_deploy_agentcore(
+        monkeypatch,
+        _FakeAgentCoreClient(error=RuntimeError("runtime update failed")),
+    )
+
+    assert deploy_agent.deploy_agent(agent_name, env) is False
+
+    ssm = boto3.client("ssm", region_name=_REGION)
+    s3_key_param = ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/script-s3-key")
+    assert s3_key_param["Parameter"]["Value"] == f"scripts/{agent_name}/1.2.3.zip"
+    with pytest.raises(ssm.exceptions.ParameterNotFound):
+        ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/runtime-arn")
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +237,11 @@ invocation_mode = "sync"
     ssm.put_parameter(
         Name=f"/platform/layers/{env}/{agent_name}/s3-key", Value="layers/key.zip", Type="String"
     )
+    ssm.put_parameter(
+        Name=f"/platform/agents/{env}/{agent_name}/script-s3-key",
+        Value="scripts/custom-key.zip",
+        Type="String",
+    )
 
     register_agent.register_agent(agent_name, env)
 
@@ -192,6 +253,7 @@ invocation_mode = "sync"
     assert item["agent_name"] == agent_name
     assert item["version"] == "1.2.3"
     assert item["layer_hash"] == "hash123"
+    assert item["script_s3_key"] == "scripts/custom-key.zip"
 
     # Verify SSM latest-version (environment-scoped)
     param_name = f"/platform/agents/{env}/{agent_name}/latest-version"

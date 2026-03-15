@@ -1,11 +1,11 @@
-# LoopaaS — A forkable Agent as a Service franchise 
-## A franchise wrapping Amazon Bedrock AgentCore's IaC bones
+# a5caaf Agentic as a Service franchise 
+## A push franchise stack wrapping Amazon Bedrock AgentCore's IaC bones
 
-Amateur production multi-tenant **Agent as a Service** boot and eval framing on Amazon Bedrock AgentCore.
+Experimental production multi-tenant **Agentic as a Franchise** boot eval ops tools framework wrap over Amazon Bedrock AgentCore.
 
 Tenants invoke AI agents via REST API in captured portal, with full tenant isolation, billing attribution,
-and compliance controls baked in. Agent developer teams push new agents independently
-via a local stack .. And a super fast self-service pipeline — no platform release management required.  But please don't test by fisjing
+and compliance controls baked in. Agent developer teams push new agents independently across  an inner loop
+via a local stack .. And a super fast self-service pipeline — no platform release outerloop required for sub prod aliased challengers.  But please don't test in Prod
 
 ![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
 
