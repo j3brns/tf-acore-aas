@@ -21,9 +21,9 @@ Normally same as; Who decides its Prod ready? No one, in this case, so I built a
 
 > I'm actually a firm believer in the mentality **"You build it , YOU run it"** exacts. New tech needs to be unerpinned by sharp end skill, and Devs are usually first to hit the 'unsupported yet' wall!
 
-_The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions.
+_The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. And sample the Dev Experience.
 
-The result is a practical Ops CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice._
+The result is a practical Ops CLI, supersonic inner-loop and a runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice._
 
 > **Scaling demarcation (concept)**  
 > Every **a5c-cell** maps 1:1 to:
@@ -34,7 +34,7 @@ The result is a practical Ops CLI and runbook model that supports federated owne
 > - a resource boundary
 > - a fixed service allow list
 
-## Operational model
+## Fictional Operational model
 
 Tenants invoke AI agents through a controlled REST interface exposed through the portal, with tenant isolation, billing attribution, and compliance controls designed in from the start.
 
