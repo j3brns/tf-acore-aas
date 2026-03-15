@@ -1,9 +1,12 @@
-# a5c-cell-let (a5c = A_genti_C): A cellular agentic services framework.
-## An e2e boot-strappable, unit deployable, cellular stack - built on AWS
-Each **a5c-cell-let** wraps a Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and an exposition layer. 
-> Each **a5c-cell-let** is 1:1 mapped to; AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. Service allow list.
+# a5c-cell-let (A_1g2e3n4t5i_C): A cellular managed a5c services deployment framework.
+## An e2e unit deployable, cellular composed stack - built on AWS. Boot-strap in 70 mins.
+> *Built it to run it* with an ops task and automations layer, usable federated ownership is mobile with changing AI operations strategies.
+Each **a5c-cell-let** builds a layer on Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and an exposition layer. 
+> Each **a5c-cell-let** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
 
-Its an early *experimental* production informed fact finder. Exploring if ootable e2e stack rails : ops, tools, agentic dev inner loop and tenancy as a cellular framework wrap over AWS Bedrock services and AgentCore.
+Its an early *experimental* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy as a cellular framework layer is worth the squeeze.
+>Squueeze is: Overhead, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
+
 
 Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently across  an inner loop
