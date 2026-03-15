@@ -65,15 +65,15 @@ def register_agent(agent_name: str, env: str) -> bool:
     ssm = boto3.client("ssm", region_name=aws_region)
     layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
     layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
+    script_s3_key = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/script-s3-key")
 
-    if not layer_hash or not layer_s3_key:
+    if not layer_hash or not layer_s3_key or not script_s3_key:
         logger.error(
-            f"Layer metadata not found for agent '{agent_name}' in env '{env}'. "
-            "Run build_layer first."
+            f"Deployment metadata not found for agent '{agent_name}' in env '{env}'. "
+            "Run build_layer and deploy_agent first."
         )
         return False
 
-    script_s3_key = f"agents/{agent_name}/code.zip"
     deployed_at = datetime.datetime.now(datetime.UTC).isoformat()
 
     # Get Runtime ARN from SSM if it exists (set by infra or previous deployment)
