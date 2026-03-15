@@ -435,6 +435,12 @@ def _command_to_operation(args: argparse.Namespace) -> ApiOperation:
             path="/v1/platform/ops/security/page",
             body={"incident": args.incident, "tenantId": args.tenant},
         )
+    if args.command == "lambda-rollback":
+        return ApiOperation(
+            method="POST",
+            path="/v1/platform/ops/lambda-rollback",
+            body={"functionSuffix": args.function, "aliasName": args.alias},
+        )
     raise OpsCliError(f"Unsupported command: {args.command}")
 
 
@@ -554,6 +560,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_api_common_arguments(page_security)
     page_security.add_argument("--incident", required=True)
     page_security.add_argument("--tenant", required=True)
+
+    lambda_rollback = subparsers.add_parser(
+        "lambda-rollback",
+        help="Roll back a platform Lambda to its previous version.",
+    )
+    _add_api_common_arguments(lambda_rollback)
+    lambda_rollback.add_argument(
+        "--function", required=True, help="Function suffix (e.g. bridge, bff, tenant-api)."
+    )
+    lambda_rollback.add_argument("--alias", default="live", help="Alias name (default: live).")
 
     return parser
 
