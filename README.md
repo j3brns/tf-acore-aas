@@ -13,9 +13,11 @@ At its core, this project asks a practical question: can a bootable, paved, end-
 Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and AgentCore to provide each cell with partitionable tenancy, operational tooling, logging, control points, a fast development inner loop, and for human users - a scaffolded single-page application exposure layer, on Cloudfront.
 
 # Who builds it, who runs it? 
-Normally same as; Who decides its Prod ready? No ine in this case, so I built as if to happily transfer it to myself for 100 days. I'm a firm believer in the mentality **"You build it , YOU run it"** exacts.
+Normally same as; Who decides its Prod ready? No one, in this case, so I built as if to happily transfer between my alter-ego's for 100 days. 
 
-> _The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. The result is a practical Ops CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice._
+> I'm actually a firm believer in the mentality **"You build it , YOU run it"** exacts. New tech needs to be unerpinned by sharp end skill, and Devs are first against the wall!
+
+_The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. The result is a practical Ops CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice._
 
 > **Scaling demarcation**  
 > Every **a5c-cell** maps 1:1 to:
