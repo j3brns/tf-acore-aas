@@ -1295,6 +1295,7 @@ components:
           format: email
         role:
           type: string
+          enum: [Agent.Invoke]
           default: Agent.Invoke
         displayName:
           type: string
