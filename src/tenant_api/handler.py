@@ -1692,10 +1692,12 @@ def _handle_platform_billing_status(
     # We aggregate global status across all tenants for the current month
     year_month = datetime.now(UTC).strftime("%Y-%m")
 
-    table = deps.dynamodb.Table(_tenants_table_name())
-    # This is an admin scan for metrics
-    response = table.scan(FilterExpression=Key("SK").eq(f"BILLING#{year_month}"))
-    summaries = response.get("Items", [])
+    # Use data-access-lib for admin scan
+    db = _control_plane_db(caller)
+    summaries = db.scan_all(
+        _tenants_table_name(),
+        filter_expression=Key("SK").eq(f"BILLING#{year_month}"),
+    )
 
     total_cost = sum(float(s.get("total_cost_usd", 0.0)) for s in summaries)
     total_input = sum(int(s.get("total_input_tokens", 0)) for s in summaries)

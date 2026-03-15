@@ -14,7 +14,7 @@ Coverage assertions (required by TASK-013):
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
@@ -597,6 +597,48 @@ class TestTenantScopedDynamoDBScan:
             result = db.scan(TABLE_NAME, filter_expression=Attr("status").eq("ok"))
         assert len(result.items) == 1
         assert result.items[0]["SK"] == "INV#001"
+
+    def test_scan_all_paginates(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
+        """Scan_all should automatically loop until all items are returned."""
+        with mock_aws():
+            db, dynamo = _make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            for i in range(5):
+                table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
+
+            # Force small limit internally by mocking scan
+            original_scan = db.scan
+
+            def mock_scan_side_effect(*args, **kwargs):
+                return original_scan(*args, **{**kwargs, "limit": 2})
+
+            with patch.object(db, "scan", side_effect=mock_scan_side_effect) as mock_s:
+                items = db.scan_all(TABLE_NAME)
+                assert len(items) == 5
+                # Should have been called 3 times (2+2+1)
+                assert mock_s.call_count == 3
+
+
+class TestTenantScopedDynamoDBQueryAll:
+    def test_query_all_paginates(self, ctx: TenantContext, mock_cw: MagicMock) -> None:
+        """Query_all should automatically loop until all items are returned."""
+        with mock_aws():
+            db, dynamo = _make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            for i in range(5):
+                table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
+
+            # Force small limit internally by mocking query
+            original_query = db.query
+
+            def mock_query_side_effect(*args, **kwargs):
+                return original_query(*args, **{**kwargs, "limit": 2})
+
+            with patch.object(db, "query", side_effect=mock_query_side_effect) as mock_q:
+                items = db.query_all(TABLE_NAME)
+                assert len(items) == 5
+                # Should have been called 3 times (2+2+1)
+                assert mock_q.call_count == 3
 
 
 # ===========================================================================

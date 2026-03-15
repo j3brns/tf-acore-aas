@@ -215,33 +215,22 @@ def test_list_agents_returns_openapi_shape_and_tier_filtered(setup_data):
 
 
 def test_list_agents_handles_multiple_scan_pages(setup_data):
-    from data_access.models import PaginatedItems
 
     # Mock TenantScopedDynamoDB.scan to return two pages
     mock_db = MagicMock()
-    mock_db.scan.side_effect = [
-        PaginatedItems(
-            items=[
-                {
-                    "agent_name": "agent-1",
-                    "version": "1.0.0",
-                    "tier_minimum": "basic",
-                    "deployed_at": "2026-01-01T00:00:00Z",
-                }
-            ],
-            last_evaluated_key={"PK": "AGENT#agent-1", "SK": "VERSION#1.0.0"},
-        ),
-        PaginatedItems(
-            items=[
-                {
-                    "agent_name": "agent-2",
-                    "version": "1.0.0",
-                    "tier_minimum": "basic",
-                    "deployed_at": "2026-01-01T00:00:00Z",
-                }
-            ],
-            last_evaluated_key=None,
-        ),
+    mock_db.scan_all.return_value = [
+        {
+            "agent_name": "agent-1",
+            "version": "1.0.0",
+            "tier_minimum": "basic",
+            "deployed_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "agent_name": "agent-2",
+            "version": "1.0.0",
+            "tier_minimum": "basic",
+            "deployed_at": "2026-01-01T00:00:00Z",
+        },
     ]
 
     with patch("src.bridge.handler.TenantScopedDynamoDB", return_value=mock_db):
@@ -266,7 +255,7 @@ def test_list_agents_handles_multiple_scan_pages(setup_data):
         agent_names = [item["agentName"] for item in body["items"]]
         assert "agent-1" in agent_names
         assert "agent-2" in agent_names
-        assert mock_db.scan.call_count == 2
+        assert mock_db.scan_all.call_count == 1
 
 
 def test_get_agent_detail_returns_latest_version_and_versions(setup_data):

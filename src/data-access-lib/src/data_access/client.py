@@ -240,6 +240,37 @@ class TenantScopedDynamoDB:
             last_evaluated_key=response.get("LastEvaluatedKey"),
         )
 
+    def query_all(
+        self,
+        table_name: str,
+        *,
+        sk_condition: ConditionBase | None = None,
+        filter_expression: ConditionBase | None = None,
+        index_name: str | None = None,
+        scan_index_forward: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Query all items in the caller's tenant partition, handling pagination.
+
+        The PK is always forced to TENANT#{tenant_id}.
+        Returns a flat list of all items.
+        """
+        items: list[dict[str, Any]] = []
+        exclusive_start_key = None
+        while True:
+            result = self.query(
+                table_name,
+                sk_condition=sk_condition,
+                filter_expression=filter_expression,
+                index_name=index_name,
+                scan_index_forward=scan_index_forward,
+                exclusive_start_key=exclusive_start_key,
+            )
+            items.extend(result.items)
+            exclusive_start_key = result.last_evaluated_key
+            if not exclusive_start_key:
+                break
+        return items
+
     def scan(
         self,
         table_name: str,
@@ -280,6 +311,37 @@ class TenantScopedDynamoDB:
             items=response.get("Items", []),
             last_evaluated_key=response.get("LastEvaluatedKey"),
         )
+
+    def scan_all(
+        self,
+        table_name: str,
+        *,
+        filter_expression: ConditionBase | str | None = None,
+        expression_attribute_names: dict[str, str] | None = None,
+        expression_attribute_values: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Scan all items in a table, handling pagination.
+
+        SECURITY: Scanning is an administrative operation. Isolation is
+        NOT enforced by this method.
+
+        Returns a flat list of all items.
+        """
+        items: list[dict[str, Any]] = []
+        exclusive_start_key = None
+        while True:
+            result = self.scan(
+                table_name,
+                filter_expression=filter_expression,
+                exclusive_start_key=exclusive_start_key,
+                expression_attribute_names=expression_attribute_names,
+                expression_attribute_values=expression_attribute_values,
+            )
+            items.extend(result.items)
+            exclusive_start_key = result.last_evaluated_key
+            if not exclusive_start_key:
+                break
+        return items
 
 
 # ---------------------------------------------------------------------------
