@@ -1,6 +1,6 @@
-# a5c-cell-let: An atomic cluster deployment framework for Agentic
+# a5c-atom: Agent infra cell domain deployment framework
 
-## _Unit deployable, granular cell scale stack - built on AWS. Boot-strap in 70 mins._
+## _A unit deployed, atomic agentic stack - built on AWS. Boot-strap in 70 mins._
 
 An early *exploratory* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy, worked as a cellular framework layer - are worth the squeeze over printed SOPs and BaU Devops procedure..
 
