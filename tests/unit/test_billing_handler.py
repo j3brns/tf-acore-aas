@@ -41,6 +41,7 @@ os.environ["TENANTS_TABLE_NAME"] = "platform-tenants"
 os.environ["INVOCATIONS_TABLE_NAME"] = "platform-invocations"
 os.environ["EVENT_BUS_NAME"] = "default"
 
+from src.billing import handler as billing_handler
 from src.billing.handler import lambda_handler
 
 # Constants for test
@@ -218,3 +219,87 @@ def test_incremental_update(mock_aws_clients: Any) -> None:
     assert summary["total_output_tokens"] == 3000
     # New cost: 1.5 + (1*0.1 + 1*0.2) = 1.5 + 0.3 = 1.8
     assert float(summary["total_cost_usd"]) == 1.8
+
+
+def test_missing_pricing_parameter_fails_tenant_and_records_error(mock_aws_clients: Any) -> None:
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    ssm = boto3.client("ssm", region_name="eu-west-2")
+    _seed_tenant(ddb)
+
+    yesterday = datetime.now(UTC) - timedelta(days=1)
+    ts = yesterday.replace(hour=12).isoformat()
+    _seed_invocation(ddb, timestamp=ts, input_tokens=1000, output_tokens=1000)
+
+    ssm.delete_parameter(Name=f"/platform/billing/pricing/{TIER}")
+
+    result = lambda_handler({"date": yesterday.date().isoformat()}, MagicMock())
+
+    assert result["processed"] == 0
+    assert result["errors"] == 1
+    assert result["status"] == "partial_failure"
+
+    year_month = yesterday.strftime("%Y-%m")
+    table = ddb.Table("platform-tenants")
+    resp = table.get_item(Key={"PK": f"TENANT#{TENANT_ID}", "SK": f"BILLING#{year_month}"})
+    assert "Item" not in resp
+
+
+def test_malformed_pricing_parameter_fails_clearly(
+    mock_aws_clients: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    ssm = boto3.client("ssm", region_name="eu-west-2")
+    _seed_tenant(ddb)
+
+    yesterday = datetime.now(UTC) - timedelta(days=1)
+    ts = yesterday.replace(hour=12).isoformat()
+    _seed_invocation(ddb, timestamp=ts, input_tokens=1000, output_tokens=1000)
+
+    ssm.put_parameter(
+        Name=f"/platform/billing/pricing/{TIER}",
+        Value="{not-json",
+        Type="String",
+        Overwrite=True,
+    )
+
+    logger_exception = MagicMock()
+    monkeypatch.setattr(billing_handler.logger, "exception", logger_exception)
+
+    result = lambda_handler({"date": yesterday.date().isoformat()}, MagicMock())
+
+    assert result["processed"] == 0
+    assert result["errors"] == 1
+    logger_exception.assert_any_call(
+        "Billing pricing resolution failed",
+        extra={"pricing_path": f"/platform/billing/pricing/{TIER}", "tier": TIER},
+    )
+
+
+def test_pricing_lookup_failure_is_reported_in_pipeline_logs(
+    mock_aws_clients: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    ssm = boto3.client("ssm", region_name="eu-west-2")
+    _seed_tenant(ddb)
+
+    yesterday = datetime.now(UTC) - timedelta(days=1)
+    ts = yesterday.replace(hour=12).isoformat()
+    _seed_invocation(ddb, timestamp=ts, input_tokens=1000, output_tokens=1000)
+
+    ssm.delete_parameter(Name=f"/platform/billing/pricing/{TIER}")
+
+    logger_exception = MagicMock()
+    monkeypatch.setattr(billing_handler.logger, "exception", logger_exception)
+
+    result = lambda_handler({"date": yesterday.date().isoformat()}, MagicMock())
+
+    assert result == {
+        "status": "partial_failure",
+        "processed": 0,
+        "errors": 1,
+        "date": yesterday.date().isoformat(),
+    }
+    logger_exception.assert_any_call(
+        "Billing pricing resolution failed",
+        extra={"pricing_path": f"/platform/billing/pricing/{TIER}", "tier": TIER},
+    )

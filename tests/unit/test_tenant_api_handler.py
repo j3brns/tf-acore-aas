@@ -216,6 +216,43 @@ class FakePlatformQuotaClient:
         return [dict(item) for item in self.response]
 
 
+class FakeLambdaClient:
+    def __init__(self) -> None:
+        self.aliases = {"platform-bridge-dev": {"live": "10"}}
+        self.versions = {
+            "platform-bridge-dev": [
+                {"Version": "1"},
+                {"Version": "2"},
+                {"Version": "10"},
+                {"Version": "$LATEST"},
+            ]
+        }
+        self.update_calls: list[dict[str, Any]] = []
+
+    def get_alias(self, FunctionName: str, Name: str) -> dict[str, Any]:
+        if FunctionName in self.aliases and Name in self.aliases[FunctionName]:
+            return {"FunctionVersion": self.aliases[FunctionName][Name]}
+        raise tenant_api_handler.ClientError(
+            {"Error": {"Code": "ResourceNotFoundException"}}, "GetAlias"
+        )
+
+    def get_paginator(self, operation_name: str) -> Any:
+        assert operation_name == "list_versions_by_function"
+        return self
+
+    def paginate(self, FunctionName: str) -> Any:
+        if FunctionName in self.versions:
+            yield {"Versions": self.versions[FunctionName]}
+        else:
+            raise tenant_api_handler.ClientError(
+                {"Error": {"Code": "ResourceNotFoundException"}}, "ListVersions"
+            )
+
+    def update_alias(self, **kwargs: Any) -> dict[str, Any]:
+        self.update_calls.append(kwargs)
+        return {}
+
+
 class _FailingPlatformQuotaClient:
     def __init__(self, error: Exception) -> None:
         self.error = error
@@ -375,6 +412,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         events=FakeEvents(),
         dynamodb=FakeDynamoDbResource(),
         ssm=FakeSsm(),
+        awslambda=FakeLambdaClient(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
         platform_quota_client=FakePlatformQuotaClient(),
@@ -1892,3 +1930,68 @@ def test_list_invites_succeeds(fake_state: dict[str, Any]) -> None:
     body = _body(response)
     assert len(body["items"]) == 1
     assert body["items"][0]["inviteId"] == "inv-1"
+
+
+def test_lambda_rollback_finds_previous_version_and_updates_alias(
+    fake_state: dict[str, Any],
+) -> None:
+    event = _event(
+        method="POST",
+        body={"functionSuffix": "bridge", "aliasName": "live"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/ops/lambda-rollback"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    body = _body(response)
+    assert body["functionName"] == "platform-bridge-dev"
+    assert body["fromVersion"] == "10"
+    assert body["toVersion"] == "2"
+    assert body["status"] == "rolled_back"
+
+    update_calls = fake_state["deps"].awslambda.update_calls
+    assert len(update_calls) == 1
+    assert update_calls[0]["FunctionName"] == "platform-bridge-dev"
+    assert update_calls[0]["FunctionVersion"] == "2"
+    assert "Rollback from 10 to 2" in update_calls[0]["Description"]
+
+
+def test_lambda_rollback_rejects_oldest_version(fake_state: dict[str, Any]) -> None:
+    fake_state["deps"].awslambda.aliases["platform-bridge-dev"]["live"] = "1"
+    event = _event(
+        method="POST",
+        body={"functionSuffix": "bridge", "aliasName": "live"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/ops/lambda-rollback"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 409
+    assert _body(response)["error"]["code"] == "NO_PREVIOUS_VERSION"
+
+
+def test_lambda_rollback_requires_admin_role(fake_state: dict[str, Any]) -> None:
+    event = _event(
+        method="POST",
+        body={"functionSuffix": "bridge"},
+        roles=["Platform.Operator"],  # Not sufficient for this route
+    )
+    event["path"] = "/v1/platform/ops/lambda-rollback"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 403
+
+
+def test_lambda_rollback_returns_404_on_missing_function(fake_state: dict[str, Any]) -> None:
+    event = _event(
+        method="POST",
+        body={"functionSuffix": "non-existent"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/ops/lambda-rollback"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 404

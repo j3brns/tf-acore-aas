@@ -369,11 +369,11 @@ infra-destroy:
 	@read -p "Type 'destroy-dev' to confirm: " confirm && [ "$$confirm" = "destroy-dev" ]
 	cd infra/cdk && npx cdk destroy --all --context env=$(ENV)
 
-## infra-rollback-lambda: Roll back a Lambda to previous alias version
+## infra-rollback-lambda: Roll back a Lambda to previous alias version via Admin API
 ## Usage: make infra-rollback-lambda FUNCTION=bridge ENV=prod
 infra-rollback-lambda:
 	@test -n "$(FUNCTION)" || (echo "ERROR: FUNCTION required" && exit 1)
-	uv run python scripts/rollback_lambda.py $(FUNCTION) $(ENV)
+	uv run python scripts/ops.py lambda-rollback --env $(ENV) --function $(FUNCTION)
 
 ## infra-set-runtime-region: Update active runtime region via Admin REST API (requires failover lock)
 ## Usage: make infra-set-runtime-region REGION=eu-central-1 ENV=prod

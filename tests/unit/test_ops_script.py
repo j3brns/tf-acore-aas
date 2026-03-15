@@ -323,3 +323,41 @@ def test_api_error_returns_nonzero_and_prints_error(monkeypatch, tmp_path: Path,
     captured = capsys.readouterr()
     assert "HTTP 403" in captured.err
     assert "FORBIDDEN" in captured.err
+
+
+def test_lambda_rollback_calls_expected_endpoint(monkeypatch, tmp_path: Path) -> None:
+    creds_path = tmp_path / ".platform" / "credentials"
+    monkeypatch.setenv("PLATFORM_CREDENTIALS_PATH", str(creds_path))
+    _write_creds(
+        creds_path,
+        env_name="prod",
+        token="rollback-token",
+        api_base_url="https://ops.example.com",
+    )
+
+    seen: dict[str, Any] = {}
+
+    def _fake_urlopen(request: Request, timeout: int) -> _FakeResponse:
+        seen["url"] = request.full_url
+        seen["method"] = request.get_method()
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        seen["timeout"] = timeout
+        return _FakeResponse(status=200, payload={"status": "rolled_back"})
+
+    monkeypatch.setattr(ops, "urlopen", _fake_urlopen)
+
+    rc = ops.main(
+        [
+            "lambda-rollback",
+            "--env",
+            "prod",
+            "--function",
+            "bridge",
+            "--alias",
+            "live",
+        ]
+    )
+    assert rc == 0
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://ops.example.com/v1/platform/ops/lambda-rollback"
+    assert seen["body"] == {"functionSuffix": "bridge", "aliasName": "live"}

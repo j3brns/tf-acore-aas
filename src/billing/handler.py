@@ -24,8 +24,6 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
 from data_access.client import TenantScopedDynamoDB
 from data_access.models import (
-    BillingSummaryRecord,
-    InvocationStatus,
     TenantContext,
     TenantStatus,
     TenantTier,
@@ -44,25 +42,51 @@ _events = boto3.client("events", region_name=os.environ["AWS_REGION"])
 _dynamodb = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION"])
 
 
+class PricingResolutionError(RuntimeError):
+    """Raised when billing pricing configuration is unavailable or invalid."""
+
+
 def _get_pricing(tier: str) -> dict[str, float]:
     """Fetch pricing for a tier from SSM."""
     path = f"/platform/billing/pricing/{tier}"
     try:
         response = _ssm.get_parameter(Name=path)
         value = response.get("Parameter", {}).get("Value")
-        if not value:
-            raise ValueError(f"Empty or missing Value in SSM parameter {path}")
-        return json.loads(value)
-    except Exception as e:
-        logger.error(f"Failed to fetch pricing for tier={tier}: {e}")
-        # Default fallback pricing (conservative)
-        return {"input_1k": 0.01, "output_1k": 0.03}
+    except Exception as exc:
+        raise PricingResolutionError(f"Failed to fetch pricing parameter {path} from SSM") from exc
+
+    if not value:
+        raise PricingResolutionError(f"Pricing parameter {path} is empty or missing a value")
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise PricingResolutionError(f"Pricing parameter {path} contains malformed JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise PricingResolutionError(
+            f"Pricing parameter {path} must be a JSON object, got {type(parsed).__name__}"
+        )
+
+    pricing: dict[str, float] = {}
+    for field in ("input_1k", "output_1k"):
+        raw_value = parsed.get(field)
+        if raw_value is None:
+            raise PricingResolutionError(f"Pricing parameter {path} is missing {field}")
+        try:
+            pricing[field] = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise PricingResolutionError(
+                f"Pricing parameter {path} has non-numeric {field}: {raw_value!r}"
+            ) from exc
+
+    return pricing
 
 
 def _calculate_cost(input_tokens: int, output_tokens: int, pricing: dict[str, float]) -> float:
     """Calculate cost in USD."""
-    input_cost = (input_tokens / 1000.0) * pricing.get("input_1k", 0.0)
-    output_cost = (output_tokens / 1000.0) * pricing.get("output_1k", 0.0)
+    input_cost = (input_tokens / 1000.0) * pricing["input_1k"]
+    output_cost = (output_tokens / 1000.0) * pricing["output_1k"]
     return input_cost + output_cost
 
 
@@ -85,6 +109,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
     tier = tenant["tier"]
     budget = float(tenant.get("monthly_budget_usd", 0.0))
     app_id = tenant.get("app_id", "unknown")
+    pricing_path = f"/platform/billing/pricing/{tier}"
 
     # Day window
     start_time = date_to_process.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -116,7 +141,14 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
     day_output = sum(int(inv.get("output_tokens", 0)) for inv in result.items)
 
     # 2. Apply pricing
-    pricing = _get_pricing(tier)
+    try:
+        pricing = _get_pricing(tier)
+    except PricingResolutionError as exc:
+        logger.exception(
+            "Billing pricing resolution failed",
+            extra={"pricing_path": pricing_path, "tier": tier},
+        )
+        raise PricingResolutionError(f"Unable to price tenant {tenant_id}") from exc
     day_cost = _calculate_cost(day_input, day_output, pricing)
 
     # 3. Update monthly summary
@@ -215,13 +247,14 @@ def lambda_handler(event: dict[str, Any], context: LambdaContext) -> dict[str, A
         try:
             _process_tenant(tenant, date_to_process)
             processed += 1
-        except Exception as e:
-            logger.exception(f"Failed to process tenant {tenant.get('tenant_id')}: {e}")
+        except Exception as exc:
+            logger.exception(f"Failed to process tenant {tenant.get('tenant_id')}: {exc}")
             errors += 1
 
+    status = "success" if errors == 0 else "partial_failure"
     logger.info(f"Billing pipeline complete. Processed={processed}, Errors={errors}")
     return {
-        "status": "success",
+        "status": status,
         "processed": processed,
         "errors": errors,
         "date": date_to_process.date().isoformat(),
