@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE } from '../lib/agentcore-memory-template';
 import { TenantStack } from '../lib/tenant-stack';
 
 describe('TenantStack (TASK-025)', () => {
@@ -77,17 +78,25 @@ describe('TenantStack (TASK-025)', () => {
     });
   });
 
-  test('creates AgentCore Memory Store with service role and SUMMARY strategy', () => {
+  test('creates AgentCore Memory Store from the canonical semantic memory template', () => {
     const template = synthTemplate(defaultContext);
 
     template.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
       Name: 'platform-memory-t-test123',
+      Description: 'Per-tenant AgentCore memory for t-test123',
       EncryptionKeyArn: Match.anyValue(),
+      EventExpiryDuration: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.eventExpiryDurationDays,
       MemoryExecutionRoleArn: Match.anyValue(),
-      MemoryStrategies: Match.arrayWith([
-        Match.objectLike({ StrategyType: 'SUMMARY' }),
-        Match.objectLike({ StrategyType: 'USER_PREFERENCES' }),
-      ]),
+      MemoryStrategies: [
+        Match.objectLike({
+          SemanticMemoryStrategy: Match.objectLike({
+            Name: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.semanticMemory.strategyNameTemplate,
+            Description: 'Per-tenant AgentCore memory for t-test123',
+            Namespaces: ['tenant/t-test123'],
+            Type: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.semanticMemory.strategy,
+          }),
+        }),
+      ],
     });
 
     template.hasResourceProperties('AWS::IAM::Role', {
@@ -169,5 +178,20 @@ describe('TenantStack (TASK-025)', () => {
         env: { region: 'eu-west-2' },
       });
     }).toThrow();
+  });
+
+  test('keeps tenant memory expiry aligned with the published AgentCore default contract', () => {
+    const template = synthTemplate(defaultContext);
+
+    template.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
+      EventExpiryDuration: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.eventExpiryDurationDays,
+      MemoryStrategies: [
+        Match.objectLike({
+          SemanticMemoryStrategy: Match.objectLike({
+            Type: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.semanticMemory.strategy,
+          }),
+        }),
+      ],
+    });
   });
 });

@@ -20,6 +20,7 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import { resolveTenantMemoryProperties } from './agentcore-memory-template';
 
 export interface TenantStackProps extends cdk.StackProps {
   readonly authorizedRuntimeRegions?: readonly string[];
@@ -155,16 +156,17 @@ export class TenantStack extends cdk.Stack {
         resources: [tenantDataKeyArn],
       }),
     );
+    const tenantMemory = resolveTenantMemoryProperties(tenantId);
 
     const memoryStore = new cdk.CfnResource(this, 'TenantMemoryStore', {
       type: 'AWS::BedrockAgentCore::Memory',
       properties: {
         Name: `platform-memory-${tenantId}`,
-        Description: `Memory store for tenant ${tenantId}`,
+        Description: tenantMemory.description,
         EncryptionKeyArn: tenantDataKeyArn,
-        EventExpiryDuration: 30,
+        EventExpiryDuration: tenantMemory.eventExpiryDuration,
         MemoryExecutionRoleArn: memoryServiceRole.roleArn,
-        MemoryStrategies: [{ StrategyType: 'SUMMARY' }, { StrategyType: 'USER_PREFERENCES' }],
+        MemoryStrategies: tenantMemory.memoryStrategies,
         Tags: {
           TenantId: tenantId,
           Tier: tier,
