@@ -6,7 +6,7 @@
 
 ## Atomic AWS service cells for agent workloads
 
-**a5c-cell** is a personal exploratory project: Production-informed, its a free formed framework for packaging agent workloads into repeatable, operable service cells on AWS-managed infrastructure.
+**a5c-cell** is a personal exploratory project: Production-informed, its a free formed framework for packaging agent workloads into repeatable, operable service cells on AWS-managed agentic aligned infrastructure. It's been through three major changes already, switching lanes from Terra, adding the tenancy facade layer and a car crash identity mock up, that wasted hours.
 
 > _**a5c??** Yes, its not a commit fragment "a5c" is just a barely necessary typographic abbreviation of *agentic*. It makes more sense with k8s, but I did need a name.._
 
