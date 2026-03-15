@@ -1,4 +1,4 @@
-# Agent infra deployment framework: "_**a5c-atom**_"
+# Agent infra deployment framework: "_**a5c-cell**_"
 
 ## _Atomic Cells host Agentic Clusters - build on AWS managed. Boot-strap under 70 mins._
 
@@ -6,11 +6,11 @@ An early *exploratory* production informed personal fact find. Exploring if boot
 
 >The Squueeze is real: Overhead, Mntnce, Roadmap and resoures, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
 
-Each **a5c-atom** builds a micro-service layer onto Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and a single page app exposition layer. 
+Each **a5c-cell** builds a micro-service layer onto Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and a single page app exposition layer. 
 
 > *We built it to run it for 100 days* so it delivers an agentic operable task and automations layer. Practical, usable CLI and Runbook mean federated ownership is mobile, standardised and readily novates with AI operations strategies.
 
-> **Scaling Demarcation** *Every* **a5c-atom** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
+> **Scaling Demarcation** *Every* **a5c-cell** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
 
 **How does it feel?** Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently across a fast responsive inner harness loop - including a local stack 
