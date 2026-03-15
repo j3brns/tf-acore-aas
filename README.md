@@ -7,12 +7,12 @@
 At its core, this project asks a practical question: can a bootable, paved, end-to-end stack for operations, tooling, agent development inner loops, and tenancy act as a reusable cellular platform layer, and is that layer worth the operational overhead when compared with runbooks, SOPs, and business-as-usual DevOps procedure?
 
 > The squeeze is real: overhead, maintenance, roadmap pressure, resourcing, operational demarcation, developer experience, inner loop speed, lifecycle management of hosted agents, and the continuing care and feeding of the framework itself.
->
+
 > To save the internet: **a5c** is a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I need a name..
 
 Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and AgentCore to provide partitionable tenancy, operational tooling, logging, control points, a fast development inner loop, and a single-page application exposure layer.
 
-# Who builds it who runs it? I built as if to run it for 100 days.  
+# Who builds it who runs it, who decides? I built as if to happily pass it to myself for 100 days.  
 
 > The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. The result is a practical CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice.
 
@@ -31,8 +31,8 @@ Tenants invoke AI agents through a controlled REST interface exposed through the
 
 Agent teams can push and iterate on agents independently through a responsive inner-loop harness, including local stack support for development and test.
 
-> In practice, this creates a fast self-service path that separates agent code from heavier platform dependencies. Sub-production releases and aliased challengers can move without waiting for a full outer-loop platform release.  
->  
+> In practice, this creates a fast self-service path that separates agent code from heavier platform dependencies. Sub-production releases and aliased challengers can move without waiting for a full outer-loop platform release.
+
 > Useful, certainly. Also the sort of thing that encourages dangerous optimism. Please do not test in production. Not yet.
 
 ![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
