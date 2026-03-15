@@ -1,10 +1,12 @@
-# Agent infra framework: "_**a5c-cell**_"
+# Agentic infra framework: "_**a5c-cell**_"
 
-## _Agentic Clusters map into Atomic Cells - Automated builds on AWS managed. Boot-strap under 70 mins._
+## _Agent Clusters bootstrap into Atomic a5c Cells - Automated builds on AWS managed._
 
 An early *exploratory* production informed personal fact find. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy, worked as a cellular framework layer - are worth the squeeze over printed SOPs and BaU Devops procedure..
 
 >The Squueeze is real: Overhead, Mntnce, Roadmap and resoures, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
+
+> a5c is a typographic appreviatiion fo Agentic. abbreviation
 
 Each **a5c-cell** builds a micro-service layer onto Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and a single page app exposition layer. 
 
@@ -15,7 +17,7 @@ Each **a5c-cell** builds a micro-service layer onto Bedrock and AgentCore to add
 **How does it feel?** Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently across a fast responsive inner harness loop - including a local stack 
 
-.. That is a super fast self-service pipeline, that splits agent code from heavy dependencies — no platform release outer loop required for sub prod aliased challengers.  But please don't test in Prod
+> .. That is a super fast self-service pipeline, that splits agent code from heavy dependencies — no platform release outer loop required for sub prod aliased challengers.  But please don't test in Prod (yet)..
 
 ![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
 
