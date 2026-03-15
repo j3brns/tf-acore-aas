@@ -2,6 +2,10 @@
 
 ## Atomic AWS service cells for agent workloads
 
+<p align="center">
+  <img src="docs/images/a5c-cell-readme-intro.png" alt="a5c-cell - Agentic Infrastructure Framework" width="100%" max-width="900px">
+</p>
+
 **a5c-cell** is a personal exploratory project: Production-informed, its a free formed framework for packaging agent workloads into repeatable, operable service cells on AWS-managed infrastructure.
 
 > _**a5c??** a5c is just a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I did need a name.._
