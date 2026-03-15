@@ -47,6 +47,23 @@ def get_ssm_param(ssm, name: str) -> str | None:
         raise
 
 
+def update_agentcore_runtime(
+    acore, agent_name: str, bucket: str, deps_key: str, script_key: str
+) -> str:
+    response = acore.update_agent_code(
+        agentName=agent_name,
+        code={
+            "s3Bucket": bucket,
+            "depsKey": deps_key,
+            "scriptKey": script_key,
+        },
+    )
+    runtime_arn = str(response.get("agentArn", "")).strip()
+    if not runtime_arn:
+        raise RuntimeError("AgentCore update_agent_code did not return agentArn")
+    return runtime_arn
+
+
 def deploy_agent(agent_name: str, env: str) -> bool:
     aws_region = require_aws_region()
 
@@ -89,43 +106,20 @@ def deploy_agent(agent_name: str, env: str) -> bool:
         Overwrite=True,
     )
 
-    # In mock/test environment, we also ensure runtime-arn exists for tests
-    try:
-        ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/runtime-arn")
-    except ClientError:
-        ssm.put_parameter(
-            Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
-            Value=f"arn:aws:bedrock:eu-west-2:123456789012:runtime/{agent_name}",
-            Type="String",
-        )
-
-    # Call AgentCore Runtime API
-    # Assuming bedrock-agentcore is a custom boto3 client or similar
     try:
         acore = boto3.client("bedrock-agentcore", region_name=aws_region)
         logger.info(f"Updating AgentCore Runtime for '{agent_name}'")
-        response = acore.update_agent_code(
-            agentName=agent_name,
-            code={
-                "s3Bucket": bucket,
-                "depsKey": deps_key,
-                "scriptKey": script_key,
-            },
-        )
-        runtime_arn = response.get("agentArn")
-        if runtime_arn:
-            ssm.put_parameter(
-                Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
-                Value=runtime_arn,
-                Type="String",
-                Overwrite=True,
-            )
+        runtime_arn = update_agentcore_runtime(acore, agent_name, bucket, deps_key, script_key)
     except Exception as e:
-        logger.warning(f"Failed to call AgentCore Runtime API (might be expected in mock env): {e}")
-        # In mock environment or during early phase, we might not have the actual API
-        # but we want the script to succeed if the artifacts are uploaded.
-        if os.environ.get("CI"):
-            logger.info("Continuing anyway because CI is set")
+        logger.error("Failed to update AgentCore Runtime for '%s': %s", agent_name, e)
+        return False
+
+    ssm.put_parameter(
+        Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
+        Value=runtime_arn,
+        Type="String",
+        Overwrite=True,
+    )
 
     logger.info(f"Agent '{agent_name}' deployed successfully to {env}")
     return True
