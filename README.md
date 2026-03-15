@@ -1,6 +1,6 @@
-# Agent infra deployment framework: "_**a5c-cell**_"
+# Agent infra framework: "_**a5c-cell**_"
 
-## _Agentic Clusters scaled into Atomic Cells - Automated builds on AWS managed. Boot-strap under 70 mins._
+## _Agentic Clusters map into Atomic Cells - Automated builds on AWS managed. Boot-strap under 70 mins._
 
 An early *exploratory* production informed personal fact find. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy, worked as a cellular framework layer - are worth the squeeze over printed SOPs and BaU Devops procedure..
 
