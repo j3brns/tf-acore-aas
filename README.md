@@ -116,101 +116,78 @@ AWS documentation now shows AgentCore Runtime and related core services availabl
 Client → CloudFront → API Gateway with WAF and usage plan → **Authoriser** for JWT validation and tenant context → **Bridge** for tenant role assumption and runtime dispatch → **AgentCore Runtime** in Firecracker microVM → **Gateway interceptors** for act-on-behalf tokens and tier filtering → Tool Lambdas → response stream returned to client.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> RequestSent: Client initiates Request
-    RequestSent --> EdgeEntry: CloudFront receives Request
+sequenceDiagram
+    autonumber
+    actor Client
+    participant CloudFront as CloudFront (Edge)
+    participant WAF as AWS WAF (Firewall)
+    participant APIGW as API Gateway (with Usage Plan)
+    participant Authorizer as Lambda Authorizer (JWT & Context)
+    participant Bridge as Bridge Lambda (Tenant Context Mapper)
+    participant STS as AWS STS (Role Assumption)
+    participant AgentCoreRuntime as AgentCore Runtime (in Firecracker microVM)
+    participant TokenEx as Token Exchange Service
+    participant ToolLambdas as Tool Lambdas
 
-    state "Edge Entry (CloudFront)" as EdgeEntry {
-        state "WAF Validation" as WAF {
-            [*] --> Inspecting
-            Inspecting --> Blocked: WAF rules fail
-            Inspecting --> Allowed: WAF rules pass
-        }
-        Blocked --> [*]: Return 403 Response
-        Allowed --> EndpointControl: Forward to API Gateway
-    }
+    Client->>CloudFront: 1. Send Request (with JWT)
+    CloudFront->>WAF: 2. Forward Request
 
-    state "Endpoint Control (API Gateway)" as EndpointControl {
-        state "Check Usage Plan" as UsageCheck {
-            [*] --> Checking limits
-            Checking limits --> LimitExceeded: API Key throttled
-            Checking limits --> WithinLimit: API Key allowed
-        }
-        LimitExceeded --> [*]: Return 429 Response
-        WithinLimit --> ContextAndIdentity: Invoke Authorizer
-    }
+    alt WAF inspection
+        WAF-->>CloudFront: 2a. Blocked (403)
+        CloudFront-->>Client: 2b. Blocked (403 Response)
+    else WAF inspection allowed
+        WAF->>APIGW: 3. Forward Request
+    end
 
-    state "Context & Identity (Authorizer Lambda)" as ContextAndIdentity {
-        state "Authenticating" as Auth {
-            [*] --> JWT_Validation
-            JWT_Validation --> Invalid: Signature/Expire fail
-            JWT_Validation --> Valid: Signature/Expire pass
-        }
-        Invalid --> [*]: Return 401/403 Response
-        Valid --> Build_Context_And_Policy: Extract Tenant ID
-        Build_Context_And_Policy --> RoutingAndSecurity: Return Context + Forward to Bridge
-    }
+    APIGW->>APIGW: 4. Apply Usage Plan (API Key check)
+    alt Usage limit exceeded
+        APIGW-->>CloudFront: 4a. Throttle (429)
+        CloudFront-->>Client: 4b. Throttle (429 Response)
+    end
 
-    state "Routing & Security (Bridge Lambda)" as RoutingAndSecurity {
-        state "Tenant Mapping" as Map
-        state "Assume Role via STS" as AssumeRole
-        state "Secure Dispatch" as Dispatch
+    APIGW->>Authorizer: 5. Invoke for JWT Validation
+    Note right of Authorizer: Validates JWT signature,<br/>Extracts Tenant ID.
+    Authorizer->>Authorizer: 6. Build Policy & Context
 
-        [*] --> Map
-        Map --> AssumeRole: Perform Mapping
-        AssumeRole --> Dispatch: STS Credentials obtained
-        Dispatch --> AgentCore_Runtime: Firecracker microVM Initialized & Dispatched
+    alt Authentication fails (Invalid JWT)
+        Authorizer-->>APIGW: 6a. Deny Policy
+        APIGW-->>Client: 6b. Unauthorized (401/403 Response)
+    end
 
-        note left of Map
-            Consults mapping:
-            TenantID -> ARN
-        end note
-    }
+    Authorizer-->>APIGW: 7. Return Allow Policy & `tenantContext`
 
-    state "AgentCore Runtime Execution (in microVM)" as AgentCore_Runtime {
-        state "Gateway Interceptors" as Interceptors {
-            state "Tier Filtering" as TierFilter
-            state "Act-On-Behalf" as ActOnBehalf
+    Note right of APIGW: API Gateway caches policy<br/>and context for request.
+    APIGW->>Bridge: 8. Invoke Bridge Lambda (Forward Request + `tenantContext`)
 
-            [*] --> TierFilter: Check Tenant Tier
-            TierFilter --> ActOnBehalf: Access is approved
-            ActOnBehalf --> Exchange_Tokens: Call Token Exchange Service
-            Exchange_Tokens --> TokenExchangeServiceResponse: Tool Token obtained
-        }
-        state "Tool Execution" as ToolExec
-        state "Result Aggregation" as Aggregation
+    Note right of Bridge: Consults mapping:<br/>TenantID -> IAM Role ARN
+    Bridge->>STS: 9. `AssumeRole(Tenant IAM Role ARN)`
+    STS-->>Bridge: 10. Return Tenant Temporary Credentials
 
-        [*] --> Interceptors
-        Interceptors --> ToolExec: Forward refined request with Tool Token
-        ToolExec --> Aggregation: Tools return data
-        Aggregation --> ProcessingComplete: Aggregate results, open stream
-    }
+    Note right of Bridge: Prepares refined runtime payload,<br/>including `tenantContext` and<br/>tenant temporary credentials.
+    Bridge->>Bridge: 11. Launch & Dispatch to Firecracker microVM
 
-    state "Token Exchange Service" as TokenExchangeServiceResponse
-    note right of TokenExchangeServiceResponse : External service called from Interceptor
+    Bridge->>AgentCoreRuntime: 12. Invoke AgentCore Runtime (Refined Request + Credentials)
 
-    ProcessingComplete --> ResponseStreaming: Continuous Stream open
+    par Parallel Gateway Interceptors
+        AgentCoreRuntime->>AgentCoreRuntime: 13. Interceptor: Tier Filtering Check
+        Note right of AgentCoreRuntime: Filters operations<br/>based on tenant tier.
+    and Interceptor: Act-On-Behalf Token
+        AgentCoreRuntime->>TokenEx: 14. `Exchange(Tenant Credentials + AOBT)` for Tool Token
+        TokenEx-->>AgentCoreRuntime: 15. Return Tool Token
+    end
 
-    state "Response Streaming (Dashed lines indicate return flow)" as ResponseStreaming {
-        state "Stream to Bridge" as sB
-        state "Stream to APIGW" as sA
-        state "Stream to CloudFront" as sC
-        state "Stream to Client" as sCl
+    Note right of AgentCoreRuntime: Prepares tool execution with Tool Token.
+    AgentCoreRuntime->>ToolLambdas: 16. Invoke Tool Lambdas
+    ToolLambdas-->>AgentCoreRuntime: 17. Return Tool Results
 
-        [*] --> sB
-        sB --> sA
-        sA --> sC
-        sC --> sCl
-        sCl --> Complete: All data delivered
-    }
+    AgentCoreRuntime->>AgentCoreRuntime: 18. Process Results & Aggregate
 
-    Complete --> [*]: Terminate request cycle
-
-    note right of AgentCore_Runtime
-        Detailed lifecycle within the microVM.
-        Interceptors handle tier checks and
-        obtaining short-lived tool tokens.
-    end note
+    Note right of AgentCoreRuntime: Starts response stream back.
+    AgentCoreRuntime-->>Bridge: 19. Response Stream (Continuous)
+    Bridge-->>APIGW: 20. Response Stream (Continuous)
+    APIGW-->>CloudFront: 21. Response Stream (Continuous)
+    CloudFront-->>Client: 22. Response Stream (Continuous)
+    Note right of Client: Response stream is fully delivered.
     ```
 
 
