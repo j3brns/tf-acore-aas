@@ -1,7 +1,7 @@
-# a5caaf Agentic as a Service franchise 
-## A push franchise stack wrapping Amazon Bedrock AgentCore's IaC bones
+# a5c (A_genti_C) as a deployable self contained cell 
+## An e2e stack wrapping Amazon Bedrock AgentCore to add a partitionable tenancy and exposition layer
 
-Experimental production multi-tenant **Agentic as a Franchise** boot eval ops tools framework wrap over Amazon Bedrock AgentCore.
+Experimental production informed fact finder. Bootable e2e stack: ops, tools, agentic dev inner loops tenancy as a cellular framework wrap over Amazon Bedrock AgentCore.
 
 Tenants invoke AI agents via REST API in captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently across  an inner loop
@@ -11,7 +11,7 @@ via a local stack .. And a super fast self-service pipeline — no platform rele
 
 ## Highlights
 
-- **Multi-tenant REST API** — per-request data isolation enforced at four independent layers
+- **Multi-tenant REST API** — mediated per-request data isolation enforced at four independent layers
 - **Entra ID OIDC + SigV4** — human and machine auth; no Cognito anywhere
 - **Three invocation modes** — sync (15 min), streaming SSE (15 min), async with webhooks (8 hr)
 - **Self-service agent pipeline** — `make agent-push` supports a fast path when dependencies are unchanged
