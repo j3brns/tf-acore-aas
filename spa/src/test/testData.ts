@@ -2,10 +2,19 @@ import type {
   AgentsListResponseDto,
   HealthResponseDto,
   PlatformQuotaResponseDto,
-  SessionsListResponseDto,
   TenantsListResponseDto,
 } from "../api/contracts";
 import type { AgentInvokeResponse, Agent } from "../types";
+
+type SessionsListResponseDto = {
+  items: Array<{
+    sessionId: string;
+    agentName: string;
+    startedAt: string;
+    lastActivityAt: string;
+    status: string;
+  }>;
+};
 
 export const catalogueSingleAgent: AgentsListResponseDto = {
   items: [
