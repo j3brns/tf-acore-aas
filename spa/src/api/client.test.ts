@@ -77,6 +77,29 @@ describe("ApiClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("calls BFF token refresh with an explicit assertion token and no auth recursion", async () => {
+    const tokenProvider = vi.fn<AccessTokenProvider>().mockResolvedValue("unused");
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(createResponse(200, { accessToken: "fresh-token" }));
+
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      getAccessToken: tokenProvider,
+      fetchImpl,
+    });
+
+    const response = await client.bffTokenRefresh(
+      { scopes: ["api://platform-dev/Agent.Invoke"] },
+      { accessToken: "assertion-token" },
+    );
+
+    expect(response).toEqual({ accessToken: "fresh-token" });
+    expect(tokenProvider).not.toHaveBeenCalled();
+    const requestHeaders = new Headers(fetchImpl.mock.calls[0][1]?.headers);
+    expect(requestHeaders.get("Authorization")).toBe("Bearer assertion-token");
+  });
+
   it("streams SSE chunks via Fetch + ReadableStream", async () => {
     const tokenProvider = vi.fn<AccessTokenProvider>().mockResolvedValue("stream-token");
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(

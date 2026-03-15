@@ -276,7 +276,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Tenant"
+                $ref: "#/components/schemas/TenantReadResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -486,6 +486,28 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   /v1/webhooks:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhooks
+      summary: List registered webhooks
+      description: >
+        Lists webhook callback registrations visible to the current tenant self-service
+        admin caller.
+      responses:
+        "200":
+          description: Webhook registrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     post:
       tags: [Webhooks]
       operationId: registerWebhook
@@ -595,6 +617,96 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/ops/top-tenants:
+    get:
+      tags: [Platform]
+      operationId: getTopTenants
+      summary: Get top tenants by token volume
+      description: >
+        Returns the highest-volume tenants for platform operator monitoring.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      parameters:
+        - in: query
+          name: n
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        "200":
+          description: Top tenant list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopTenantsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/ops/security-events:
+    get:
+      tags: [Platform]
+      operationId: getSecurityEvents
+      summary: Get recent security events
+      description: >
+        Returns recent platform security events for operator review.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      responses:
+        "200":
+          description: Security event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/ops/error-rate:
+    get:
+      tags: [Platform]
+      operationId: getPlatformErrorRate
+      summary: Get recent platform error rate
+      description: >
+        Returns platform error-rate telemetry for a recent rolling period.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      parameters:
+        - in: query
+          name: minutes
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1440
+            default: 5
+      responses:
+        "200":
+          description: Platform error rate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -976,12 +1088,14 @@ components:
 
     HealthResponse:
       type: object
-      required: [status, timestamp, version]
+      required: [status, timestamp, version, runtimeRegion]
       properties:
         status:
           type: string
           enum: [ok, degraded, fail]
         version:
+          type: string
+        runtimeRegion:
           type: string
         timestamp:
           $ref: "#/components/schemas/UtcTimestamp"
@@ -1194,6 +1308,30 @@ components:
           type: [number, "null"]
           minimum: 0
 
+    TenantUsageSummary:
+      type: object
+      properties:
+        requestsToday:
+          type: integer
+          minimum: 0
+        budgetRemainingUsd:
+          type: number
+          minimum: 0
+        usageIdentifierKey:
+          type: string
+
+    TenantReadResponse:
+      type: object
+      required: [tenant]
+      properties:
+        tenant:
+          allOf:
+            - $ref: "#/components/schemas/Tenant"
+            - type: object
+              properties:
+                usage:
+                  $ref: "#/components/schemas/TenantUsageSummary"
+
     TenantCreateRequest:
       type: object
       required:
@@ -1295,6 +1433,7 @@ components:
           format: email
         role:
           type: string
+          enum: [Agent.Invoke]
           default: Agent.Invoke
         displayName:
           type: string
@@ -1416,6 +1555,84 @@ components:
         signatureAlgorithm:
           type: string
           example: HMAC-SHA256
+
+    WebhookListItem:
+      allOf:
+        - $ref: "#/components/schemas/WebhookRegistrationResponse"
+        - type: object
+          properties:
+            status:
+              type: string
+            description:
+              type: [string, "null"]
+            updatedAt:
+              oneOf:
+                - $ref: "#/components/schemas/UtcTimestamp"
+                - type: "null"
+
+    WebhookListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookListItem"
+
+    TopTenant:
+      type: object
+      required: [tenantId, tokens]
+      properties:
+        tenantId:
+          type: string
+        tokens:
+          type: integer
+          minimum: 0
+
+    TopTenantsResponse:
+      type: object
+      required: [tenants]
+      properties:
+        tenants:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopTenant"
+
+    SecurityEvent:
+      type: object
+      required: [timestamp, type, tenantId, details]
+      properties:
+        timestamp:
+          $ref: "#/components/schemas/UtcTimestamp"
+        type:
+          type: string
+        tenantId:
+          type: string
+        details:
+          type: string
+
+    SecurityEventsResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityEvent"
+
+    ErrorRateResponse:
+      type: object
+      required: [errorRate, periodMinutes, threshold]
+      properties:
+        errorRate:
+          type: number
+          minimum: 0
+        periodMinutes:
+          type: integer
+          minimum: 1
+        threshold:
+          type: number
+          minimum: 0
 
     BffTokenRefreshRequest:
       type: object

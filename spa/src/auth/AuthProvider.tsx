@@ -53,10 +53,15 @@ type TokenAcquisitionParams = {
   allowBffFallback?: boolean;
 };
 
-export async function acquireTokenWithBffFallback(
-  params: TokenAcquisitionParams,
-): Promise<string> {
-  const { client, account, scopes, forceRefresh = false, allowBffFallback = true } = params;
+type TokenAcquisitionResult = {
+  accessToken: string;
+  usedInteractivePrompt: boolean;
+};
+
+async function acquireAccessTokenWithoutBffFallback(
+  params: Omit<TokenAcquisitionParams, "allowBffFallback">,
+): Promise<TokenAcquisitionResult> {
+  const { client, account, scopes, forceRefresh = false } = params;
 
   try {
     const result = await client.acquireTokenSilent({
@@ -64,20 +69,11 @@ export async function acquireTokenWithBffFallback(
       scopes,
       forceRefresh,
     });
-    return result.accessToken;
+    return {
+      accessToken: result.accessToken,
+      usedInteractivePrompt: false,
+    };
   } catch (error) {
-    if (allowBffFallback) {
-      console.warn("[Auth] MSAL silent refresh failed, attempting BFF OBO fallback", error);
-      try {
-        const apiClient = getApiClient();
-        const bffResult = await apiClient.bffTokenRefresh({ scopes });
-        console.info("[Auth] Successfully refreshed token via BFF OBO");
-        return bffResult.accessToken;
-      } catch (bffError) {
-        console.error("[Auth] BFF OBO fallback failed", bffError);
-      }
-    }
-
     if (error instanceof InteractionRequiredAuthError) {
       console.warn("[Auth] Interaction required - MSAL popup may be shown");
       const popupRequest: PopupRequest = {
@@ -85,7 +81,63 @@ export async function acquireTokenWithBffFallback(
         scopes,
       };
       const result = await client.acquireTokenPopup(popupRequest);
-      return result.accessToken;
+      return {
+        accessToken: result.accessToken,
+        usedInteractivePrompt: true,
+      };
+    }
+    throw error;
+  }
+}
+
+export async function acquireTokenWithBffFallback(
+  params: TokenAcquisitionParams,
+): Promise<string> {
+  const { client, account, scopes, forceRefresh = false, allowBffFallback = true } = params;
+
+  try {
+    const token = await acquireAccessTokenWithoutBffFallback({
+      client,
+      account,
+      scopes,
+      forceRefresh,
+    });
+    return token.accessToken;
+  } catch (error) {
+    if (allowBffFallback) {
+      console.warn("[Auth] MSAL silent refresh failed, attempting BFF OBO fallback", error);
+      let assertionToken: TokenAcquisitionResult | null = null;
+      try {
+        assertionToken = await acquireAccessTokenWithoutBffFallback({
+          client,
+          account,
+          scopes,
+          forceRefresh,
+        });
+        const apiClient = getApiClient();
+        const bffResult = await apiClient.bffTokenRefresh(
+          { scopes },
+          { accessToken: assertionToken.accessToken },
+        );
+        console.info("[Auth] Successfully refreshed token via BFF OBO");
+        return bffResult.accessToken;
+      } catch (bffError) {
+        console.error("[Auth] BFF OBO fallback failed", bffError);
+        if (assertionToken?.usedInteractivePrompt) {
+          console.info("[Auth] Using interactive MSAL token after BFF OBO fallback failure");
+          return assertionToken.accessToken;
+        }
+      }
+    }
+
+    if (error instanceof InteractionRequiredAuthError) {
+      const token = await acquireAccessTokenWithoutBffFallback({
+        client,
+        account,
+        scopes,
+        forceRefresh,
+      });
+      return token.accessToken;
     }
     throw error;
   }
@@ -200,12 +252,37 @@ export function AuthProvider({ children, client = msalInstance }: AuthProviderPr
 
   const refreshAccessTokenViaBff = useCallback(
     async (scopes?: string[]) => {
+      let activeAccount = account ?? resolveAccount(client);
+      if (!activeAccount) {
+        await login();
+        activeAccount = resolveAccount(client);
+      }
+
+      if (!activeAccount) {
+        throw new Error("Unable to resolve active account after login");
+      }
+
       const requestedScopes = scopes?.length ? scopes : defaultScopes;
+      const assertionToken = await acquireAccessTokenWithoutBffFallback({
+        client,
+        account: activeAccount,
+        scopes: requestedScopes,
+      });
       const apiClient = getApiClient();
-      const bffResult = await apiClient.bffTokenRefresh({ scopes: requestedScopes });
-      return bffResult.accessToken;
+      try {
+        const bffResult = await apiClient.bffTokenRefresh(
+          { scopes: requestedScopes },
+          { accessToken: assertionToken.accessToken },
+        );
+        return bffResult.accessToken;
+      } catch (error) {
+        if (assertionToken.usedInteractivePrompt) {
+          return assertionToken.accessToken;
+        }
+        throw error;
+      }
     },
-    [],
+    [account, client, login],
   );
 
   const value = useMemo<AuthContextValue>(

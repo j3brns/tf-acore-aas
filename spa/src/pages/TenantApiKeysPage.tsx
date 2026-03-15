@@ -1,19 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getApiClient } from "../api/client";
+import type { TenantApiKeyRotateResponseDto, TenantReadResponseDto } from "../api/contracts";
 import { useAuth } from "../auth/useAuth";
-
-type TenantRecord = {
-    tenantId: string;
-    apiKeySecretArn?: string;
-    updatedAt: string;
-};
-
-type RotateResponse = {
-    tenantId: string;
-    apiKeySecretArn: string;
-    rotatedAt: string;
-    versionId?: string | null;
-};
 
 function resolveTenantId(claims: unknown): string | null {
     if (!claims || typeof claims !== "object") {
@@ -28,7 +16,7 @@ export const TenantApiKeysPage: React.FC = () => {
     const { getAccessToken, account, isAuthenticated } = useAuth();
     const tenantId = useMemo(() => resolveTenantId(account?.idTokenClaims), [account?.idTokenClaims]);
 
-    const [tenant, setTenant] = useState<TenantRecord | null>(null);
+    const [tenant, setTenant] = useState<TenantReadResponseDto["tenant"] | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [rotating, setRotating] = useState(false);
@@ -43,7 +31,7 @@ export const TenantApiKeysPage: React.FC = () => {
         const run = async () => {
             try {
                 const client = getApiClient(getAccessToken);
-                const data = await client.request<{ tenant: TenantRecord }>(`/v1/tenants/${tenantId}`);
+                const data = await client.request<TenantReadResponseDto>(`/v1/tenants/${tenantId}`);
                 setTenant(data.tenant);
             } catch (err) {
                 setError(err instanceof Error ? err.message : "Failed to load API key data.");
@@ -60,7 +48,7 @@ export const TenantApiKeysPage: React.FC = () => {
         setRotateMessage(null);
         try {
             const client = getApiClient(getAccessToken);
-            const result = await client.request<RotateResponse>(`/v1/tenants/${tenantId}/api-key/rotate`, {
+            const result = await client.request<TenantApiKeyRotateResponseDto>(`/v1/tenants/${tenantId}/api-key/rotate`, {
                 method: "POST",
             });
             setRotateMessage(`API key rotated successfully at ${new Date(result.rotatedAt).toLocaleString()}.`);

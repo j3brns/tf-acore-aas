@@ -1,15 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getApiClient } from "../api/client";
+import type {
+    WebhookListItemDto,
+    WebhookRegistrationResponseDto,
+    WebhooksListResponseDto,
+} from "../api/contracts";
 import { useAuth } from "../auth/useAuth";
-
-type Webhook = {
-    webhookId: string;
-    callbackUrl: string;
-    events: string[];
-    status: string;
-    createdAt: string;
-    description?: string;
-};
 
 function resolveTenantId(claims: unknown): string | null {
     if (!claims || typeof claims !== "object") {
@@ -24,7 +20,7 @@ export const TenantWebhooksPage: React.FC = () => {
     const { getAccessToken, account, isAuthenticated } = useAuth();
     const tenantId = useMemo(() => resolveTenantId(account?.idTokenClaims), [account?.idTokenClaims]);
 
-    const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+    const [webhooks, setWebhooks] = useState<WebhookListItemDto[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [callbackUrl, setCallbackUrl] = useState("");
@@ -42,7 +38,7 @@ export const TenantWebhooksPage: React.FC = () => {
         const run = async () => {
             try {
                 const client = getApiClient(getAccessToken);
-                const data = await client.request<{ items: Webhook[] }>(`/v1/webhooks`);
+                const data = await client.request<WebhooksListResponseDto>(`/v1/webhooks`);
                 setWebhooks(data.items);
             } catch (err) {
                 setError(err instanceof Error ? err.message : "Failed to load webhooks.");
@@ -59,7 +55,7 @@ export const TenantWebhooksPage: React.FC = () => {
         setMessage(null);
         try {
             const client = getApiClient(getAccessToken);
-            const response = await client.request<Webhook>(`/v1/webhooks`, {
+            const response = await client.request<WebhookRegistrationResponseDto>(`/v1/webhooks`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -71,7 +67,14 @@ export const TenantWebhooksPage: React.FC = () => {
             setMessage({ type: 'success', text: "Webhook registered successfully." });
             setCallbackUrl("");
             setDescription("");
-            setWebhooks(prev => [...prev, response]);
+            setWebhooks(prev => [
+                ...prev,
+                {
+                    ...response,
+                    description: description.trim() || undefined,
+                    status: "active",
+                },
+            ]);
         } catch (err) {
             setMessage({ type: 'error', text: err instanceof Error ? err.message : "Failed to register webhook." });
         } finally {

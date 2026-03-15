@@ -1542,6 +1542,60 @@ def test_invite_user_for_own_tenant_succeeds_for_platform_operator(
     assert detail["tenantId"] == "t-invite"
 
 
+@pytest.mark.parametrize(
+    "role",
+    ["Platform.Operator", "Platform.Admin", "Unknown.Role", "agent.invoke"],
+)
+def test_invite_user_rejects_non_tenant_scoped_roles(fake_state: dict[str, Any], role: str) -> None:
+    fake_state["db"].items[("TENANT#t-invite-role", "METADATA")] = {
+        "PK": "TENANT#t-invite-role",
+        "SK": "METADATA",
+        "tenantId": "t-invite-role",
+        "appId": "app-invite-role",
+        "status": "active",
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-invite-role",
+        caller_tenant_id="t-invite-role",
+        roles=["Platform.Operator"],
+        app_id="app-invite-role",
+        body={"email": "new.user@example.com", "role": role},
+    )
+    event["path"] = "/v1/tenants/t-invite-role/users/invite"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    error = _body(response)["error"]
+    assert error["code"] == "BAD_REQUEST"
+    assert error["message"] == "role must be one of: Agent.Invoke"
+
+
+def test_invite_user_defaults_role_to_agent_invoke(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-invite-default", "METADATA")] = {
+        "PK": "TENANT#t-invite-default",
+        "SK": "METADATA",
+        "tenantId": "t-invite-default",
+        "appId": "app-invite-default",
+        "status": "active",
+    }
+    event = _event(
+        method="POST",
+        tenant_id="t-invite-default",
+        caller_tenant_id="t-invite-default",
+        roles=["Platform.Operator"],
+        app_id="app-invite-default",
+        body={"email": "new.user@example.com"},
+    )
+    event["path"] = "/v1/tenants/t-invite-default/users/invite"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 202
+    assert _body(response)["invite"]["role"] == "Agent.Invoke"
+
+
 def test_invite_user_canonicalizes_mixed_case_path_tenant_id(fake_state: dict[str, Any]) -> None:
     fake_state["db"].items[("TENANT#tenant-invite-001", "METADATA")] = {
         "PK": "TENANT#tenant-invite-001",
