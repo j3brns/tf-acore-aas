@@ -1,6 +1,6 @@
 # a5c-atom: Agentic infra cell deployment framework
 
-## _A deployable agentic stack - atomic cell based enclaves - built on AWS. Boot-strap under 70 mins._
+## _Atomic cell based Agent enclaves - built on AWS. Boot-strap under 70 mins._
 
 An early *exploratory* production informed personal fact find. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy, worked as a cellular framework layer - are worth the squeeze over printed SOPs and BaU Devops procedure..
 
@@ -10,7 +10,7 @@ Each **a5c-atom** builds a micro-service layer onto Bedrock and AgentCore to add
 
 > *We built it to run it for 100 days* so it delivers an agentic operable task and automations layer. Practical, usable CLI and Runbook mean federated ownership is mobile, standardised and readily novates with AI operations strategies.
 
-> **Demarcation** *Every* **a5c-atom** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
+> **Scaling Demarcation** *Every* **a5c-atom** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
 
 **How does it feel?** Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently across a fast responsive inner harness loop - including a local stack 
