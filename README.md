@@ -389,6 +389,7 @@ Platform Lambda source directories use `snake_case`. The shared `src/data-access
 |------|---------|
 | Faith | Hope |
 
+## Appendix
 # Sequence diagram - services layer
 
 ```mermaid
