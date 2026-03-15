@@ -21,9 +21,9 @@ Normally same as; Who decides its Prod ready? No one, in this case, so I built a
 
 > I'm actually a firm believer in the mentality **"You build it , YOU run it"** exacts. New tech needs to be unerpinned by sharp end skill, and Devs are usually first to hit the 'unsupported yet' wall!
 
-_The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. And sample the Dev Experience.
+_The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. And sample the Dev Experience._
 
-The result is a practical Ops CLI, supersonic inner-loop and a runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice._
+The result is a practical Ops CLI, supersonic inner-loop and a runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice.
 
 > **Scaling demarcation (concept)**  
 > Every **a5c-cell** maps 1:1 to:
