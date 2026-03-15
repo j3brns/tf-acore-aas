@@ -1,20 +1,20 @@
-# a5c-cell-let: An atomic agentic cell deployment framework.
-## Unit deployable, granular agentic cell stack - built on AWS. Boot-strap in 70 mins.
+# a5c-cell-let: An atomic agentic service cluster deployment framework.
+## _Unit deployable, granular agentic cell stack - built on AWS. Boot-strap in 70 mins._
 
-> *Built it to run it* delivers an agentic operable task and automations layer, usable federated ownership is mobile, standardised and readily novates to AI operations strategies.
-
-Each **a5c-cell-let** builds a layer on Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and an exposition layer. 
-
-> Each **a5c-cell-let** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
-
-Its an early *exploratory* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy as a cellular framework layer are worth the squeeze over printed SOPs and procedure..
+An early *exploratory* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy as a cellular framework layer are worth the squeeze over printed SOPs and procedure..
 
 >The Squueeze is real: Overhead, Mntnce, Roadmap and resoures, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
 
+Each **a5c-cell-let** builds a micro-service layer onto Bedrock and AgentCore to add partitionable tenancy, Ops, tooling, a *light speed* inner loop, logging, controls and a single page app exposition layer. 
 
-Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
-and compliance controls baked in. Agent developer teams push new agents independently across  an inner loop
-via a local stack .. And a super fast self-service pipeline — no platform release outerloop required for sub prod aliased challengers.  But please don't test in Prod
+> *We built it to run it for 100 days* so it delivers an agentic operable task and automations layer. Practical, usable CLI and Runbook mean federated ownership is mobile, standardised and readily novates with AI operations strategies.
+
+> **Demarcation** *Every* **a5c-cell-let** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
+
+**How does it feel?** Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
+and compliance controls baked in. Agent developer teams push new agents independently across a fast responsive inner harness loop - including a local stack 
+
+.. That is a super fast self-service pipeline, that splits agent code from heavy dependencies — no platform release outer loop required for sub prod aliased challengers.  But please don't test in Prod
 
 ![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
 
