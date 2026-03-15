@@ -16,7 +16,7 @@
 .PHONY: bootstrap-cdk bootstrap-secrets bootstrap-gitlab-oidc
 .PHONY: bootstrap-post-deploy bootstrap-verify bootstrap-delete-iam-user
 .PHONY: agent-push agent-invoke agent-logs agent-test agent-rollback
-.PHONY: spa-dev spa-build spa-deploy
+.PHONY: spa-dev spa-build spa-push
 .PHONY: ops-login ops-top-tenants ops-tenant-sessions ops-suspend-tenant
 .PHONY: ops-reinstate-tenant ops-quota-report ops-invocation-report
 .PHONY: ops-security-events ops-dlq-inspect ops-dlq-redrive ops-error-rate
@@ -449,6 +449,7 @@ agent-rollback:
 # =============================================================================
 # SPA FRONTEND
 # =============================================================================
+.PHONY: spa-dev spa-build spa-push
 
 ## spa-dev: Start SPA development server against local mock API
 spa-dev:
@@ -458,13 +459,12 @@ spa-dev:
 spa-build:
 	cd spa && npm run build
 
-## spa-deploy: Deploy SPA to S3 and invalidate CloudFront
-## Usage: make spa-deploy ENV=staging
-spa-deploy:
-	@test -n "$(ENV)" || (echo "ERROR: ENV required" && exit 1)
+## spa-push: Build and push SPA to S3 and invalidate CloudFront
+## Usage: make spa-push ENV=staging
+spa-push:
+	@test -n "$(ENV)" || (echo "ERROR: ENV required. Usage: make spa-push ENV=staging" && exit 1)
 	$(MAKE) spa-build
 	uv run python scripts/deploy_frontend.py --env $(ENV)
-
 # =============================================================================
 # OPERATIONS
 # =============================================================================

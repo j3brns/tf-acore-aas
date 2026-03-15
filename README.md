@@ -170,7 +170,6 @@ make preflight-session        # branch/issue policy checks
 make pre-validate-session     # fast pre-push validation (no cdk synth)
 make worktree-push-issue      # push with preflight + pre-validate enforced
 ```
-
 ### Agent developer inner loop
 
 ```bash
@@ -179,6 +178,14 @@ make agent-invoke AGENT=my-agent TENANT=t-test-001 PROMPT="hello"
 make agent-test AGENT=my-agent
 ```
 
+### Frontend developer inner loop
+
+```bash
+make spa-dev                              # start local SPA dev server against mock API
+make spa-push ENV=dev                     # build and push SPA to S3 + invalidate CloudFront
+```
+
+### Operations
 See [Agent Developer Guide](docs/development/AGENT-DEVELOPER-GUIDE.md) for full details.
 
 ### Operations
