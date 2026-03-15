@@ -1,6 +1,10 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { AgentCoreStack } from '../lib/agentcore-stack';
+import {
+  DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE,
+  TENANT_MEMORY_TEMPLATE_PARAMETER_NAME,
+} from '../lib/agentcore-memory-template';
 
 describe('AgentCoreStack (TASK-024)', () => {
   const synthTemplate = () => {
@@ -69,13 +73,17 @@ describe('AgentCoreStack (TASK-024)', () => {
 
   test('creates SSM parameters for memory template and Entra JWKS URL', () => {
     template.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/platform/agentcore/memory/template/default',
+      Name: TENANT_MEMORY_TEMPLATE_PARAMETER_NAME,
       Type: 'String',
       Value: Match.serializedJson(
         Match.objectLike({
-          provisionedBy: 'TenantStack',
-          eventExpiryDurationDays: 90,
-          strategy: 'SEMANTIC',
+          provisionedBy: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.provisionedBy,
+          eventExpiryDurationDays: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.eventExpiryDurationDays,
+          semanticMemory: Match.objectLike({
+            strategy: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.semanticMemory.strategy,
+            namespaceTemplate:
+              DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.semanticMemory.namespaceTemplate,
+          }),
         }),
       ),
     });

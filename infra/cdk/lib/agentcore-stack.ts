@@ -12,6 +12,10 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import {
+  serializeAgentCoreTenantMemoryTemplate,
+  TENANT_MEMORY_TEMPLATE_PARAMETER_NAME,
+} from './agentcore-memory-template';
 
 export interface AgentCoreStackProps extends cdk.StackProps {
   readonly homeRegion: string;
@@ -140,16 +144,10 @@ export class AgentCoreStack extends cdk.Stack {
     runtimeEndpoint.addDependency(runtime);
 
     const memoryTemplateParameter = new ssm.StringParameter(this, 'TenantMemoryTemplateParameter', {
-      parameterName: '/platform/agentcore/memory/template/default',
+      parameterName: TENANT_MEMORY_TEMPLATE_PARAMETER_NAME,
       description:
         'Template used by TenantStack when provisioning per-tenant AWS::BedrockAgentCore::Memory resources',
-      stringValue: JSON.stringify({
-        provisionedBy: 'TenantStack',
-        eventExpiryDurationDays: 90,
-        strategy: 'SEMANTIC',
-        namespaceTemplate: 'tenant/{tenantId}',
-        descriptionTemplate: 'Per-tenant AgentCore memory',
-      }),
+      stringValue: serializeAgentCoreTenantMemoryTemplate(),
       tier: ssm.ParameterTier.STANDARD,
     });
 
