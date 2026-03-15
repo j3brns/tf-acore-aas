@@ -19,6 +19,10 @@ export type ApiClientOptions = {
   fetchImpl?: typeof fetch;
 };
 
+export type BffAuthOptions = {
+  accessToken: string;
+};
+
 export type SseEvent = {
   event: string;
   data: string;
@@ -61,12 +65,22 @@ export class ApiClient {
     return this.requestWithAuth(path, init, false);
   }
 
-  async bffTokenRefresh(request: BffTokenRefreshRequestDto): Promise<BffTokenRefreshResponseDto> {
-    return this.request<BffTokenRefreshResponseDto>("/v1/bff/token-refresh", {
+  async bffTokenRefresh(
+    request: BffTokenRefreshRequestDto,
+    auth: BffAuthOptions,
+  ): Promise<BffTokenRefreshResponseDto> {
+    const response = await this.fetchImpl(this.resolveUrl("/v1/bff/token-refresh"), {
       method: "POST",
       body: JSON.stringify(request),
-      headers: { "Content-Type": "application/json" },
+      headers: mergeHeaders(
+        { "Content-Type": "application/json" },
+        { Authorization: `Bearer ${auth.accessToken}` },
+      ),
     });
+    if (!response.ok) {
+      throw await toApiError(response);
+    }
+    return parseJsonResponse<BffTokenRefreshResponseDto>(response);
   }
 
   async bffSessionKeepalive(

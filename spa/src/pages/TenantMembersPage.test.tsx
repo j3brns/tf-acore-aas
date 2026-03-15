@@ -49,7 +49,7 @@ describe("TenantMembersPage", () => {
       invite: {
         inviteId: "invite-1",
         email: "new.user@example.com",
-        role: "Platform.Operator",
+        role: "Agent.Invoke",
         status: "pending",
         expiresAt: "2026-03-31T00:00:00Z",
       },
@@ -60,9 +60,6 @@ describe("TenantMembersPage", () => {
     fireEvent.change(screen.getByLabelText("Email Address"), {
       target: { value: "new.user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText("Role"), {
-      target: { value: "Platform.Operator" },
-    });
     fireEvent.click(screen.getByRole("button", { name: "Send Invite" }));
 
     await waitFor(() => {
@@ -71,7 +68,7 @@ describe("TenantMembersPage", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: "new.user@example.com",
-          role: "Platform.Operator",
+          role: "Agent.Invoke",
         }),
       });
     });
@@ -79,6 +76,14 @@ describe("TenantMembersPage", () => {
     expect(client.request).not.toHaveBeenCalledWith("/v1/tenants/tenant-acme/users/invites");
     expect(screen.getByText("Invite sent to new.user@example.com.")).toBeInTheDocument();
     expect(screen.getByText("new.user@example.com")).toBeInTheDocument();
-    expect(screen.getByText("Platform.Operator")).toBeInTheDocument();
+    expect(screen.getAllByText("Agent.Invoke")).not.toHaveLength(0);
+  });
+
+  it("does not offer platform roles in the invite form", () => {
+    render(<TenantMembersPage />);
+
+    expect(screen.getByText("Agent.Invoke (tenant-scoped access)")).toBeInTheDocument();
+    expect(screen.queryByText("Platform.Operator (Admin Access)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Role")).not.toBeInTheDocument();
   });
 });
