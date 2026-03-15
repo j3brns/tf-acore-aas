@@ -157,11 +157,11 @@ stateDiagram-v2
         state "Secure Dispatch" as Dispatch
 
         [*] --> Map
-        Map --> AssumeRole: Perform Mapping  <-- Fixed by simplifying the label
+        Map --> AssumeRole: Perform Mapping
         AssumeRole --> Dispatch: STS Credentials obtained
         Dispatch --> AgentCore_Runtime: Firecracker microVM Initialized & Dispatched
 
-        note left of Map                       <-- Added a note here for the detail
+        note left of Map
             Consults mapping:
             TenantID -> ARN
         end note
