@@ -60,7 +60,7 @@ After `make dev`, two test tenants are available. Their JWTs are in `.env.test`:
 | PREMIUM_TENANT_JWT    | t-test-002 | premium  |
 | ADMIN_JWT             | admin-001  | Platform.Admin |
 
-Use these in `make agent-invoke --tenant t-test-001` or in your tests via conftest.py.
+Use these with `make agent-invoke AGENT=echo-agent TENANT=t-test-001` or in your tests via `conftest.py`.
 
 ## Running Tests
 

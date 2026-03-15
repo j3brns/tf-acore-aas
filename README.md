@@ -175,7 +175,7 @@ make worktree-push-issue      # push with preflight + pre-validate enforced
 
 ```bash
 make agent-push AGENT=my-agent ENV=dev    # push agent, fast path when deps are unchanged
-make agent-invoke AGENT=my-agent PROMPT="hello"
+make agent-invoke AGENT=my-agent TENANT=t-test-001 PROMPT="hello"
 make agent-test AGENT=my-agent
 ```
 
