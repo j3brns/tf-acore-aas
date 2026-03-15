@@ -9,6 +9,7 @@ from typing import Any
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -189,12 +190,80 @@ def test_deploy_agent_returns_false_when_runtime_update_fails(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 
 
-@mock_aws
 def test_register_agent(tmp_path, monkeypatch):
     monkeypatch.setenv("AWS_REGION", _REGION)
     monkeypatch.setenv("CI", "true")
 
-    # Monkeypatch REPO_ROOT
+    monkeypatch.setattr(register_agent, "REPO_ROOT", tmp_path)
+
+    agent_name = "echo-agent"
+    env = "dev"
+    agent_dir = tmp_path / "agents" / agent_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+    stored_items: list[dict[str, object]] = []
+    latest_version_writes: list[dict[str, object]] = []
+
+    def put_item(**kwargs):
+        stored_items.append(kwargs["Item"])
+
+    def put_parameter(**kwargs):
+        latest_version_writes.append(kwargs)
+
+    fake_table = types.SimpleNamespace(put_item=put_item)
+    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
+    fake_ssm = types.SimpleNamespace(put_parameter=put_parameter)
+
+    monkeypatch.setattr(
+        register_agent,
+        "boto3",
+        types.SimpleNamespace(
+            client=lambda service_name, **kwargs: fake_ssm,
+            resource=lambda service_name, **kwargs: fake_resource,
+        ),
+    )
+    monkeypatch.setattr(
+        register_agent,
+        "get_ssm_param",
+        lambda ssm, name: {
+            f"/platform/layers/{env}/{agent_name}/hash": "hash123",
+            f"/platform/layers/{env}/{agent_name}/s3-key": "layers/key.zip",
+            f"/platform/agents/{env}/{agent_name}/script-s3-key": "scripts/custom-key.zip",
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": None,
+        }[name],
+    )
+
+    assert register_agent.register_agent(agent_name, env) is True
+
+    assert len(stored_items) == 1
+    item = stored_items[0]
+    assert item["agent_name"] == agent_name
+    assert item["version"] == "1.2.3"
+    assert item["layer_hash"] == "hash123"
+    assert item["script_s3_key"] == "scripts/custom-key.zip"
+
+    assert latest_version_writes == [
+        {
+            "Name": f"/platform/agents/{env}/{agent_name}/latest-version",
+            "Value": "1.2.3",
+            "Type": "String",
+            "Overwrite": True,
+        }
+    ]
+
+
+def test_register_agent_returns_false_when_dynamodb_write_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setenv("CI", "true")
     monkeypatch.setattr(register_agent, "REPO_ROOT", tmp_path)
 
     agent_name = "echo-agent"
@@ -212,50 +281,89 @@ tier_minimum = "basic"
 invocation_mode = "sync"
 """)
 
-    # Setup DynamoDB
-    dynamodb = boto3.client("dynamodb", region_name=_REGION)
-    dynamodb.create_table(
-        TableName="platform-agents",
-        KeySchema=[
-            {"AttributeName": "PK", "KeyType": "HASH"},
-            {"AttributeName": "SK", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "PK", "AttributeType": "S"},
-            {"AttributeName": "SK", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
+    def failing_put_item(*args, **kwargs):
+        raise ClientError(
+            {"Error": {"Code": "InternalServerError", "Message": "ddb write failed"}},
+            "PutItem",
+        )
+
+    fake_table = types.SimpleNamespace(put_item=failing_put_item)
+    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
+    fake_ssm = types.SimpleNamespace(put_parameter=lambda **kwargs: None)
+
+    monkeypatch.setattr(
+        register_agent,
+        "boto3",
+        types.SimpleNamespace(
+            client=lambda service_name, **kwargs: fake_ssm,
+            resource=lambda service_name, **kwargs: fake_resource,
+        ),
+    )
+    monkeypatch.setattr(
+        register_agent,
+        "get_ssm_param",
+        lambda ssm, name: {
+            f"/platform/layers/{env}/{agent_name}/hash": "hash123",
+            f"/platform/layers/{env}/{agent_name}/s3-key": "layers/key.zip",
+            f"/platform/agents/{env}/{agent_name}/script-s3-key": "scripts/custom-key.zip",
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": None,
+        }[name],
     )
 
-    # Setup SSM values (environment-scoped)
-    ssm = boto3.client("ssm", region_name=_REGION)
-    ssm.put_parameter(
-        Name=f"/platform/layers/{env}/{agent_name}/hash",
-        Value="hash123",
-        Type="String",
+    assert register_agent.register_agent(agent_name, env) is False
+
+
+def test_register_agent_returns_false_when_latest_version_write_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(register_agent, "REPO_ROOT", tmp_path)
+
+    agent_name = "echo-agent"
+    env = "dev"
+    agent_dir = tmp_path / "agents" / agent_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+    put_item_calls: list[dict[str, object]] = []
+
+    def failing_put_parameter(*args, **kwargs):
+        if kwargs.get("Name") == f"/platform/agents/{env}/{agent_name}/latest-version":
+            raise ClientError(
+                {"Error": {"Code": "InternalServerError", "Message": "ssm write failed"}},
+                "PutParameter",
+            )
+        return None
+
+    fake_table = types.SimpleNamespace(put_item=lambda **kwargs: put_item_calls.append(kwargs))
+    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
+    fake_ssm = types.SimpleNamespace(put_parameter=failing_put_parameter)
+
+    monkeypatch.setattr(
+        register_agent,
+        "boto3",
+        types.SimpleNamespace(
+            client=lambda service_name, **kwargs: fake_ssm,
+            resource=lambda service_name, **kwargs: fake_resource,
+        ),
     )
-    ssm.put_parameter(
-        Name=f"/platform/layers/{env}/{agent_name}/s3-key", Value="layers/key.zip", Type="String"
-    )
-    ssm.put_parameter(
-        Name=f"/platform/agents/{env}/{agent_name}/script-s3-key",
-        Value="scripts/custom-key.zip",
-        Type="String",
+    monkeypatch.setattr(
+        register_agent,
+        "get_ssm_param",
+        lambda ssm, name: {
+            f"/platform/layers/{env}/{agent_name}/hash": "hash123",
+            f"/platform/layers/{env}/{agent_name}/s3-key": "layers/key.zip",
+            f"/platform/agents/{env}/{agent_name}/script-s3-key": "scripts/custom-key.zip",
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": None,
+        }[name],
     )
 
-    register_agent.register_agent(agent_name, env)
-
-    # Verify DynamoDB record
-    ddb = boto3.resource("dynamodb", region_name=_REGION)
-    table = ddb.Table("platform-agents")
-    response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": "VERSION#1.2.3"})
-    item = response["Item"]
-    assert item["agent_name"] == agent_name
-    assert item["version"] == "1.2.3"
-    assert item["layer_hash"] == "hash123"
-    assert item["script_s3_key"] == "scripts/custom-key.zip"
-
-    # Verify SSM latest-version (environment-scoped)
-    param_name = f"/platform/agents/{env}/{agent_name}/latest-version"
-    latest_version_param = ssm.get_parameter(Name=param_name)
-    assert latest_version_param["Parameter"]["Value"] == "1.2.3"
+    assert register_agent.register_agent(agent_name, env) is False
+    assert len(put_item_calls) == 1

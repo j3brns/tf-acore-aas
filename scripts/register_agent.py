@@ -112,9 +112,7 @@ def register_agent(agent_name: str, env: str) -> bool:
         )
     except ClientError as e:
         logger.error(f"Failed to write to DynamoDB or SSM: {e}")
-        if not os.environ.get("CI"):
-            return False
-        logger.info("Continuing anyway because CI is set (might be using mock)")
+        return False
 
     logger.info(f"Agent '{agent_name}' registered successfully")
     return True
