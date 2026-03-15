@@ -1,17 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getApiClient } from "../api/client";
+import type { TenantReadResponseDto } from "../api/contracts";
 import { useAuth } from "../auth/useAuth";
-
-type TenantRecord = {
-    tenantId: string;
-    displayName: string;
-    tier: string;
-    status: string;
-    ownerEmail: string;
-    ownerTeam: string;
-    createdAt: string;
-    updatedAt: string;
-};
 
 function resolveTenantId(claims: unknown): string | null {
     if (!claims || typeof claims !== "object") {
@@ -26,7 +16,7 @@ export const TenantSettingsPage: React.FC = () => {
     const { getAccessToken, account, isAuthenticated } = useAuth();
     const tenantId = useMemo(() => resolveTenantId(account?.idTokenClaims), [account?.idTokenClaims]);
 
-    const [tenant, setTenant] = useState<TenantRecord | null>(null);
+    const [tenant, setTenant] = useState<TenantReadResponseDto["tenant"] | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +29,7 @@ export const TenantSettingsPage: React.FC = () => {
         const run = async () => {
             try {
                 const client = getApiClient(getAccessToken);
-                const data = await client.request<{ tenant: TenantRecord }>(`/v1/tenants/${tenantId}`);
+                const data = await client.request<TenantReadResponseDto>(`/v1/tenants/${tenantId}`);
                 setTenant(data.tenant);
             } catch (err) {
                 setError(err instanceof Error ? err.message : "Failed to load settings.");

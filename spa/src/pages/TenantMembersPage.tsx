@@ -1,15 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { getApiClient } from "../api/client";
+import type { TenantUserInviteAcceptedResponseDto, TenantUserInviteDto } from "../api/contracts";
 import { useAuth } from "../auth/useAuth";
-
-type Invite = {
-    inviteId: string;
-    email: string;
-    role: string;
-    status: string;
-    expiresAt: string;
-    createdAt?: string;
-};
 
 function resolveTenantId(claims: unknown): string | null {
     if (!claims || typeof claims !== "object") {
@@ -24,7 +16,7 @@ export const TenantMembersPage: React.FC = () => {
     const { getAccessToken, account, isAuthenticated } = useAuth();
     const tenantId = useMemo(() => resolveTenantId(account?.idTokenClaims), [account?.idTokenClaims]);
 
-    const [invites, setInvites] = useState<Invite[]>([]);
+    const [invites, setInvites] = useState<TenantUserInviteDto[]>([]);
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviteRole, setInviteRole] = useState("Agent.Invoke");
     const [submitting, setSubmitting] = useState(false);
@@ -37,7 +29,7 @@ export const TenantMembersPage: React.FC = () => {
         setInviteMessage(null);
         try {
             const client = getApiClient(getAccessToken);
-            const response = await client.request<{ invite: Invite }>(`/v1/tenants/${tenantId}/users/invite`, {
+            const response = await client.request<TenantUserInviteAcceptedResponseDto>(`/v1/tenants/${tenantId}/users/invite`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),

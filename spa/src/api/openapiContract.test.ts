@@ -35,6 +35,11 @@ type OpenApiOperation = {
   >;
 };
 
+type SourceRouteReference = {
+  filePath: string;
+  route: string;
+};
+
 function loadOpenApiDoc(): OpenApiDoc {
   const currentFile = fileURLToPath(import.meta.url);
   const specPath = path.resolve(path.dirname(currentFile), "../../../docs/openapi.yaml");
@@ -103,6 +108,74 @@ function resolveSchema(schema: OpenApiSchema | undefined, doc: OpenApiDoc): Open
   return schema;
 }
 
+function resolveSchemaPath(
+  schema: OpenApiSchema | undefined,
+  doc: OpenApiDoc,
+  fieldPath: string,
+): OpenApiSchema | undefined {
+  let current = resolveSchema(schema, doc);
+  for (const segment of fieldPath.split(".")) {
+    current = resolveSchema(current?.properties?.[segment], doc);
+  }
+  return current;
+}
+
+function collectSpaRouteReferences(): SourceRouteReference[] {
+  const currentFile = fileURLToPath(import.meta.url);
+  const spaSrcRoot = path.resolve(path.dirname(currentFile), "..");
+  const targetFiles = [
+    path.join(spaSrcRoot, "api", "client.ts"),
+    path.join(spaSrcRoot, "hooks", "useJobPolling.ts"),
+    ...walkFiles(path.join(spaSrcRoot, "pages")),
+  ];
+
+  const routePattern = /(["'`])((?:\/v1\/)[^"'`\n]+)\1/g;
+  const references: SourceRouteReference[] = [];
+
+  for (const filePath of targetFiles) {
+    if (filePath.endsWith(".test.ts") || filePath.endsWith(".test.tsx")) {
+      continue;
+    }
+
+    const source = fs.readFileSync(filePath, "utf8");
+    for (const match of source.matchAll(routePattern)) {
+      references.push({
+        filePath,
+        route: normalizeRoutePath(match[2]),
+      });
+    }
+  }
+
+  return references;
+}
+
+function walkFiles(root: string): string[] {
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+function normalizeRoutePath(route: string): string {
+  return route
+    .split("?")[0]
+    .replace(/\$\{\s*agentName\s*\}/g, "{agentName}")
+    .replace(/\$\{\s*tenantId\s*\}/g, "{tenantId}")
+    .replace(/\$\{\s*jobId\s*\}/g, "{jobId}")
+    .replace(/\$\{\s*webhookId\s*\}/g, "{webhookId}");
+}
+
 describe("SPA/OpenAPI contract drift", () => {
   it("keeps SPA-consumed endpoints and response fields aligned", () => {
     const doc = loadOpenApiDoc();
@@ -135,22 +208,34 @@ describe("SPA/OpenAPI contract drift", () => {
           collectionSchema?.type === "array"
             ? resolveSchema(collectionSchema.items, doc)
             : collectionSchema;
-        for (const field of contract.requiredFields) {
+        for (const fieldPath of contract.requiredFieldPaths) {
           expect(
-            itemSchema?.properties?.[field],
-            `${contract.name}: missing field ${field} on collection item schema`,
+            resolveSchemaPath(itemSchema, doc, fieldPath),
+            `${contract.name}: missing field ${fieldPath} on collection item schema`,
           ).toBeTruthy();
         }
         continue;
       }
 
       const resolvedRoot = resolveSchema(responseSchema, doc);
-      for (const field of contract.requiredFields) {
+      for (const fieldPath of contract.requiredFieldPaths) {
         expect(
-          resolvedRoot?.properties?.[field],
-          `${contract.name}: missing field ${field} on response schema`,
+          resolveSchemaPath(resolvedRoot, doc, fieldPath),
+          `${contract.name}: missing field ${fieldPath} on response schema`,
         ).toBeTruthy();
       }
+    }
+  });
+
+  it("does not reference undocumented SPA API routes", () => {
+    const doc = loadOpenApiDoc();
+    const references = collectSpaRouteReferences();
+
+    for (const reference of references) {
+      expect(
+        doc.paths?.[reference.route],
+        `${path.basename(reference.filePath)} references undocumented route ${reference.route}`,
+      ).toBeTruthy();
     }
   });
 });
