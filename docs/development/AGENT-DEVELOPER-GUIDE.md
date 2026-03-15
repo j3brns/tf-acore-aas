@@ -19,7 +19,7 @@ vim agents/my-agent/pyproject.toml
 # Develop locally
 make dev                                    # Start local environment
 make agent-push AGENT=my-agent ENV=dev      # Deploy to local mock Runtime
-make agent-invoke AGENT=my-agent PROMPT="hello"
+make agent-invoke AGENT=my-agent TENANT=t-test-001 PROMPT="hello"
 
 # Run tests
 make agent-test AGENT=my-agent
