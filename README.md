@@ -116,81 +116,6 @@ AWS documentation now shows AgentCore Runtime and related core services availabl
 Client → CloudFront → API Gateway with WAF and usage plan → **Authoriser** for JWT validation and tenant context → **Bridge** for tenant role assumption and runtime dispatch → **AgentCore Runtime** in Firecracker microVM → **Gateway interceptors** for act-on-behalf tokens and tier filtering → Tool Lambdas → response stream returned to client.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant CloudFront as CloudFront (Edge)
-    participant WAF as AWS WAF (Firewall)
-    participant APIGW as API Gateway (with Usage Plan)
-    participant Authorizer as Lambda Authorizer (JWT & Context)
-    participant Bridge as Bridge Lambda (Tenant Context Mapper)
-    participant STS as AWS STS (Role Assumption)
-    participant AgentCoreRuntime as AgentCore Runtime (in Firecracker microVM)
-    participant TokenEx as Token Exchange Service
-    participant ToolLambdas as Tool Lambdas
-
-    Client->>CloudFront: 1. Send Request (with JWT)
-    CloudFront->>WAF: 2. Forward Request
-
-    alt WAF inspection
-        WAF-->>CloudFront: 2a. Blocked (403)
-        CloudFront-->>Client: 2b. Blocked (403 Response)
-    else WAF inspection allowed
-        WAF->>APIGW: 3. Forward Request
-    end
-
-    APIGW->>APIGW: 4. Apply Usage Plan (API Key check)
-    alt Usage limit exceeded
-        APIGW-->>CloudFront: 4a. Throttle (429)
-        CloudFront-->>Client: 4b. Throttle (429 Response)
-    end
-
-    APIGW->>Authorizer: 5. Invoke for JWT Validation
-    Note right of Authorizer: Validates JWT signature,<br/>Extracts Tenant ID.
-    Authorizer->>Authorizer: 6. Build Policy & Context
-
-    alt Authentication fails (Invalid JWT)
-        Authorizer-->>APIGW: 6a. Deny Policy
-        APIGW-->>Client: 6b. Unauthorized (401/403 Response)
-    end
-
-    Authorizer-->>APIGW: 7. Return Allow Policy & `tenantContext`
-
-    Note right of APIGW: API Gateway caches policy<br/>and context for request.
-    APIGW->>Bridge: 8. Invoke Bridge Lambda (Forward Request + `tenantContext`)
-
-    Note right of Bridge: Consults mapping:<br/>TenantID -> IAM Role ARN
-    Bridge->>STS: 9. `AssumeRole(Tenant IAM Role ARN)`
-    STS-->>Bridge: 10. Return Tenant Temporary Credentials
-
-    Note right of Bridge: Prepares refined runtime payload,<br/>including `tenantContext` and<br/>tenant temporary credentials.
-    Bridge->>Bridge: 11. Launch & Dispatch to Firecracker microVM
-
-    Bridge->>AgentCoreRuntime: 12. Invoke AgentCore Runtime (Refined Request + Credentials)
-
-    par Parallel Gateway Interceptors
-        AgentCoreRuntime->>AgentCoreRuntime: 13. Interceptor: Tier Filtering Check
-        Note right of AgentCoreRuntime: Filters operations<br/>based on tenant tier.
-    and Interceptor: Act-On-Behalf Token
-        AgentCoreRuntime->>TokenEx: 14. `Exchange(Tenant Credentials + AOBT)` for Tool Token
-        TokenEx-->>AgentCoreRuntime: 15. Return Tool Token
-    end
-
-    Note right of AgentCoreRuntime: Prepares tool execution with Tool Token.
-    AgentCoreRuntime->>ToolLambdas: 16. Invoke Tool Lambdas
-    ToolLambdas-->>AgentCoreRuntime: 17. Return Tool Results
-
-    AgentCoreRuntime->>AgentCoreRuntime: 18. Process Results & Aggregate
-
-    Note right of AgentCoreRuntime: Starts response stream back.
-    AgentCoreRuntime-->>Bridge: 19. Response Stream (Continuous)
-    Bridge-->>APIGW: 20. Response Stream (Continuous)
-    APIGW-->>CloudFront: 21. Response Stream (Continuous)
-    CloudFront-->>Client: 22. Response Stream (Continuous)
-    Note right of Client: Response stream is fully delivered.
-```
-
-```mermaid
 stateDiagram-v2
     [*] --> RequestSent: Client initiates Request
     RequestSent --> EdgeEntry: CloudFront receives Request
@@ -463,3 +388,81 @@ Platform Lambda source directories use `snake_case`. The shared `src/data-access
 | Role | Contact |
 |------|---------|
 | Faith | Hope |
+
+# Sequence diagram - services layer
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant CloudFront as CloudFront (Edge)
+    participant WAF as AWS WAF (Firewall)
+    participant APIGW as API Gateway (with Usage Plan)
+    participant Authorizer as Lambda Authorizer (JWT & Context)
+    participant Bridge as Bridge Lambda (Tenant Context Mapper)
+    participant STS as AWS STS (Role Assumption)
+    participant AgentCoreRuntime as AgentCore Runtime (in Firecracker microVM)
+    participant TokenEx as Token Exchange Service
+    participant ToolLambdas as Tool Lambdas
+
+    Client->>CloudFront: 1. Send Request (with JWT)
+    CloudFront->>WAF: 2. Forward Request
+
+    alt WAF inspection
+        WAF-->>CloudFront: 2a. Blocked (403)
+        CloudFront-->>Client: 2b. Blocked (403 Response)
+    else WAF inspection allowed
+        WAF->>APIGW: 3. Forward Request
+    end
+
+    APIGW->>APIGW: 4. Apply Usage Plan (API Key check)
+    alt Usage limit exceeded
+        APIGW-->>CloudFront: 4a. Throttle (429)
+        CloudFront-->>Client: 4b. Throttle (429 Response)
+    end
+
+    APIGW->>Authorizer: 5. Invoke for JWT Validation
+    Note right of Authorizer: Validates JWT signature,<br/>Extracts Tenant ID.
+    Authorizer->>Authorizer: 6. Build Policy & Context
+
+    alt Authentication fails (Invalid JWT)
+        Authorizer-->>APIGW: 6a. Deny Policy
+        APIGW-->>Client: 6b. Unauthorized (401/403 Response)
+    end
+
+    Authorizer-->>APIGW: 7. Return Allow Policy & `tenantContext`
+
+    Note right of APIGW: API Gateway caches policy<br/>and context for request.
+    APIGW->>Bridge: 8. Invoke Bridge Lambda (Forward Request + `tenantContext`)
+
+    Note right of Bridge: Consults mapping:<br/>TenantID -> IAM Role ARN
+    Bridge->>STS: 9. `AssumeRole(Tenant IAM Role ARN)`
+    STS-->>Bridge: 10. Return Tenant Temporary Credentials
+
+    Note right of Bridge: Prepares refined runtime payload,<br/>including `tenantContext` and<br/>tenant temporary credentials.
+    Bridge->>Bridge: 11. Launch & Dispatch to Firecracker microVM
+
+    Bridge->>AgentCoreRuntime: 12. Invoke AgentCore Runtime (Refined Request + Credentials)
+
+    par Parallel Gateway Interceptors
+        AgentCoreRuntime->>AgentCoreRuntime: 13. Interceptor: Tier Filtering Check
+        Note right of AgentCoreRuntime: Filters operations<br/>based on tenant tier.
+    and Interceptor: Act-On-Behalf Token
+        AgentCoreRuntime->>TokenEx: 14. `Exchange(Tenant Credentials + AOBT)` for Tool Token
+        TokenEx-->>AgentCoreRuntime: 15. Return Tool Token
+    end
+
+    Note right of AgentCoreRuntime: Prepares tool execution with Tool Token.
+    AgentCoreRuntime->>ToolLambdas: 16. Invoke Tool Lambdas
+    ToolLambdas-->>AgentCoreRuntime: 17. Return Tool Results
+
+    AgentCoreRuntime->>AgentCoreRuntime: 18. Process Results & Aggregate
+
+    Note right of AgentCoreRuntime: Starts response stream back.
+    AgentCoreRuntime-->>Bridge: 19. Response Stream (Continuous)
+    Bridge-->>APIGW: 20. Response Stream (Continuous)
+    APIGW-->>CloudFront: 21. Response Stream (Continuous)
+    CloudFront-->>Client: 22. Response Stream (Continuous)
+    Note right of Client: Response stream is fully delivered.
+```
+
