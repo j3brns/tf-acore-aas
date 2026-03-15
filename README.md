@@ -1,4 +1,4 @@
-# a5c-cell-let (a5c = A_genti_C): Build and push agents to a cellular agentic cluster.
+# a5c-cell-let (a5c = A_genti_C): Build a cellular agentic cluster.
 ## An e2e boot-strappable, unit deployable, cellular stack management wrapper on AWS
 a5c-cell-let builds on Bedrock and AgentCore to add a partitionable tenancy, Ops, tooling, *light speed* inner loop and exposition layer. 
 > Each Cell is; An AWS account. A service boundary. An Ops and Accounting unit. A namespace. A resource boundary. An abstraction over native AWS.
