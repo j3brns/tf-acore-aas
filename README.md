@@ -116,20 +116,6 @@ AWS documentation now shows AgentCore Runtime and related core services availabl
 Client → CloudFront → API Gateway with WAF and usage plan → **Authoriser** for JWT validation and tenant context → **Bridge** for tenant role assumption and runtime dispatch → **AgentCore Runtime** in Firecracker microVM → **Gateway interceptors** for act-on-behalf tokens and tier filtering → Tool Lambdas → response stream returned to client.
 
 ```mermaid
-I apologize. I understand this is incredibly frustrating.
-
-Looking closely at the error message you just sent: `...y delivered. ```### Tenant isolat`.
-
-**The error is NOT caused by the Mermaid code.** The error is caused because **markdown description text was accidentally pasted into the Mermaid rendering tool.**
-
-The Mermaid renderer is trying to read "### Tenant isolation" as if it were a diagram command, which is causing it to crash.
-
-Please follow these exact steps to fix it:
-
-1. **Clear your current editor completely.**
-2. **Copy ONLY the code block below**, starting from `sequenceDiagram` and ending at the final `end note`. Do not include the triple backticks (```) or any text outside of them.
-
-```mermaid
 sequenceDiagram
     autonumber
     actor Client
@@ -202,10 +188,7 @@ sequenceDiagram
     APIGW-->>CloudFront: 21. Response Stream (Continuous)
     CloudFront-->>Client: 22. Response Stream (Continuous)
     Note right of Client: Response stream is fully delivered.
-
 ```
-
-I have also provided the State Diagram again below. Please repeat the process: **Clear your editor again** and copy **ONLY** the code within the block. This code is also syntactically correct and was fixed previously to remove elements that cause parser errors in `stateDiagram-v2`.
 
 ```mermaid
 stateDiagram-v2
