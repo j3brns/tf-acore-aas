@@ -181,6 +181,11 @@ invocation_mode = "sync"
     ssm.put_parameter(
         Name=f"/platform/layers/{env}/{agent_name}/s3-key", Value="layers/key.zip", Type="String"
     )
+    ssm.put_parameter(
+        Name=f"/platform/agents/{env}/{agent_name}/script-s3-key",
+        Value="scripts/custom-key.zip",
+        Type="String",
+    )
 
     register_agent.register_agent(agent_name, env)
 
@@ -192,6 +197,7 @@ invocation_mode = "sync"
     assert item["agent_name"] == agent_name
     assert item["version"] == "1.2.3"
     assert item["layer_hash"] == "hash123"
+    assert item["script_s3_key"] == "scripts/custom-key.zip"
 
     # Verify SSM latest-version (environment-scoped)
     param_name = f"/platform/agents/{env}/{agent_name}/latest-version"
