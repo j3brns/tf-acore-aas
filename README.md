@@ -1,14 +1,14 @@
 # Agentic Infrastructure Framework: **a5c-cell**
 
-## Atomic AWS service cells for agent workloads
-
 <p align="center">
   <img src="docs/images/a5c-cell-readme-intro.png" alt="a5c-cell - Agentic Infrastructure Framework" width="100%" max-width="900px">
 </p>
 
+## Atomic AWS service cells for agent workloads
+
 **a5c-cell** is a personal exploratory project: Production-informed, its a free formed framework for packaging agent workloads into repeatable, operable service cells on AWS-managed infrastructure.
 
-> _**a5c??** a5c is just a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I did need a name.._
+> _**a5c??** Yes, its not a commit fragment "a5c" is just a barely necessary typographic abbreviation of *agentic*. It makes more sense with k8s, but I did need a name.._
 
 At its core, this project asks a practical question: can a bootable, paved, end-to-end stack for operations, tooling, agent development inner loops, and tenancy act as a reusable cellular platform layer, and is that layer worth the operational overhead when compared with runbooks, SOPs, and business-as-usual DevOps procedure?
 
