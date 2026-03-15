@@ -16,8 +16,9 @@ At its core, this project asks a practical question: can a bootable, paved, end-
 
 Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and AgentCore to provide each cell with partitionable tenancy, operational tooling, logging, control points, a fast development inner loop, and for human users - a scaffolded single-page application exposure layer, on Cloudfront.
 
-**Who builds it, who runs it?**
-Normally same as; Who decides its Prod ready? No one, in this case, so I built as if to happily transfer between my alter-ego's for 100 days. 
+**Who builds it, who runs it?** Normally the same answer as; Who decides its actually Prod ready
+
+No one, in this case, so I built as if to happily transfer between my alter-ego's for 100 days. 
 
 > I'm actually a firm believer in the mentality **"You build it , YOU run it"** exacts. New tech needs to be unerpinned by sharp end skill, and Devs are usually first to hit the 'unsupported yet' wall!
 
