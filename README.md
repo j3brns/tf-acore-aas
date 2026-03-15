@@ -36,7 +36,7 @@ Agent teams can push and iterate on agents independently through a responsive in
 
 > In practice, this creates a fast self-service path that separates agent code from heavier platform dependencies. Sub-production releases and aliased challengers can move without waiting for a full outer-loop platform release.
 
-> Useful, certainly. Also the sort of thing that encourages dangerous optimism. Please do not test in production. Not yet.
+_Useful?, certainly. Also the sort of thing that encourages dangerous optimism. Please do not test in production. Not yet._
 
 ![Platform architecture showing eu-west-2 control plane, eu-west-1 compute, and eu-central-1 evaluation regions](docs/images/tf_acore_aas_architecture.drawio.png)
 
