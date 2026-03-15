@@ -1,10 +1,10 @@
-# a5c-cell (A_genti_C) is a unit deployable self contained Agentic runtime and services cell 
-## An e2e stack wrapping Amazon Bedrock AgentCore to add a partitionable tenancy and exposition layer. 
-> Each Cell is an AWS account. Each Cell is a service boundary. Each Cell is an Ops and Accounting unit.
+# a5c-cell-let (a5c = A_genti_C): A bootstrappable and unit deployable cellular managed agent cluster stack.
+## An e2e stack wrapping Amazon Bedrock AgentCore to add a partitionable tenancy Ops tooling and exposition layer. 
+> Each Cell is an AWS account. Each Cell is a service boundary. Each Cell is an Ops and Accounting Demarcation.
 
-Its an experimental production informed fact finder. Bootable e2e stack: ops, tools, agentic dev inner loops tenancy as a cellular framework wrap over Amazon Bedrock AgentCore.
+Its an early *experimental* production informed fact finder. Bootable e2e stack: ops, tools, agentic dev inner loop and tenancy as a cellular framework wrap over AWS Bedrock services and AgentCore.
 
-Tenants invoke AI agents via REST API in captured portal, with full tenant isolation, billing attribution,
+Tenants invoke AI agents via REST API in a captured portal, with full tenant isolation, billing attribution,
 and compliance controls baked in. Agent developer teams push new agents independently across  an inner loop
 via a local stack .. And a super fast self-service pipeline — no platform release outerloop required for sub prod aliased challengers.  But please don't test in Prod
 
