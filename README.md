@@ -1,6 +1,6 @@
 # a5c-atom: Agentic infra cell deployment framework
 
-## _Atomic cell based Agent enclaves - built on AWS. Boot-strap under 70 mins._
+## _Atomic cell based Agent clusters - builn on AWS managed. Boot-strap under 70 mins._
 
 An early *exploratory* production informed personal fact find. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy, worked as a cellular framework layer - are worth the squeeze over printed SOPs and BaU Devops procedure..
 
