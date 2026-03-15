@@ -1,5 +1,5 @@
 # a5c-cell-let: An atomic agentic cell deployment framework.
-## An e2e unit deployable, atomic and cellular agentic stack - built on AWS. Boot-strap in 70 mins.
+## Unit deployable, granular agentic cell stack - built on AWS. Boot-strap in 70 mins.
 
 > *Built it to run it* delivers an agentic operable task and automations layer, usable federated ownership is mobile, standardised and readily novates to AI operations strategies.
 
