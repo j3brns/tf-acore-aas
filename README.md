@@ -8,13 +8,13 @@ At its core, this project asks a practical question: can a bootable, paved, end-
 
 > The squeeze is real: overhead, maintenance, roadmap pressure, resourcing, operational demarcation, developer experience, inner loop speed, lifecycle management of hosted agents, and the continuing care and feeding of the framework itself.
 
-> To save the internet: **a5c** is a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I need a name..
+> **a5c** is a barely necessary typographic abbreviation of *agentic*. It makes more sense with higher numbers, but I needed a name..
 
-Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and AgentCore to provide partitionable tenancy, operational tooling, logging, control points, a fast development inner loop, and a single-page application exposure layer.
+Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and AgentCore to provide each cell with partitionable tenancy, operational tooling, logging, control points, a fast development inner loop, and for human users - a scaffolded single-page application exposure layer, on Cloudfront.
 
-# Who builds it who runs it, who decides? I built as if to happily pass it to myself for 100 days.  
+# Who builds it who runs it? who decides its Prod ready? I built as if to happily transfer it to myself for 100 days.  
 
-> The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. The result is a practical CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice.
+> The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. The result is a practical Ops CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice.
 
 > **Scaling demarcation**  
 > Every **a5c-cell** maps 1:1 to:
