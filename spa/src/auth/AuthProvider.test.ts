@@ -42,7 +42,10 @@ describe("acquireTokenWithBffFallback", () => {
   });
 
   it("falls back to BFF when MSAL silent fails but BFF succeeds", async () => {
-    const acquireTokenSilent = vi.fn().mockRejectedValue(new Error("silent-fail"));
+    const acquireTokenSilent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("silent-fail"))
+      .mockResolvedValueOnce({ accessToken: "assertion-token" });
     const acquireTokenPopup = vi.fn();
     const bffTokenRefresh = vi.fn().mockResolvedValue({ accessToken: "bff-token" });
     vi.mocked(getApiClient).mockReturnValue({ bffTokenRefresh } as never);
@@ -58,18 +61,19 @@ describe("acquireTokenWithBffFallback", () => {
     });
 
     expect(token).toBe("bff-token");
-    expect(acquireTokenSilent).toHaveBeenCalledTimes(1);
-    expect(bffTokenRefresh).toHaveBeenCalledWith({ scopes: ["api://platform-dev/Agent.Invoke"] });
+    expect(acquireTokenSilent).toHaveBeenCalledTimes(2);
+    expect(bffTokenRefresh).toHaveBeenCalledWith(
+      { scopes: ["api://platform-dev/Agent.Invoke"] },
+      { accessToken: "assertion-token" },
+    );
     expect(acquireTokenPopup).not.toHaveBeenCalled();
   });
 
-  it("falls back to acquireTokenPopup when interaction is required and BFF fails", async () => {
+  it("returns the interactive MSAL token when silent refresh requires interaction", async () => {
     const acquireTokenSilent = vi
       .fn()
       .mockRejectedValue(new InteractionRequiredAuthError("interaction_required", "login"));
     const acquireTokenPopup = vi.fn().mockResolvedValue({ accessToken: "popup-token" });
-    const bffTokenRefresh = vi.fn().mockRejectedValue(new Error("bff-fail"));
-    vi.mocked(getApiClient).mockReturnValue({ bffTokenRefresh } as never);
 
     const token = await acquireTokenWithBffFallback({
       client: {
@@ -88,7 +92,7 @@ describe("acquireTokenWithBffFallback", () => {
       scopes: ["api://platform-dev/Agent.Invoke"],
       forceRefresh: true,
     });
-    expect(bffTokenRefresh).toHaveBeenCalledTimes(1);
+    expect(getApiClient).not.toHaveBeenCalled();
     expect(acquireTokenPopup).toHaveBeenCalledWith({
       account,
       scopes: ["api://platform-dev/Agent.Invoke"],

@@ -1,18 +1,19 @@
 import { useCallback } from "react";
-import { getApiClient } from "../api/client";
 import { defaultScopes } from "../auth/msalConfig";
+import { useAuth } from "../auth/useAuth";
 
 export function useBffTokenRefresh() {
+  const { refreshAccessTokenViaBff } = useAuth();
+
   const refresh = useCallback(async (scopes: string[] = defaultScopes) => {
     try {
-      const client = getApiClient();
-      const response = await client.bffTokenRefresh({ scopes });
-      return response;
+      const accessToken = await refreshAccessTokenViaBff(scopes);
+      return { accessToken };
     } catch (err) {
       console.error("[BFF] Token refresh failed:", err);
       throw err;
     }
-  }, []);
+  }, [refreshAccessTokenViaBff]);
 
   return { refresh };
 }
