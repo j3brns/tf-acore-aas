@@ -203,7 +203,7 @@ describe("InvokePage", () => {
         expect(pageText).toContain("Async invoke response missing jobId");
     });
 
-    it("does not fetch agent details when unauthenticated", async () => {
+    it("shows an authentication-required banner when unauthenticated", async () => {
         useAuthMock.mockReturnValue(createAuthContextValue({
             isAuthenticated: false,
             getAccessToken: getAccessTokenMock,
@@ -217,7 +217,9 @@ describe("InvokePage", () => {
         await flushMicrotasks();
 
         expect(requestMock).not.toHaveBeenCalled();
-        expect(JSON.stringify(renderer!.toJSON())).toContain("Loading...");
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("Authentication Required");
+        expect(pageText).toContain("Sign in again");
     });
 
     it("shows fetch error when initial agent lookup fails", async () => {
