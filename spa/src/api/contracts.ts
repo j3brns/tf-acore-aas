@@ -48,6 +48,19 @@ export type TenantDto = {
   updatedAt?: string | null;
 };
 
+export type SessionSummaryDto = {
+  sessionId: string;
+  agentName: string;
+  startedAt: string;
+  lastActivityAt: string;
+  status: "active" | "completed" | "expired" | "failed";
+};
+
+export type SessionsListResponseDto = {
+  items: SessionSummaryDto[];
+  nextToken?: string | null;
+};
+
 export type TenantUpdateRequestDto = {
   displayName?: string;
   tier?: "basic" | "standard" | "premium";

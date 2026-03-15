@@ -42,6 +42,7 @@ _FAILOVER_LOCK_NAME_ENV = "FAILOVER_LOCK_NAME"
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 _SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator", "SelfService.Admin"}
+_ALLOWED_TENANT_INVITE_ROLES = {"Agent.Invoke"}
 _INVITE_EXPIRY_DAYS = 7
 _AUDIT_EXPORT_PREFIX = "audit-exports"
 _AUDIT_EXPORT_URL_EXPIRY_SECONDS = 3600
@@ -535,6 +536,14 @@ def _is_self_service_admin(caller: CallerIdentity) -> bool:
 
 def _can_manage_tenant_self_service(caller: CallerIdentity, tenant_id: str) -> bool:
     return _is_self_service_admin(caller)
+
+
+def _normalize_tenant_invite_role(value: Any) -> str:
+    role = _str_or_none(value) or "Agent.Invoke"
+    if role not in _ALLOWED_TENANT_INVITE_ROLES:
+        allowed = ", ".join(sorted(_ALLOWED_TENANT_INVITE_ROLES))
+        raise ValueError(f"role must be one of: {allowed}")
+    return role
 
 
 def _ddb_value(value: Any) -> Any:
@@ -1039,7 +1048,7 @@ def _handle_invite_user(
     if email is None or "@" not in email:
         raise ValueError("email is required and must be a valid email address")
 
-    role = _str_or_none(body.get("role")) or "Agent.Invoke"
+    role = _normalize_tenant_invite_role(body.get("role"))
     display_name = _str_or_none(body.get("displayName"))
     app_id = _str_or_none(existing.get("appId"))
 
