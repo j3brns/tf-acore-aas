@@ -1,4 +1,4 @@
-# a5c-cell-let: A cellular managed agents deployment framework.
+# a5c-cell-let: An atomic agentic cell deployment framework.
 ## An e2e unit deployable, atomic and cellular agentic stack - built on AWS. Boot-strap in 70 mins.
 
 > *Built it to run it* delivers an agentic operable task and automations layer, usable federated ownership is mobile, standardised and readily novates to AI operations strategies.
@@ -7,7 +7,7 @@ Each **a5c-cell-let** builds a layer on Bedrock and AgentCore to add partitionab
 
 > Each **a5c-cell-let** 1:1 maps to; An AWS account. A service boundary. An Ops and Accounting unit. A resource namespace. A resource boundary. A fixed Service allow list.
 
-Its an early *experimental* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy as a cellular framework layer is worth the squeeze.
+Its an early *exploratory* production informed fact finder. Exploring if bootable paved e2e stacks of: ops, tools, agentic dev inner loop and tenancy as a cellular framework layer are worth the squeeze over printed SOPs and procedure..
 
 >The Squueeze is real: Overhead, Mntnce, Roadmap and resoures, Ops demarcation, DevX, Inner loop speed, lifecycle management of the hosted Agents and the **a5c-cell-let** Framework itself.
 
