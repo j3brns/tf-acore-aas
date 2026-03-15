@@ -248,6 +248,21 @@ export class PlatformStack extends cdk.Stack {
       }),
     );
 
+    this.tenantApiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'lambda:ListVersionsByFunction',
+          'lambda:UpdateAlias',
+          'lambda:GetAlias',
+          'lambda:GetFunctionConfiguration',
+        ],
+        resources: [
+          `arn:aws:lambda:${this.region}:${this.account}:function:platform-*-${env}`,
+          `arn:aws:lambda:${this.region}:${this.account}:function:platform-*-${env}:*`,
+        ],
+      }),
+    );
+
     this.bridgeFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/bridge'),
       handler: 'handler.handler',

@@ -82,6 +82,7 @@ class TenantApiDependencies:
     events: Any
     dynamodb: Any
     ssm: Any
+    awslambda: Any
     usage_client: Any
     memory_provisioner: Any
     platform_quota_client: Any
@@ -350,6 +351,7 @@ def _dependencies() -> TenantApiDependencies:
         events=session.client("events"),
         dynamodb=session.resource("dynamodb"),
         ssm=session.client("ssm"),
+        awslambda=session.client("lambda"),
         usage_client=_NoopUsageClient(),
         memory_provisioner=_NoopMemoryProvisioner(),
         platform_quota_client=_AwsPlatformQuotaClient(session),
@@ -1873,6 +1875,109 @@ def _handle_ops_fail_job(
     return _response(200, {"jobId": job_id, "status": "failed", "reason": reason})
 
 
+def _handle_ops_lambda_rollback(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    body = _require_json_body(event)
+    suffix = _str_or_none(body.get("functionSuffix"))
+    alias_name = _str_or_none(body.get("aliasName")) or "live"
+
+    if suffix is None:
+        raise ValueError("functionSuffix is required")
+
+    # Resolve full function name platform-{suffix}-{env}
+    current_fn = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-dev")
+    # env is the last part of our own function name
+    env = current_fn.split("-")[-1]
+    full_name = f"platform-{suffix}-{env}"
+
+    logger.info(
+        "Initiating Lambda rollback",
+        extra={
+            "target_function": full_name,
+            "alias": alias_name,
+            "actor": caller.sub,
+        },
+    )
+
+    try:
+        # 1. Get current alias
+        alias = deps.awslambda.get_alias(FunctionName=full_name, Name=alias_name)
+        current_version = alias["FunctionVersion"]
+
+        # 2. List versions (handle basic pagination)
+        versions: list[str] = []
+        paginator = deps.awslambda.get_paginator("list_versions_by_function")
+        for page in paginator.paginate(FunctionName=full_name):
+            for v in page.get("Versions", []):
+                v_num = v["Version"]
+                if v_num != "$LATEST":
+                    versions.append(v_num)
+
+        # Numerical sort (they should be strings of integers)
+        versions.sort(key=lambda x: int(x))
+
+        if current_version not in versions:
+            # Maybe it's pointing to $LATEST or some other version not in the list?
+            # Or maybe it was deleted.
+            return _error(
+                409,
+                "CONFLICT",
+                f"Current version {current_version} not found in published versions list",
+            )
+
+        idx = versions.index(current_version)
+        if idx == 0:
+            return _error(
+                409,
+                "NO_PREVIOUS_VERSION",
+                f"Version {current_version} is the oldest published version; cannot roll back.",
+            )
+
+        previous_version = versions[idx - 1]
+
+        # 3. Update alias
+        deps.awslambda.update_alias(
+            FunctionName=full_name,
+            Name=alias_name,
+            FunctionVersion=previous_version,
+            Description=f"Rollback from {current_version} to {previous_version} by {caller.sub}",
+        )
+
+        logger.info(
+            "Lambda rollback completed",
+            extra={
+                "target_function": full_name,
+                "alias": alias_name,
+                "from_version": current_version,
+                "to_version": previous_version,
+            },
+        )
+
+        return _response(
+            200,
+            {
+                "functionName": full_name,
+                "aliasName": alias_name,
+                "fromVersion": current_version,
+                "toVersion": previous_version,
+                "status": "rolled_back",
+            },
+        )
+
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code")
+        if code == "ResourceNotFoundException":
+            return _error(
+                404, "NOT_FOUND", f"Function or alias not found: {full_name}:{alias_name}"
+            )
+        logger.exception("Lambda rollback failed")
+        return _error(500, "INTERNAL_ERROR", f"AWS Error: {code}")
+
+
 def _handle_ops_page_security(
     event: dict[str, Any],
     caller: CallerIdentity,
@@ -1927,6 +2032,8 @@ def _dispatch_ops_routes(
         return _handle_ops_security_events(event, caller, deps)
     if path_lower == "/v1/platform/ops/error-rate" and method == "GET":
         return _handle_ops_error_rate(event, caller, deps)
+    if path_lower == "/v1/platform/ops/lambda-rollback" and method == "POST":
+        return _handle_ops_lambda_rollback(event, caller, deps)
 
     parts = path.split("/")
     if path_lower.startswith("/v1/platform/ops/dlq/"):

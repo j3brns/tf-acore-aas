@@ -710,6 +710,66 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /v1/platform/ops/lambda-rollback:
+    post:
+      summary: Roll back a platform Lambda function
+      tags: [Platform]
+      operationId: rollbackLambda
+      description: >
+        Rolls back a platform Lambda function's alias (default 'live')
+        to the version published immediately before the current one.
+      x-required-roles:
+        - Platform.Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - functionSuffix
+              properties:
+                functionSuffix:
+                  type: string
+                  description: The suffix of the platform function (e.g., bridge, bff)
+                aliasName:
+                  type: string
+                  description: The name of the alias to roll back
+                  default: live
+      responses:
+        "200":
+          description: Lambda successfully rolled back
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  functionName:
+                    type: string
+                  aliasName:
+                    type: string
+                  fromVersion:
+                    type: string
+                  toVersion:
+                    type: string
+                  status:
+                    type: string
+                    enum: [rolled_back]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Conflict (no previous version found)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /v1/platform/quota:
     get:
       tags: [Platform]
