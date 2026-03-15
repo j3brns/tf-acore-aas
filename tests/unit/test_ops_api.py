@@ -15,6 +15,7 @@ from tests.unit.test_tenant_api_handler import (
     FakeDynamoDbResource,
     FakeEvents,
     FakeMemoryProvisioner,
+    FakePlatformQuotaClient,
     FakeScopedDb,
     FakeSecretsManager,
     FakeSsm,
@@ -39,6 +40,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         ssm=FakeSsm(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
+        platform_quota_client=FakePlatformQuotaClient(),
     )
     monkeypatch.setenv("AWS_REGION", "eu-west-2")
     monkeypatch.setenv("TENANTS_TABLE_NAME", "platform-tenants")

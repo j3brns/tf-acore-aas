@@ -195,7 +195,7 @@ deploy-dev:
   script:
     - echo "Applying canary policy for ${ENV}: ${CANARY_POLICY_DEV}"
     - make infra-deploy ENV=dev
-    - make spa-deploy ENV=dev
+    - make spa-push ENV=dev
   environment:
     name: dev
     deployment_tier: development
@@ -213,7 +213,7 @@ deploy-staging:
     - echo "Applying canary policy for ${ENV}: ${CANARY_POLICY_STAGING}"
     - echo "Staging rollout observation window: ${STAGING_ROLLOUT_WINDOW_MINUTES} minutes"
     - make infra-deploy ENV=staging
-    - make spa-deploy ENV=staging
+    - make spa-push ENV=staging
   environment:
     name: staging
     deployment_tier: staging
@@ -252,7 +252,7 @@ deploy-prod:
     - echo "Applying canary policy for ${ENV}: ${CANARY_POLICY_PROD}"
     - echo "Production rollout observation window: ${PROD_ROLLOUT_WINDOW_MINUTES} minutes"
     - make infra-deploy-prod-ci
-    - make spa-deploy ENV=prod
+    - make spa-push ENV=prod
   environment:
     name: prod
     deployment_tier: production
