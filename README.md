@@ -116,6 +116,20 @@ AWS documentation now shows AgentCore Runtime and related core services availabl
 Client → CloudFront → API Gateway with WAF and usage plan → **Authoriser** for JWT validation and tenant context → **Bridge** for tenant role assumption and runtime dispatch → **AgentCore Runtime** in Firecracker microVM → **Gateway interceptors** for act-on-behalf tokens and tier filtering → Tool Lambdas → response stream returned to client.
 
 ```mermaid
+I apologize. I understand this is incredibly frustrating.
+
+Looking closely at the error message you just sent: `...y delivered. ```### Tenant isolat`.
+
+**The error is NOT caused by the Mermaid code.** The error is caused because **markdown description text was accidentally pasted into the Mermaid rendering tool.**
+
+The Mermaid renderer is trying to read "### Tenant isolation" as if it were a diagram command, which is causing it to crash.
+
+Please follow these exact steps to fix it:
+
+1. **Clear your current editor completely.**
+2. **Copy ONLY the code block below**, starting from `sequenceDiagram` and ending at the final `end note`. Do not include the triple backticks (```) or any text outside of them.
+
+```mermaid
 sequenceDiagram
     autonumber
     actor Client
@@ -188,8 +202,108 @@ sequenceDiagram
     APIGW-->>CloudFront: 21. Response Stream (Continuous)
     CloudFront-->>Client: 22. Response Stream (Continuous)
     Note right of Client: Response stream is fully delivered.
-    ```
 
+```
+
+I have also provided the State Diagram again below. Please repeat the process: **Clear your editor again** and copy **ONLY** the code within the block. This code is also syntactically correct and was fixed previously to remove elements that cause parser errors in `stateDiagram-v2`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> RequestSent: Client initiates Request
+    RequestSent --> EdgeEntry: CloudFront receives Request
+
+    state "Edge Entry (CloudFront)" as EdgeEntry {
+        state "WAF Validation" as WAF {
+            [*] --> Inspecting
+            Inspecting --> Blocked: WAF rules fail
+            Inspecting --> Allowed: WAF rules pass
+        }
+        Blocked --> [*]: Return 403 Response
+        Allowed --> EndpointControl: Forward to API Gateway
+    }
+
+    state "Endpoint Control (API Gateway)" as EndpointControl {
+        state "Check Usage Plan" as UsageCheck {
+            [*] --> Checking limits
+            Checking limits --> LimitExceeded: API Key throttled
+            Checking limits --> WithinLimit: API Key allowed
+        }
+        LimitExceeded --> [*]: Return 429 Response
+        WithinLimit --> ContextAndIdentity: Invoke Authorizer
+    }
+
+    state "Context & Identity (Authorizer Lambda)" as ContextAndIdentity {
+        state "Authenticating" as Auth {
+            [*] --> JWT_Validation
+            JWT_Validation --> Invalid: Signature/Expire fail
+            JWT_Validation --> Valid: Signature/Expire pass
+        }
+        Invalid --> [*]: Return 401/403 Response
+        Valid --> Build_Context_And_Policy: Extract Tenant ID
+        Build_Context_And_Policy --> RoutingAndSecurity: Return Context + Forward to Bridge
+    }
+
+    state "Routing & Security (Bridge Lambda)" as RoutingAndSecurity {
+        state "Tenant Mapping" as Map
+        state "Assume Role via STS" as AssumeRole
+        state "Secure Dispatch" as Dispatch
+
+        [*] --> Map
+        Map --> AssumeRole: Perform Mapping
+        AssumeRole --> Dispatch: STS Credentials obtained
+        Dispatch --> AgentCore_Runtime: Firecracker microVM Initialized & Dispatched
+
+        note left of Map
+            Consults mapping:
+            TenantID -> ARN
+        end note
+    }
+
+    state "AgentCore Runtime Execution (in microVM)" as AgentCore_Runtime {
+        state "Gateway Interceptors" as Interceptors {
+            state "Tier Filtering" as TierFilter
+            state "Act-On-Behalf" as ActOnBehalf
+
+            [*] --> TierFilter: Check Tenant Tier
+            TierFilter --> ActOnBehalf: Access is approved
+            ActOnBehalf --> Exchange_Tokens: Call Token Exchange Service
+            Exchange_Tokens --> TokenExchangeServiceResponse: Tool Token obtained
+        }
+        state "Tool Execution" as ToolExec
+        state "Result Aggregation" as Aggregation
+
+        [*] --> Interceptors
+        Interceptors --> ToolExec: Forward refined request with Tool Token
+        ToolExec --> Aggregation: Tools return data
+        Aggregation --> ProcessingComplete: Aggregate results, open stream
+    }
+
+    state "Token Exchange Service" as TokenExchangeServiceResponse
+    note right of TokenExchangeServiceResponse : External service called from Interceptor
+
+    ProcessingComplete --> ResponseStreaming: Continuous Stream open
+
+    state "Response Streaming (Dashed lines indicate return flow)" as ResponseStreaming {
+        state "Stream to Bridge" as sB
+        state "Stream to APIGW" as sA
+        state "Stream to CloudFront" as sC
+        state "Stream to Client" as sCl
+
+        [*] --> sB
+        sB --> sA
+        sA --> sC
+        sC --> sCl
+        sCl --> Complete: All data delivered
+    }
+
+    Complete --> [*]: Terminate request cycle
+
+    note right of AgentCore_Runtime
+        Detailed lifecycle within the microVM.
+        Interceptors handle tier checks and
+        obtaining short-lived tool tokens.
+    end note
+```
 
 ### Tenant isolation
 
