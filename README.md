@@ -15,7 +15,7 @@ Each **a5c-cell** adds a microservice control layer over Amazon Bedrock and Agen
 # Who builds it, who runs it? 
 Normally same as; Who decides its Prod ready? No one, in this case, so I built as if to happily transfer between my alter-ego's for 100 days. 
 
-> I'm actually a firm believer in the mentality **"You build it , YOU run it"** exacts. New tech needs to be unerpinned by sharp end skill, and Devs are first against the wall!
+> I'm actually a firm believer in the mentality **"You build it , YOU run it"** exacts. New tech needs to be unerpinned by sharp end skill, and Devs are usually first to hit the 'unsupported yet' wall!
 
 _The aim was not merely to prototype, but to test whether an operable task and automation layer for agent workloads could survive realistic operating conditions. The result is a practical Ops CLI and runbook model that supports federated ownership, clearer standardisation, and better alignment with emerging AI operations practice._
 
