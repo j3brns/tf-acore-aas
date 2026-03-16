@@ -35,6 +35,13 @@ The result is a practical Ops CLI, supersonic inner-loop and a runbook model tha
 > - a resource boundary
 > - a fixed service allow list
 
+## Drinking our own champagne
+
+  A useful end-state is a platform-ops agent running under the reserved internal
+  `platform` tenant and using the same control-plane surfaces we expect others to
+  trust. Not a super-tenant, not a bypass path; just us proving the model on
+  ourselves first  with agents operating our runbooks and troubleshoooting.
+
 ## Fictional Operational model
 
 Tenants invoke AI agents through a controlled REST interface exposed through the portal, with tenant isolation, billing attribution, and compliance controls designed in from the start.
