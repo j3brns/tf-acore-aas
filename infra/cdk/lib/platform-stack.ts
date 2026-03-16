@@ -672,6 +672,16 @@ export class PlatformStack extends cdk.Stack {
       description: 'CloudFront distribution ID for the platform SPA',
     });
 
+    new cdk.CfnOutput(this, 'SpaBucketName', {
+      value: spaBucket.bucketName,
+      description: 'S3 bucket name for the platform SPA',
+    });
+
+    new cdk.CfnOutput(this, 'SpaDistributionId', {
+      value: this.spaDistribution.ref,
+      description: 'CloudFront distribution ID for the platform SPA',
+    });
+
     const spaAllowedOrigin = cdk.Fn.join('', ['https://', this.spaDistribution.attrDomainName]);
 
     // API Access Log Group (TASK-165)
