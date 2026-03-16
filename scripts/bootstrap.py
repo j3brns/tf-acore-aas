@@ -499,47 +499,55 @@ def step_first_deploy(ctx: BootstrapContext) -> dict[str, Any]:
     if ctx.env == "prod":
         raise RuntimeError("first-deploy is disabled for prod; use CI/CD pipeline")
 
+    command = build_first_deploy_command(ctx)
+    return {"command": run_command(command, cwd=CDK_DIR)}
+
+
+def bootstrap_first_deploy_stacks(ctx: BootstrapContext) -> tuple[str, ...]:
+    """Return the stack names supported by the day-zero local bootstrap flow."""
+    return tuple(template.format(env=ctx.env) for template in STACKS_HOME)
+
+
+def build_first_deploy_command(ctx: BootstrapContext) -> list[str]:
+    """Build the explicit CDK deploy command for the supported bootstrap stacks."""
     command = [
         "npx",
         "cdk",
         "deploy",
-        "--all",
+        *bootstrap_first_deploy_stacks(ctx),
         "--context",
         f"env={ctx.env}",
         "--require-approval",
         "never",
     ]
-    return {"command": run_command(command, cwd=CDK_DIR)}
+    return command
 
 
-def _validate_expected_stacks(ctx: BootstrapContext) -> dict[str, dict[str, str]]:
-    """Validate all expected stacks are complete in home/runtime regions."""
-    statuses_home: dict[str, str] = {}
-    statuses_runtime: dict[str, str] = {}
-
-    cfn_home = boto3.client("cloudformation", region_name=ctx.home_region)
-    for template in STACKS_HOME:
-        stack_name = template.format(env=ctx.env)
-        status = _stack_status(cfn_home, stack_name)
-        _validate_stack_complete(status, stack_name, ctx.home_region)
-        statuses_home[stack_name] = status
-
-    cfn_runtime = boto3.client("cloudformation", region_name=ctx.runtime_region)
-    for template in STACKS_RUNTIME:
-        stack_name = template.format(env=ctx.env)
-        status = _stack_status(cfn_runtime, stack_name)
-        _validate_stack_complete(status, stack_name, ctx.runtime_region)
-        statuses_runtime[stack_name] = status
-
-    return {
-        "homeRegion": statuses_home,
-        "runtimeRegion": statuses_runtime,
-    }
+def _validate_stack_set(
+    ctx: BootstrapContext,
+    *,
+    region: str,
+    stack_names: tuple[str, ...],
+) -> dict[str, str]:
+    """Validate a stack set in one region reached a complete status."""
+    statuses: dict[str, str] = {}
+    cfn = boto3.client("cloudformation", region_name=region)
+    for stack_name in stack_names:
+        status = _stack_status(cfn, stack_name)
+        _validate_stack_complete(status, stack_name, region)
+        statuses[stack_name] = status
+    return statuses
 
 
 def validate_first_deploy(ctx: BootstrapContext) -> dict[str, Any]:
-    """Validate all expected stacks are deployed and complete."""
-    return _validate_expected_stacks(ctx)
+    """Validate the supported bootstrap stack set is deployed and complete."""
+    return {
+        "homeRegion": _validate_stack_set(
+            ctx,
+            region=ctx.home_region,
+            stack_names=bootstrap_first_deploy_stacks(ctx),
+        )
+    }
 
 
 def _upsert_ssm_parameter(ssm_client: Any, *, name: str, value: str) -> None:
@@ -752,7 +760,7 @@ def _try_smoke_invoke(ctx: BootstrapContext) -> dict[str, Any]:
 
 def step_verify(ctx: BootstrapContext) -> dict[str, Any]:
     """Run smoke checks for the bootstrapped environment."""
-    stack_details = _validate_expected_stacks(ctx)
+    stack_details = validate_first_deploy(ctx)
     seed_details = validate_post_deploy(ctx)
     smoke = _try_smoke_invoke(ctx)
     return {
