@@ -37,6 +37,8 @@ type PythonLambdaProps = {
   timeout: cdk.Duration;
   memorySize: number;
   environment?: Record<string, string>;
+  vpc?: ec2.IVpc;
+  securityGroups?: ec2.ISecurityGroup[];
 };
 
 type BridgeCanaryPolicy = {
@@ -51,13 +53,13 @@ type GatewayPolicyConfiguration = {
 };
 
 export interface PlatformStackProps extends cdk.StackProps {
-  readonly vpc: ec2.IVpc;
+  readonly vpc?: ec2.IVpc;
   readonly tenantDataKey: kms.IKey;
   readonly platformConfigKey: kms.IKey;
 }
 
 export class PlatformStack extends cdk.Stack {
-  public readonly vpc: ec2.IVpc;
+  public readonly vpc?: ec2.IVpc;
   public readonly api: apigateway.RestApi;
   public readonly tenantsTable: dynamodb.Table;
   public readonly agentsTable: dynamodb.Table;
@@ -1176,8 +1178,9 @@ export class PlatformStack extends cdk.Stack {
       deadLetterQueue: dlq,
       timeout: props.timeout,
       memorySize: props.memorySize,
-      vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpc: props.vpc,
+      vpcSubnets: props.vpc ? { subnetType: ec2.SubnetType.PRIVATE_ISOLATED } : undefined,
+      securityGroups: props.securityGroups,
       environment: {
         LOG_LEVEL: 'INFO',
         ...props.environment,

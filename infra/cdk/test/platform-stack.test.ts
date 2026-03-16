@@ -39,6 +39,33 @@ describe('PlatformStack (TASK-023)', () => {
   };
   const template = synthTemplate('dev');
 
+  test('enforces VPC placement policy: shared control-plane Lambdas default to non-VPC', () => {
+    // Lambdas that must NOT be in the VPC (control plane / low latency / ADR-014)
+    const allFunctions = template.findResources('AWS::Lambda::Function');
+    const getFunctionByName = (suffix: string) => {
+      return Object.values(allFunctions).find((f) => {
+        const name = (f as { Properties?: { FunctionName?: string } }).Properties?.FunctionName;
+        return name?.includes(suffix);
+      });
+    };
+
+    const noVpcLambdas = [
+      'authoriser',
+      'bff',
+      'tenant-api',
+      'webhook-delivery',
+      'billing',
+      'bridge',
+      'interceptor-request',
+      'interceptor-response',
+    ];
+    for (const suffix of noVpcLambdas) {
+      const fn = getFunctionByName(suffix);
+      expect(fn).toBeDefined();
+      expect((fn as { Properties?: { VpcConfig?: unknown } }).Properties?.VpcConfig).toBeUndefined();
+    }
+  });
+
   test('creates all required DynamoDB tables with PITR and encryption', () => {
     template.resourceCountIs('AWS::DynamoDB::Table', 8);
 
