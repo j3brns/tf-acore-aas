@@ -3,11 +3,14 @@
  *                 Authoriser Lambda, AgentCore Gateway.
  *
  * REST API (not HTTP API) with usage plans, per-method throttling, WAF association.
+ * Public SPA CloudFront distribution currently has an explicit no-WebACL exception:
+ * the platform has not yet introduced an approved global/us-east-1 edge security stack,
+ * so only the regional API surface is WAF-protected in this stack.
  * Authoriser Lambda: provisioned concurrency 10.
  * AgentCore Gateway with REQUEST and RESPONSE interceptors wired.
  *
  * Implemented in TASK-023.
- * ADRs: ADR-003, ADR-004, ADR-011
+ * ADRs: ADR-003, ADR-004, ADR-009, ADR-011
  */
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -621,6 +624,9 @@ export class PlatformStack extends cdk.Stack {
         viewerCertificate: {
           cloudFrontDefaultCertificate: true,
         },
+        // No WebACLId is wired here by design. A CloudFront-scope WAF must be managed
+        // via a dedicated global/us-east-1 path, which this repository has not yet
+        // approved under the current ADR-009 region topology.
       },
     });
 
