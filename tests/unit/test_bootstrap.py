@@ -48,6 +48,58 @@ def test_parse_args_supports_first_deploy_step() -> None:
     assert args.env == "dev"
 
 
+def test_build_first_deploy_command_targets_supported_bootstrap_stacks_only() -> None:
+    command = bootstrap.build_first_deploy_command(_ctx())
+
+    assert command[:3] == ["npx", "cdk", "deploy"]
+    assert "--all" not in command
+    assert command[3:8] == [
+        "platform-network-dev",
+        "platform-identity-dev",
+        "platform-core-dev",
+        "platform-tenant-stub-dev",
+        "platform-observability-dev",
+    ]
+    assert "platform-agentcore-dev" not in command
+    assert command[-4:] == ["--context", "env=dev", "--require-approval", "never"]
+
+
+def test_validate_first_deploy_checks_home_region_bootstrap_stacks_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def _fake_client(service_name: str, *, region_name: str) -> str:
+        assert service_name == "cloudformation"
+        return region_name
+
+    def _fake_stack_status(client: str, stack_name: str) -> str:
+        calls.append((client, stack_name))
+        return "CREATE_COMPLETE"
+
+    monkeypatch.setattr(bootstrap.boto3, "client", _fake_client)
+    monkeypatch.setattr(bootstrap, "_stack_status", _fake_stack_status)
+
+    result = bootstrap.validate_first_deploy(_ctx())
+
+    assert result == {
+        "homeRegion": {
+            "platform-network-dev": "CREATE_COMPLETE",
+            "platform-identity-dev": "CREATE_COMPLETE",
+            "platform-core-dev": "CREATE_COMPLETE",
+            "platform-tenant-stub-dev": "CREATE_COMPLETE",
+            "platform-observability-dev": "CREATE_COMPLETE",
+        }
+    }
+    assert calls == [
+        ("eu-west-2", "platform-network-dev"),
+        ("eu-west-2", "platform-identity-dev"),
+        ("eu-west-2", "platform-core-dev"),
+        ("eu-west-2", "platform-tenant-stub-dev"),
+        ("eu-west-2", "platform-observability-dev"),
+    ]
+
+
 @mock_aws
 def test_upsert_secret_create_then_update() -> None:
     client = boto3.client("secretsmanager", region_name=_REGION)

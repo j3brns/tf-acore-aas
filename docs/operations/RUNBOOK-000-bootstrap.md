@@ -47,10 +47,19 @@ make bootstrap-gitlab-oidc ENV=dev
 ### Step 4: First CDK Deploy (local, not pipeline)
 ```bash
 make infra-deploy ENV=dev
-# Runs cdk deploy --all from local machine using bootstrap IAM user
+# Runs cdk deploy for the bootstrap-supported home-region stacks only:
+#   platform-network-{env}
+#   platform-identity-{env}
+#   platform-core-{env}
+#   platform-tenant-stub-{env}
+#   platform-observability-{env}
 # Takes 15–20 minutes on first deploy
-# Expected output: 6 stacks deployed successfully
+# Expected output: 5 stacks deployed successfully
 ```
+
+`platform-agentcore-{env}` is intentionally excluded from the day-zero bootstrap deploy.
+That stack requires runtime-specific CloudFormation parameters such as artifact and metric
+stream wiring that the local bootstrap flow does not source automatically.
 
 ### Step 5: Post-Deploy Seeding
 ```bash
@@ -88,6 +97,9 @@ make bootstrap-delete-iam-user ENV=dev
 - Each step is idempotent — safe to re-run after fixing the issue
 - Check CloudFormation Events in the AWS console for CDK deploy failures
 - Check scripts/bootstrap.py output for step-specific error messages
+- Do not expect `platform-agentcore-{env}` from the first bootstrap deploy; deploy it only
+  once its required runtime parameters are available through the supported release path
+  or an explicit operator procedure.
 
 ## Time Estimate
 First run: approximately 45 minutes end-to-end.
