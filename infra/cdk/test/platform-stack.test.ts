@@ -209,6 +209,19 @@ describe('PlatformStack (TASK-023)', () => {
     template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
   });
 
+  test('documents the current explicit SPA edge exception by omitting CloudFront WebACL wiring', () => {
+    template.resourceCountIs('AWS::WAFv2::WebACL', 1);
+
+    const distributions = template.findResources('AWS::CloudFront::Distribution');
+    expect(Object.keys(distributions)).toHaveLength(1);
+
+    const [distribution] = Object.values(distributions) as Array<{
+      Properties?: { DistributionConfig?: Record<string, unknown> };
+    }>;
+
+    expect(distribution.Properties?.DistributionConfig).not.toHaveProperty('WebACLId');
+  });
+
   test('creates CloudFront distribution with OAC and CSP response headers policy', () => {
     template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
 

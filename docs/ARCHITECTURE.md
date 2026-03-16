@@ -22,7 +22,7 @@ infrastructure releases. Platform operators monitor, scale, and respond to incid
 ```
 eu-west-2 London (HOME — owns everything)
 ├── REST API Gateway + WAF
-├── CloudFront + SPA (S3)
+├── CloudFront + SPA (S3, no CloudFront WebACL by explicit exception)
 ├── AgentCore Gateway (native)
 ├── AgentCore Memory (native)
 ├── AgentCore Identity (native)
@@ -79,7 +79,7 @@ Failover controlled by SSM `/platform/config/runtime-region` with DynamoDB distr
 
 ```
 Client
-  → CloudFront (CSP headers, edge caching)
+  → CloudFront (CSP headers, edge caching, no CloudFront WebACL by explicit exception)
   → REST API Gateway (usage plan throttle, WAF)
   → Authoriser Lambda eu-west-2
       Validates Entra JWT (JWKS cached 5min in /tmp)
@@ -107,6 +107,17 @@ Client
       Gateway RESPONSE interceptor: filters by tier, redacts PII
   → Response stream back through bridge → API Gateway → client
 ```
+
+Current SPA edge exception: the public SPA distribution does not yet have its own
+CloudFront-scope WebACL. That is intentional for now, not an undocumented omission.
+The current approved region topology in [ADR-009](decisions/ADR-009-region-zigzag.md)
+keeps the platform home region in eu-west-2, while CloudFront-scope WAF resources
+require a dedicated global/us-east-1 management path. This repository does not yet
+contain an approved edge-security stack for that path, so the documented posture is:
+CloudFront provides TLS termination, OAC-backed S3 origin protection, and SPA security
+headers, while the WAF-enforced northbound boundary starts at REST API Gateway.
+Any future move to attach a CloudFront WebACL must be an explicit architecture change,
+not silent drift in stack code.
 
 ## Invocation Modes
 
