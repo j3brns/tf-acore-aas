@@ -96,12 +96,19 @@ def _iso_now() -> str:
 
 def _get_active_tenants() -> list[dict[str, Any]]:
     """Scan platform-tenants for active/suspended tenants."""
-    table = _dynamodb.Table(TENANTS_TABLE)
-    response = table.scan(
-        FilterExpression=Key("SK").eq("METADATA")
-        & (Key("status").eq(TenantStatus.ACTIVE) | Key("status").eq(TenantStatus.SUSPENDED))
+    # System context for admin scan
+    ctx = TenantContext(
+        tenant_id="system",
+        app_id="system",
+        tier=TenantTier.PREMIUM,
+        sub="billing-pipeline",
     )
-    return response.get("Items", [])
+    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_dynamodb)
+    return db.scan_all(
+        TENANTS_TABLE,
+        filter_expression=Key("SK").eq("METADATA")
+        & (Key("status").eq(TenantStatus.ACTIVE) | Key("status").eq(TenantStatus.SUSPENDED)),
+    )
 
 
 def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
@@ -132,13 +139,13 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
 
     # 1. Query invocations for the day
     # SK starts with INV#timestamp
-    result = db.query(
+    invocations = db.query_all(
         INVOCATIONS_TABLE,
         sk_condition=Key("SK").between(f"INV#{start_time}", f"INV#{end_time}"),
     )
 
-    day_input = sum(int(inv.get("input_tokens", 0)) for inv in result.items)
-    day_output = sum(int(inv.get("output_tokens", 0)) for inv in result.items)
+    day_input = sum(int(inv.get("input_tokens", 0)) for inv in invocations)
+    day_output = sum(int(inv.get("output_tokens", 0)) for inv in invocations)
 
     # 2. Apply pricing
     try:
