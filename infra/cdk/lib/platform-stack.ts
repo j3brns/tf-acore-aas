@@ -329,7 +329,7 @@ export class PlatformStack extends cdk.Stack {
         ENTRA_AUDIENCE: entra.audience,
         ENTRA_TOKEN_ENDPOINT: entra.tokenEndpoint,
         ENTRA_CLIENT_ID_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-id`,
-        ENTRA_CLIENT_SECRET_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-secret`,
+        ENTRA_CLIENT_SECRET_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-secret`, // pragma: allowlist secret
       },
     });
 
@@ -594,6 +594,20 @@ export class PlatformStack extends cdk.Stack {
         httpVersion: 'http2',
         priceClass: 'PriceClass_100',
         ipv6Enabled: true,
+        customErrorResponses: [
+          {
+            errorCode: 403,
+            responsePagePath: '/index.html',
+            responseCode: 200,
+            errorCachingMinTtl: 0,
+          },
+          {
+            errorCode: 404,
+            responsePagePath: '/index.html',
+            responseCode: 200,
+            errorCachingMinTtl: 0,
+          },
+        ],
         origins: [
           {
             id: 'SpaS3Origin',

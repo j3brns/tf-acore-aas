@@ -246,6 +246,27 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('configures CloudFront custom error responses for SPA route fallback', () => {
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CustomErrorResponses: [
+          {
+            ErrorCode: 403,
+            ResponseCode: 200,
+            ResponsePagePath: '/index.html',
+            ErrorCachingMinTTL: 0,
+          },
+          {
+            ErrorCode: 404,
+            ResponseCode: 200,
+            ResponsePagePath: '/index.html',
+            ErrorCachingMinTTL: 0,
+          },
+        ],
+      }),
+    });
+  });
+
   test('configures API Gateway CORS preflight to CloudFront origin only', () => {
     const optionsMethods = template.findResources('AWS::ApiGateway::Method', {
       Properties: {
