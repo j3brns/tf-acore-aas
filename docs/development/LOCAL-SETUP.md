@@ -50,6 +50,8 @@ make dev-invoke
 If this exits cleanly, the local invocation path is wired. Use `make test-int`
 for a stronger end-to-end check once the local stack is running.
 
+**Note**: The **Mock AgentCore Runtime** returns canned responses (defined in `tests/mocks/mock_runtime/main.py`). It does **not** execute your actual agent code. To test your agent's logic locally, use `make agent-test`.
+
 ## Test Tenants (seeded by dev-bootstrap.py)
 
 After `make dev`, two test tenants are available. Their JWTs are in `.env.test`:
