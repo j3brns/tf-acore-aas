@@ -27,7 +27,7 @@
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
 .PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
-.PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status
+.PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
 ENV ?= dev
 
@@ -690,6 +690,11 @@ issues-audit:
 issues-reconcile:
 	uv run python scripts/worktree_issues.py issues-reconcile \
 		$(if $(DRY_RUN),--dry-run,)
+
+## gitnexus-refresh: Refresh local GitNexus index for the current checkout if stale/missing
+## Usage: make gitnexus-refresh
+gitnexus-refresh:
+	uv run python scripts/worktree_issues.py gitnexus-refresh
 
 ## worktree: Interactive issue-driven worktree menu (Seq/Depends on aware)
 ## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a]
