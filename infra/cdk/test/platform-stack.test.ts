@@ -5,10 +5,15 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import { PlatformStack } from '../lib/platform-stack';
 
 describe('PlatformStack (TASK-023)', () => {
-  const synthTemplate = (environment: 'dev' | 'staging' | 'prod' = 'dev') => {
+  const synthTemplate = (
+    environment: 'dev' | 'staging' | 'prod' = 'dev',
+    extraContext: Record<string, string> = {},
+  ) => {
     const app = new cdk.App({
       context: {
         env: environment,
+        entraTenantId: '00000000-0000-0000-0000-000000000000',
+        ...extraContext,
       },
     });
     const env = { account: '123456789012', region: 'eu-west-2' };
@@ -396,13 +401,66 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
-  test('configures the BFF lambda with the approved Entra audience', () => {
+  test('configures the BFF lambda with canonical Entra config and secret references', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'platform-core-dev-bff',
       Environment: {
         Variables: Match.objectLike({
+          ENTRA_TENANT_ID: '00000000-0000-0000-0000-000000000000',
           ENTRA_AUDIENCE: 'platform-api',
+          ENTRA_TOKEN_ENDPOINT:
+            'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/oauth2/v2.0/token',
+          ENTRA_CLIENT_ID_SECRET_ARN:
+            'arn:aws:secretsmanager:eu-west-2:123456789012:secret:platform/dev/entra/client-id',
+          ENTRA_CLIENT_SECRET_SECRET_ARN:
+            'arn:aws:secretsmanager:eu-west-2:123456789012:secret:platform/dev/entra/client-secret',
           POWERTOOLS_SERVICE_NAME: 'bff',
+        }),
+      },
+    });
+  });
+
+  test('wires Entra config from CDK context instead of hardcoded common endpoints', () => {
+    const customTemplate = synthTemplate('dev', {
+      entraTenantId: '00000000-0000-0000-0000-000000000000',
+      entraAudience: 'api://platform-dev',
+    });
+
+    const expectedJwksUrl =
+      'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/discovery/v2.0/keys';
+    const expectedIssuer =
+      'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0';
+
+    customTemplate.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-authoriser',
+      Environment: {
+        Variables: Match.objectLike({
+          ENTRA_JWKS_URL: expectedJwksUrl,
+          ENTRA_AUDIENCE: 'api://platform-dev',
+          ENTRA_ISSUER: expectedIssuer,
+        }),
+      },
+    });
+
+    customTemplate.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-interceptor-request',
+      Environment: {
+        Variables: Match.objectLike({
+          ENTRA_JWKS_URL: expectedJwksUrl,
+          ENTRA_AUDIENCE: 'api://platform-dev',
+          ENTRA_ISSUER: expectedIssuer,
+        }),
+      },
+    });
+
+    customTemplate.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-bff',
+      Environment: {
+        Variables: Match.objectLike({
+          ENTRA_TENANT_ID: '00000000-0000-0000-0000-000000000000',
+          ENTRA_AUDIENCE: 'api://platform-dev',
+          ENTRA_TOKEN_ENDPOINT:
+            'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/oauth2/v2.0/token',
         }),
       },
     });

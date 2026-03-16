@@ -129,6 +129,53 @@ def test_exchange_obo_token_uses_only_approved_scopes() -> None:
     assert params["scope"] == "api://platform-dev/Agent.Invoke"
 
 
+def test_exchange_obo_token_resolves_client_credentials_from_secret_arns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bff_handler,
+        "ENTRA_CLIENT_ID_SECRET_ARN",
+        "arn:aws:secretsmanager:eu-west-2:111:secret:client-id",
+    )
+    monkeypatch.setattr(
+        bff_handler,
+        "ENTRA_CLIENT_SECRET_SECRET_ARN",
+        "arn:aws:secretsmanager:eu-west-2:111:secret:client-secret",
+    )
+    monkeypatch.setattr(bff_handler, "_secrets_cache", {})
+    monkeypatch.setattr(bff_handler, "_secrets_expiry", {})
+
+    with (
+        patch.object(
+            bff_handler,
+            "get_secret",
+            side_effect=["secret-client-id", "secret-client-secret"],
+        ) as get_secret,
+        patch.object(bff_handler, "_http_post_form") as http_post,
+    ):
+        bff_handler._exchange_obo_token(
+            assertion_token="some-token",
+            scopes=["api://platform-dev/Agent.Invoke"],
+        )
+
+    assert get_secret.call_count == 2
+    _, params = http_post.call_args[0]
+    assert params["client_id"] == "secret-client-id"
+    assert params["client_secret"] == "secret-client-secret"
+
+
+def test_entra_token_endpoint_falls_back_to_tenant_specific_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bff_handler, "ENTRA_TOKEN_ENDPOINT", None)
+    monkeypatch.setattr(bff_handler, "ENTRA_TENANT_ID", "tenant-guid")
+
+    assert (
+        bff_handler._entra_token_endpoint()
+        == "https://login.microsoftonline.com/tenant-guid/oauth2/v2.0/token"
+    )
+
+
 def test_token_refresh_rejects_scope_outside_platform_audience() -> None:
     event = _event(
         path="/v1/bff/token-refresh",

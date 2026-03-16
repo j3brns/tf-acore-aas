@@ -29,6 +29,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 import * as path from 'path';
+import { resolveEntraConfiguration } from './entra-config';
 
 type PythonLambdaProps = {
   assetPath: string;
@@ -89,6 +90,7 @@ export class PlatformStack extends cdk.Stack {
     const env = ((this.node.tryGetContext('env') as string | undefined) ?? 'dev').toLowerCase();
     const bridgeCanaryPolicy = this.resolveBridgeCanaryPolicy(env);
     const gatewayPolicyConfiguration = this.resolveGatewayPolicyConfiguration(env);
+    const entra = resolveEntraConfiguration(this);
 
     // --- Secrets ---
 
@@ -323,9 +325,18 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'bff',
-        ENTRA_AUDIENCE: 'platform-api',
+        ENTRA_TENANT_ID: entra.tenantId,
+        ENTRA_AUDIENCE: entra.audience,
+        ENTRA_TOKEN_ENDPOINT: entra.tokenEndpoint,
+        ENTRA_CLIENT_ID_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-id`,
+        ENTRA_CLIENT_SECRET_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-secret`,
       },
     });
+
+    const entraClientIdSecret = secretsmanager.Secret.fromSecretNameV2(this, 'EntraClientIdSecret', `platform/${env}/entra/client-id`);
+    const entraClientSecretSecret = secretsmanager.Secret.fromSecretNameV2(this, 'EntraClientSecretSecret', `platform/${env}/entra/client-secret`);
+    entraClientIdSecret.grantRead(this.bffFn);
+    entraClientSecretSecret.grantRead(this.bffFn);
 
     new lambda.EventSourceMapping(this, 'webhookDeliveryJobsStreamMapping', {
       target: this.webhookDeliveryFn,
@@ -349,9 +360,9 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'authoriser',
-        ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
-        ENTRA_AUDIENCE: 'platform-api',
-        ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
+        ENTRA_JWKS_URL: entra.jwksUrl,
+        ENTRA_AUDIENCE: entra.audience,
+        ENTRA_ISSUER: entra.issuer,
         TENANTS_TABLE: this.tenantsTable.tableName,
       },
     });
@@ -382,9 +393,9 @@ export class PlatformStack extends cdk.Stack {
       environment: {
         POWERTOOLS_SERVICE_NAME: 'gateway-request-interceptor',
         TOOLS_TABLE: this.toolsTable.tableName,
-        ENTRA_JWKS_URL: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
-        ENTRA_AUDIENCE: 'platform-api',
-        ENTRA_ISSUER: 'https://login.microsoftonline.com/common/v2.0',
+        ENTRA_JWKS_URL: entra.jwksUrl,
+        ENTRA_AUDIENCE: entra.audience,
+        ENTRA_ISSUER: entra.issuer,
         SCOPED_TOKEN_ISSUER: 'platform-gateway',
         IDEMPOTENCY_TABLE: this.gatewayIdempotencyTable.tableName,
         SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN: scopedTokenSigningKeySecret.secretArn,
