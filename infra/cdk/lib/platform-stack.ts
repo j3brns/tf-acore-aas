@@ -533,6 +533,16 @@ export class PlatformStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const spaLogBucket = new s3.Bucket(this, 'SpaLogBucket', {
+      bucketName: `platform-spa-logs-${env}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
+      accessControl: s3.BucketAccessControl.LOG_DELIVERY_WRITE,
+    });
+
     new ssm.StringParameter(this, 'ResultsBucketArnParam', {
       parameterName: `/platform/core/${env}/results-bucket-arn`,
       stringValue: resultsBucket.bucketArn,
@@ -597,6 +607,11 @@ export class PlatformStack extends cdk.Stack {
         httpVersion: 'http2',
         priceClass: 'PriceClass_100',
         ipv6Enabled: true,
+        logging: {
+          bucket: spaLogBucket.bucketRegionalDomainName,
+          includeCookies: false,
+          prefix: 'spa-cloudfront/',
+        },
         customErrorResponses: [
           {
             errorCode: 403,
