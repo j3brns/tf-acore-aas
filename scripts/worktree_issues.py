@@ -787,6 +787,7 @@ def create_worktree_for_issue(
             run(["git", "worktree", "add", str(wt_path), "-b", branch, start_ref], cwd=root)
         print(f"Created worktree at {wt_path}")
         ensure_uv_venv(wt_path)
+        prepare_gitnexus_for_worktree(wt_path)
     except Exception:
         if claimed:
             try:
@@ -970,6 +971,58 @@ def ensure_uv_venv(path: Path) -> None:
         print("Created .venv with `uv venv`")
     except subprocess.CalledProcessError as exc:
         eprint(f"WARNING: failed to create .venv with uv: {exc}")
+
+
+def gitnexus_refresh_enabled() -> bool:
+    return parse_bool_env("WORKTREE_GITNEXUS_REFRESH", True)
+
+
+def prepare_gitnexus_for_worktree(path: Path) -> None:
+    if not gitnexus_refresh_enabled():
+        print("GitNexus: refresh disabled by WORKTREE_GITNEXUS_REFRESH=0")
+        return
+    if shutil_which("npx") is None:
+        eprint("WARNING: npx not found; skipping GitNexus refresh")
+        return
+
+    print(f"GitNexus: checking local index in {path}")
+    status_proc = subprocess.run(
+        ["npx", "gitnexus", "status"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    status_output = "\n".join(
+        part.strip()
+        for part in (status_proc.stdout or "", status_proc.stderr or "")
+        if part.strip()
+    )
+    if status_output:
+        print(status_output)
+
+    needs_refresh = status_proc.returncode != 0
+    lowered = status_output.lower()
+    refresh_markers = (
+        "stale",
+        "not indexed",
+        "not analyzed",
+        "not analysed",
+        "missing",
+        "out of date",
+    )
+    if any(marker in lowered for marker in refresh_markers):
+        needs_refresh = True
+
+    if not needs_refresh:
+        print("GitNexus: local index already fresh")
+        return
+
+    print("GitNexus: rebuilding local index for this worktree")
+    try:
+        subprocess.run(["npx", "gitnexus", "analyze"], cwd=path, check=True)
+    except subprocess.CalledProcessError as exc:
+        eprint(f"WARNING: GitNexus analyze failed in {path}: {exc}")
 
 
 def open_shell(path: Path) -> None:
@@ -1555,6 +1608,7 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         existing_wt = find_linked_worktree_for_issue(root, issue.number)
         if existing_wt is not None:
             print(f"Issue #{issue.number} already has linked worktree: {existing_wt.path}")
+            prepare_gitnexus_for_worktree(existing_wt.path)
             if args.open_shell and not args.dry_run:
                 if not args.no_preflight:
                     run_preflight(path=existing_wt.path, root=root, repo=repo)
@@ -1616,6 +1670,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
     existing_wt = find_linked_worktree_for_issue(root, issue.number)
     if existing_wt is not None:
         print(f"Issue #{issue.number} already has linked worktree: {existing_wt.path}")
+        prepare_gitnexus_for_worktree(existing_wt.path)
         if args.open_shell and not args.dry_run:
             if not args.no_preflight:
                 run_preflight(path=existing_wt.path, root=root, repo=repo)
@@ -1690,6 +1745,7 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
             repo = origin_repo_slug(root)
         except CliError:
             repo = None
+    prepare_gitnexus_for_worktree(target.path)
     if args.command:
         run_command_in_worktree(target.path, args.command)
     elif args.open_shell:
@@ -1749,6 +1805,12 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
         handoff=args.handoff,
         print_only_override=args.print_only or args.handoff == "print-only",
     )
+    return 0
+
+
+def cmd_gitnexus_refresh(args: argparse.Namespace) -> int:
+    target = Path(args.path).resolve() if args.path else current_path()
+    prepare_gitnexus_for_worktree(target)
     return 0
 
 
@@ -1932,6 +1994,13 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--path", help="Worktree path (default: current path)")
     pv.add_argument("--dry-run", action="store_true", help="Print command without running it")
     pv.set_defaults(func=cmd_pre_validate)
+
+    gn = sub.add_parser(
+        "gitnexus-refresh",
+        help="Refresh local GitNexus index for a worktree if stale or missing",
+    )
+    gn.add_argument("--path", help="Worktree path (default: current path)")
+    gn.set_defaults(func=cmd_gitnexus_refresh)
 
     wt_common = argparse.ArgumentParser(add_help=False)
     wt_common.add_argument("--base-dir", help="Linked worktree base dir (default: ../worktrees)")
