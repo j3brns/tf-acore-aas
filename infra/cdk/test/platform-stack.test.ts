@@ -420,6 +420,53 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('provisions SPA resources: S3 bucket, CloudFront distribution, and identifiers', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          {
+            ServerSideEncryptionByDefault: {
+              SSEAlgorithm: 'AES256',
+            },
+          },
+        ],
+      },
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+    });
+
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Enabled: true,
+        DefaultCacheBehavior: Match.objectLike({
+          ViewerProtocolPolicy: 'redirect-to-https',
+        }),
+      }),
+    });
+
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/platform/spa/dev/bucket-name',
+      Type: 'String',
+    });
+
+    template.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/platform/spa/dev/distribution-id',
+      Type: 'String',
+    });
+
+    template.hasOutput('SpaBucketName', {
+      Description: 'S3 bucket name for the platform SPA',
+    });
+
+    template.hasOutput('SpaDistributionId', {
+      Description: 'CloudFront distribution ID for the platform SPA',
+    });
+  });
+
   test('wires Entra config from CDK context instead of hardcoded common endpoints', () => {
     const customTemplate = synthTemplate('dev', {
       entraTenantId: '00000000-0000-0000-0000-000000000000',
