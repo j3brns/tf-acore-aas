@@ -10,20 +10,31 @@ tool access, and observability. You write business logic — not infrastructure.
 ## Quick Start
 
 ```bash
-# Copy the reference implementation
+# 1. Copy the reference implementation
 cp -r agents/echo-agent agents/my-agent
 
-# Edit the manifest
+# 2. Edit the manifest (name, owner_team, invocation_mode)
 vim agents/my-agent/pyproject.toml
 
-# Develop locally
-make dev                                    # Start local environment
-make agent-push AGENT=my-agent ENV=dev      # Deploy to local mock Runtime
-make agent-invoke AGENT=my-agent TENANT=t-test-001 PROMPT="hello"
+# 3. Develop logic locally (fast, no AWS required)
+make test-agent AGENT=my-agent               # Run unit + golden tests
 
-# Run tests
-make agent-test AGENT=my-agent
+# 4. (Optional) Test platform integration locally (requires Docker)
+make dev                                    # Start local environment (LocalStack + mocks)
+make agent-invoke AGENT=my-agent ENV=local  # Invoke via local bridge (canned mock response)
+
+# 5. Deploy to AWS dev (real compute, real compute)
+make agent-push AGENT=my-agent ENV=dev      # Package, deploy to Runtime, and register
+make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
 ```
+
+## Local vs. AWS Development
+
+| Phase | Tooling | Environment | Purpose |
+|-------|---------|-------------|---------|
+| **Logic** | `pytest` | Local | Rapidly iterate on prompt engineering, tools, and business logic. |
+| **Integration** | `make dev` | Local (Docker) | Verify that headers, auth, and platform-level routing are correct. |
+| **Validation** | `make agent-push` | AWS (dev) | Final end-to-end verification on real AgentCore Runtime compute. |
 
 ## Project Structure (per agent)
 
@@ -78,23 +89,24 @@ type = "zip"                   # zip (default) | container
 
 ## Invocation Modes
 
+Modes are declared in `pyproject.toml` and enforced by the platform Bridge.
+
 ### sync — up to 15 minutes, client waits for full response
 Use for: interactive queries, tool lookups, classification
 
 ```python
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from bedrock_agentcore import BedrockAgentCoreApp, RequestContext
 from strands import Agent
 
 app = BedrockAgentCoreApp()
 agent = Agent()
 
 @app.entrypoint
-def invoke(payload):
-    result = agent(payload.get("prompt"))
+def invoke(payload: dict, context: RequestContext):
+    # Payload contains prompt, appid, tenantId
+    prompt = payload.get("prompt")
+    result = agent(prompt)
     return {"result": result.message}
-
-if __name__ == "__main__":
-    app.run()
 ```
 
 ### streaming — up to 15 minutes, chunks arrive as generated
@@ -102,9 +114,13 @@ Use for: chat interfaces, narrated reasoning
 
 ```python
 @app.entrypoint
-async def invoke(payload):
-    async for event in agent.stream_async(payload.get("prompt")):
-        yield event
+def invoke(payload: dict, context: RequestContext):
+    prompt = payload.get("prompt")
+    # Yield individual chunk dicts
+    for event in agent.stream(prompt):
+        yield {"chunk": event.text, "index": event.index}
+    # Optional: final sentinel
+    yield {"done": True}
 ```
 
 ### async — up to 8 hours, 202 returned immediately
@@ -112,47 +128,40 @@ Use for: research agents, batch processing, multi-step workflows
 
 ```python
 import threading
-from bedrock_agentcore.runtime import BedrockAgentCoreApp, PingStatus
+from bedrock_agentcore import BedrockAgentCoreApp
 
 app = BedrockAgentCoreApp()
 
 @app.entrypoint
-def invoke(payload):
-    task_id = app.add_async_task("research_task", {"prompt": payload.get("prompt")})
+def invoke(payload: dict, context: RequestContext):
+    # 1. Register background task (sets /ping to HealthyBusy)
+    task_id = app.add_async_task("my-task", {"prompt": payload.get("prompt")})
 
     def background_work():
-        # Long-running work here — can take up to 8 hours
-        do_long_research(payload.get("prompt"))
-        app.complete_async_task(task_id)
+        try:
+            # 2. Perform long-running work
+            do_long_research(payload.get("prompt"))
+        finally:
+            # 3. Complete task (resets /ping to Healthy)
+            app.complete_async_task(task_id)
 
+    # 4. Start background thread and return acknowledgment immediately
     threading.Thread(target=background_work, daemon=True).start()
-    return {"status": "accepted", "task_id": task_id}
-
-# Optional: customise ping behaviour
-@app.ping
-def health_check():
-    if any_background_tasks_running():
-        return PingStatus.HEALTHY_BUSY
-    return PingStatus.HEALTHY
-
-if __name__ == "__main__":
-    app.run()
+    return {"accepted": True, "task_id": str(task_id)}
 ```
 
 **Important for async agents**:
-- The session stays alive as long as /ping returns HealthyBusy
-- After app.complete_async_task, /ping returns Healthy
-- The session will be destroyed 15 minutes after returning Healthy
-- The platform tracks async work through its job record and completion flow; use
-  webhook or poll delivery at the platform boundary when the agent finishes
+- The session stays alive as long as `/ping` returns `HealthyBusy`.
+- After `app.complete_async_task`, `/ping` returns `Healthy`.
+- The session will be destroyed 15 minutes after returning `Healthy` (idle timeout).
 
 ## Dependency Management
 
 Dependencies are cross-compiled for arm64 (AgentCore Runtime requirement).
-The platform hashes [project.dependencies] to detect changes:
+The platform hashes `[project.dependencies]` to detect changes:
 
-- **Warm push** (deps unchanged): <30 seconds — zip code only
-- **Cold push** (deps changed): <2 minutes — uv cross-compiles arm64 deps
+- **Warm push** (deps unchanged): <30 seconds — zip code only.
+- **Cold push** (deps changed): <2 minutes — `uv` cross-compiles arm64 deps.
 
 To add a dependency:
 ```bash
@@ -161,38 +170,46 @@ make agent-push AGENT=my-agent    # Detects hash change, triggers cold push auto
 ```
 
 **Constraints**:
-- Use `--only-binary=:all:` (enforced by build script) — source-only packages may not compile for arm64
-- If a package fails arm64 cross-compilation, use `deployment.type = "container"` instead
-- Total deployment package must remain under 250MB (AgentCore limit)
+- Use `--only-binary=:all:` (enforced by build script) — source-only packages may not compile for arm64.
+- If a package fails arm64 cross-compilation, use `deployment.type = "container"` instead.
+- Total deployment package must remain under 250MB (AgentCore limit).
 
 ## Writing Tests
 
 ### Unit tests (pytest)
+Test your logic by calling your handler functions directly with mocked inputs.
+
 ```python
 from unittest.mock import patch, MagicMock
+from handler import invoke
 
 def test_invoke_returns_result():
+    payload = {"prompt": "Hello"}
+    context = MagicMock() # Mock RequestContext
+    
     with patch("handler.agent") as mock_agent:
         mock_agent.return_value.message = "Hello back"
-        from handler import invoke
-        result = invoke({"prompt": "Hello"})
+        result = invoke(payload, context)
         assert result["result"] == "Hello back"
 ```
 
 ### Golden tests
-Create tests/golden/invoke_cases.json with at least 3 test cases:
+Create `tests/golden/invoke_cases.json` with at least 3 test cases per mode.
+This dataset is used by the evaluation gate during pipeline promotion.
+
 ```json
-[
-  {
-    "name": "basic_greeting",
-    "input": {"prompt": "Hello"},
-    "expected_contains": ["hello", "help"],
-    "mode": "sync"
-  }
-]
+{
+  "sync": [
+    {
+      "id": "basic-greeting",
+      "input": {"prompt": "Hello", "tenantId": "t-test-001"},
+      "expected": {"result": "Hello back"}
+    }
+  ]
+}
 ```
 
-Run: `make agent-test AGENT=my-agent` — executes unit tests + golden tests.
+Run: `make agent-test AGENT=my-agent` — executes unit tests + verifies golden schemas.
 
 ## Tool Access via Gateway
 

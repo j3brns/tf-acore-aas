@@ -323,12 +323,12 @@ make worktree-push-issue      # Push with preflight and validation enforced
 ### Agent developer inner loop
 
 ```bash
-make agent-push AGENT=my-agent ENV=dev
-make agent-invoke AGENT=my-agent TENANT=t-test-001 PROMPT="hello"
-make agent-test AGENT=my-agent
+make agent-test AGENT=my-agent              # 1. Local logic and golden tests (fast)
+make agent-push AGENT=my-agent ENV=dev      # 2. Push to AWS dev compute (real compute)
+make agent-invoke AGENT=my-agent ENV=dev    # 3. Invoke on real AWS
 ```
 
-`make agent-push` uses the fast path when dependencies are unchanged, which keeps the inner loop quick without bypassing the platform boundary entirely.
+`make agent-push` uses the fast path when dependencies are unchanged, which keeps the inner loop quick without bypassing the platform boundary entirely. Local development of agent logic is done via `pytest` and `make agent-test`.
 
 ### Frontend developer inner loop
 
