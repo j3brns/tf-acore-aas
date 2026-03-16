@@ -78,6 +78,14 @@ Mitigation: operators use ops.py — which calls Admin REST API — not direct D
 invocation content not exposed via Admin API (only metadata); audit log on all API calls;
 CloudTrail records all AWS API calls including Secrets Manager reads
 
+### 11. Abuse of Reserved Platform Tenant
+Threat: a reserved internal tenant (`platform`) is treated as a hidden super-tenant or
+authorization bypass, allowing cross-tenant actions outside explicit control-plane paths
+Mitigation: `platform` is a reserved internal tenant, not a bypass mode; platform-agent
+routes still require explicit platform RBAC; target-tenant actions must go through
+documented control-plane APIs or workflows; audit records must capture acting tenant,
+acting principal, target tenant, operation type, and outcome
+
 ## Controls Summary
 
 | Control                        | Threat(s) Addressed          | Where Implemented         |
@@ -93,6 +101,7 @@ CloudTrail records all AWS API calls including Secrets Manager reads
 | CloudTrail + VPC Flow Logs     | 10                           | ObservabilityStack        |
 | PII redaction (RESPONSE)       | 9                            | RESPONSE interceptor      |
 | Explicit runtime posture gate  | 8a                           | AgentCoreStack + cfn-guard + CDK tests |
+| Reserved platform-tenant guardrails | 11                      | ADR-016 + control-plane APIs + audit model |
 
 ## Data Classification
 
@@ -117,3 +126,62 @@ CloudTrail records all AWS API calls including Secrets Manager reads
 3. AgentCore Runtime escape: microVM isolation breach at hypervisor level.
    Mitigation: AWS responsibility under shared responsibility model; Firecracker
    has a strong security track record; monitor AWS security bulletins.
+
+## Reserved Platform Tenant Threat Detail
+
+### Description
+The platform may define a reserved internal tenant, `platform`, for operator-controlled
+agents and control-plane automation. This creates a concentrated privilege boundary:
+if the `platform` tenant is treated as an implicit super-tenant, tenant isolation can
+be weakened or bypassed.
+
+### Threat Actors
+- malicious operator with a valid platform role
+- compromised operator session or Entra token
+- compromised internal agent prompt/tool chain
+- implementation error that grants `platform` broad direct tenant-data access
+
+### Attack Paths
+1. Platform agent directly reads or mutates customer-tenant data without using explicit
+   admin/control-plane APIs.
+2. Authorization logic treats `tenantid=platform` as a bypass condition.
+3. Internal automation omits `targetTenantId`, making cross-tenant actions difficult to
+   audit.
+4. IAM or application logic grants broad direct resource access because the actor is
+   "internal".
+5. Prompt injection or tool misuse causes a platform-owned agent to perform an
+   unauthorized target-tenant action.
+
+### Impact
+- cross-tenant confidentiality breach
+- cross-tenant integrity breach
+- weakly attributable admin actions
+- reduced trust in tenant isolation guarantees
+- compliance and audit failure
+
+### Required Mitigations
+- `platform` is a reserved internal tenant, not a super-tenant
+- `tenantid=platform` must never act as an implicit authorization bypass
+- cross-tenant actions must go through explicit control-plane APIs or workflows
+- all such actions must record:
+  - acting principal
+  - acting tenant (`platform`)
+  - target tenant
+  - operation type
+  - outcome
+- `data-access-lib` remains the only permitted DynamoDB interface in handlers
+- no wildcard IAM permissions introduced for platform-agent flows
+- platform-agent routes require explicit platform RBAC
+- tests must prove platform-agent flows cannot bypass tenant isolation
+
+### Detection
+- audit events containing `tenantid=platform`
+- audit events containing `targetTenantId`
+- alerts on unexpected volume or unusual target-tenant breadth for platform-agent actions
+- traces linking operator identity to internal-agent activity
+
+### Residual Risk
+The `platform` tenant concentrates control-plane authority. Residual risk remains if
+operator credentials are compromised or platform-agent tooling is allowed to invoke
+unsafe workflows. This risk is accepted only if target-tenant actions remain explicit,
+audited, and bounded by RBAC and control-plane validation.

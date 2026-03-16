@@ -45,6 +45,7 @@ Every significant design choice is documented with context, decision, and reject
 | [ADR-012](decisions/ADR-012-dynamodb-capacity.md) | On-demand for invocations; provisioned for config tables |
 | [ADR-013](decisions/ADR-013-entra-rbac-roles-claim.md) | Entra group membership as JWT roles claim for RBAC |
 | [ADR-014](decisions/ADR-014-minimise-vpc-bound-services.md) | Default non-VPC control plane; VPC attachment only for genuine private dependencies |
+| [ADR-016](decisions/ADR-016-platform-internal-tenant.md) | Reserved `platform` tenant for operator-controlled agents without super-tenant bypass |
 
 ## Operator Runbooks
 
