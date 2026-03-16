@@ -12,12 +12,18 @@ import { PlatformStack } from '../lib/platform-stack';
 
 describe('ObservabilityStack (TASK-026)', () => {
   const synthStack = () => {
-    const app = new cdk.App();
+    const app = new cdk.App({
+      context: {
+        env: 'dev',
+        entraTenantId: '00000000-0000-0000-0000-000000000000',
+        entraAudience: 'platform-api',
+      },
+    });
     const env = { account: '123456789012', region: 'eu-west-2' };
-    
+
     const identityStack = new cdk.Stack(app, 'IdentityStack', { env });
     const mockKey = new kms.Key(identityStack, 'MockKey');
-    
+
     const networkStack = new cdk.Stack(app, 'NetworkStack', { env });
     const mockVpc = new ec2.Vpc(networkStack, 'MockVpc', {
       subnetConfiguration: [

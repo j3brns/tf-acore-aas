@@ -3,11 +3,14 @@
  *                 Authoriser Lambda, AgentCore Gateway.
  *
  * REST API (not HTTP API) with usage plans, per-method throttling, WAF association.
+ * Public SPA CloudFront distribution currently has an explicit no-WebACL exception:
+ * the platform has not yet introduced an approved global/us-east-1 edge security stack,
+ * so only the regional API surface is WAF-protected in this stack.
  * Authoriser Lambda: provisioned concurrency 10.
  * AgentCore Gateway with REQUEST and RESPONSE interceptors wired.
  *
  * Implemented in TASK-023.
- * ADRs: ADR-003, ADR-004, ADR-011
+ * ADRs: ADR-003, ADR-004, ADR-009, ADR-011
  */
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -329,7 +332,7 @@ export class PlatformStack extends cdk.Stack {
         ENTRA_AUDIENCE: entra.audience,
         ENTRA_TOKEN_ENDPOINT: entra.tokenEndpoint,
         ENTRA_CLIENT_ID_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-id`,
-        ENTRA_CLIENT_SECRET_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-secret`,
+        ENTRA_CLIENT_SECRET_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-secret`, // pragma: allowlist secret
       },
     });
 
@@ -609,6 +612,20 @@ export class PlatformStack extends cdk.Stack {
           includeCookies: false,
           prefix: 'spa-cloudfront/',
         },
+        customErrorResponses: [
+          {
+            errorCode: 403,
+            responsePagePath: '/index.html',
+            responseCode: 200,
+            errorCachingMinTtl: 0,
+          },
+          {
+            errorCode: 404,
+            responsePagePath: '/index.html',
+            responseCode: 200,
+            errorCachingMinTtl: 0,
+          },
+        ],
         origins: [
           {
             id: 'SpaS3Origin',
@@ -636,6 +653,9 @@ export class PlatformStack extends cdk.Stack {
         viewerCertificate: {
           cloudFrontDefaultCertificate: true,
         },
+        // No WebACLId is wired here by design. A CloudFront-scope WAF must be managed
+        // via a dedicated global/us-east-1 path, which this repository has not yet
+        // approved under the current ADR-009 region topology.
       },
     });
 
