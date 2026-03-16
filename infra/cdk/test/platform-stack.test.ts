@@ -467,6 +467,30 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('configures CloudFront access logging for the SPA distribution', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: 'platform-spa-logs-dev',
+      AccessControl: 'LogDeliveryWrite',
+      OwnershipControls: {
+        Rules: [
+          {
+            ObjectOwnership: 'BucketOwnerPreferred',
+          },
+        ],
+      },
+    });
+
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Logging: Match.objectLike({
+          Bucket: Match.anyValue(),
+          IncludeCookies: false,
+          Prefix: 'spa-cloudfront/',
+        }),
+      }),
+    });
+  });
+
   test('wires Entra config from CDK context instead of hardcoded common endpoints', () => {
     const customTemplate = synthTemplate('dev', {
       entraTenantId: '00000000-0000-0000-0000-000000000000',
