@@ -6,6 +6,7 @@ export interface EntraConfiguration {
   readonly jwksUrl: string;
   readonly issuer: string;
   readonly discoveryUrl: string;
+  readonly tokenEndpoint: string;
 }
 
 function optionalContext(scope: Construct, name: string): string | undefined {
@@ -17,7 +18,14 @@ function optionalContext(scope: Construct, name: string): string | undefined {
 }
 
 export function resolveEntraConfiguration(scope: Construct): EntraConfiguration {
-  const tenantId = optionalContext(scope, 'entraTenantId') ?? 'common';
+  const tenantId = optionalContext(scope, 'entraTenantId');
+  if (!tenantId) {
+    throw new Error(
+      'entraTenantId context is required for all environments (e.g. --context entraTenantId=00000000-0000-0000-0000-000000000000). ' +
+      'Check docs/entra-setup.md for how to find your Directory (tenant) ID.'
+    );
+  }
+
   const audience = optionalContext(scope, 'entraAudience') ?? 'platform-api';
   const issuer = optionalContext(scope, 'entraIssuer') ?? `https://login.microsoftonline.com/${tenantId}/v2.0`;
   const jwksUrl =
@@ -26,6 +34,9 @@ export function resolveEntraConfiguration(scope: Construct): EntraConfiguration 
   const discoveryUrl =
     optionalContext(scope, 'entraDiscoveryUrl') ??
     `https://login.microsoftonline.com/${tenantId}/v2.0/.well-known/openid-configuration`;
+  const tokenEndpoint =
+    optionalContext(scope, 'entraTokenEndpoint') ??
+    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
 
   return {
     tenantId,
@@ -33,5 +44,6 @@ export function resolveEntraConfiguration(scope: Construct): EntraConfiguration 
     issuer,
     jwksUrl,
     discoveryUrl,
+    tokenEndpoint,
   };
 }

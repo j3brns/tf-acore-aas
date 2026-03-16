@@ -12,6 +12,7 @@ describe('PlatformStack (TASK-023)', () => {
     const app = new cdk.App({
       context: {
         env: environment,
+        entraTenantId: '00000000-0000-0000-0000-000000000000',
         ...extraContext,
       },
     });
@@ -400,12 +401,19 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
-  test('configures the BFF lambda with the approved Entra audience', () => {
+  test('configures the BFF lambda with canonical Entra config and secret references', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'platform-core-dev-bff',
       Environment: {
         Variables: Match.objectLike({
+          ENTRA_TENANT_ID: '00000000-0000-0000-0000-000000000000',
           ENTRA_AUDIENCE: 'platform-api',
+          ENTRA_TOKEN_ENDPOINT:
+            'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/oauth2/v2.0/token',
+          ENTRA_CLIENT_ID_SECRET_ARN:
+            'arn:aws:secretsmanager:eu-west-2:123456789012:secret:platform/dev/entra/client-id',
+          ENTRA_CLIENT_SECRET_SECRET_ARN:
+            'arn:aws:secretsmanager:eu-west-2:123456789012:secret:platform/dev/entra/client-secret',
           POWERTOOLS_SERVICE_NAME: 'bff',
         }),
       },
@@ -449,7 +457,10 @@ describe('PlatformStack (TASK-023)', () => {
       FunctionName: 'platform-core-dev-bff',
       Environment: {
         Variables: Match.objectLike({
+          ENTRA_TENANT_ID: '00000000-0000-0000-0000-000000000000',
           ENTRA_AUDIENCE: 'api://platform-dev',
+          ENTRA_TOKEN_ENDPOINT:
+            'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/oauth2/v2.0/token',
         }),
       },
     });

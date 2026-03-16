@@ -325,9 +325,18 @@ export class PlatformStack extends cdk.Stack {
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'bff',
+        ENTRA_TENANT_ID: entra.tenantId,
         ENTRA_AUDIENCE: entra.audience,
+        ENTRA_TOKEN_ENDPOINT: entra.tokenEndpoint,
+        ENTRA_CLIENT_ID_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-id`,
+        ENTRA_CLIENT_SECRET_SECRET_ARN: `arn:aws:secretsmanager:${this.region}:${this.account}:secret:platform/${env}/entra/client-secret`,
       },
     });
+
+    const entraClientIdSecret = secretsmanager.Secret.fromSecretNameV2(this, 'EntraClientIdSecret', `platform/${env}/entra/client-id`);
+    const entraClientSecretSecret = secretsmanager.Secret.fromSecretNameV2(this, 'EntraClientSecretSecret', `platform/${env}/entra/client-secret`);
+    entraClientIdSecret.grantRead(this.bffFn);
+    entraClientSecretSecret.grantRead(this.bffFn);
 
     new lambda.EventSourceMapping(this, 'webhookDeliveryJobsStreamMapping', {
       target: this.webhookDeliveryFn,

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,20 +25,55 @@ from typing import Any
 
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
+from aws_lambda_powertools.utilities.parameters import get_secret
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 logger = Logger(service="bff")
 tracer = Tracer()
 
+# Environment variables (passed from CDK in PlatformStack)
 ENTRA_CLIENT_ID = os.environ.get("ENTRA_CLIENT_ID")
 ENTRA_CLIENT_SECRET = os.environ.get("ENTRA_CLIENT_SECRET")
-ENTRA_TENANT_ID = os.environ.get("ENTRA_TENANT_ID", "common")
+ENTRA_TENANT_ID = os.environ.get("ENTRA_TENANT_ID")
 ENTRA_TOKEN_ENDPOINT = os.environ.get("ENTRA_TOKEN_ENDPOINT")
 ENTRA_AUDIENCE = os.environ.get("ENTRA_AUDIENCE")
+
+# Secret ARNs (passed from CDK in PlatformStack)
+ENTRA_CLIENT_ID_SECRET_ARN = os.environ.get("ENTRA_CLIENT_ID_SECRET_ARN")
+ENTRA_CLIENT_SECRET_SECRET_ARN = os.environ.get("ENTRA_CLIENT_SECRET_SECRET_ARN")
+
+# In-memory cache for secrets resolved from ARNs
+_secrets_cache: dict[str, str] = {}
+_secrets_expiry: dict[str, float] = {}
+_CACHE_TTL = 300  # 5 minutes
+
 RUNTIME_PING_URL = os.environ.get("RUNTIME_PING_URL") or os.environ.get("MOCK_RUNTIME_URL")
 RUNTIME_KEEPALIVE_WINDOW_SECONDS = 15 * 60
 RUNTIME_PING_TIMEOUT_SECONDS = 2.0
 _ALLOWED_SCOPE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,127}$")
+
+
+def _resolve_secret(secret_arn: str | None, env_value: str | None, env_name: str) -> str:
+    """Resolve a secret value from ARN (with 5-min cache) or environment variable fallback."""
+    if not secret_arn:
+        return _required_env_value(env_name, env_value)
+
+    now = time.time()
+    if secret_arn in _secrets_cache and now < _secrets_expiry.get(secret_arn, 0):
+        return _secrets_cache[secret_arn]
+
+    try:
+        # get_secret includes its own 5-minute cache by default (max_age=300)
+        val = get_secret(secret_arn, max_age=_CACHE_TTL)
+        if val and isinstance(val, str):
+            _secrets_cache[secret_arn] = val
+            _secrets_expiry[secret_arn] = now + _CACHE_TTL
+            return val
+    except Exception:
+        logger.exception(f"Failed to fetch {env_name} from Secrets Manager ARN: {secret_arn}")
+
+    # Fallback to direct environment variable if secret fetch fails
+    return _required_env_value(env_name, env_value)
 
 
 @logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
@@ -233,8 +269,12 @@ def _exchange_obo_token(
 ) -> dict[str, Any]:
     endpoint = _entra_token_endpoint()
     params = {
-        "client_id": _required_env_value("ENTRA_CLIENT_ID", ENTRA_CLIENT_ID),
-        "client_secret": _required_env_value("ENTRA_CLIENT_SECRET", ENTRA_CLIENT_SECRET),
+        "client_id": _resolve_secret(
+            ENTRA_CLIENT_ID_SECRET_ARN, ENTRA_CLIENT_ID, "ENTRA_CLIENT_ID"
+        ),
+        "client_secret": _resolve_secret(
+            ENTRA_CLIENT_SECRET_SECRET_ARN, ENTRA_CLIENT_SECRET, "ENTRA_CLIENT_SECRET"
+        ),
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
         "requested_token_use": "on_behalf_of",
         "assertion": assertion_token,
