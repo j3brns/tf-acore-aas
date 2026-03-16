@@ -54,7 +54,8 @@ Ordered steps with validation at each:
 2. **CDK bootstrap** — creates CDKToolkit stacks in eu-west-2, eu-west-1, eu-central-1
 3. **Seed secrets** — writes Entra credentials and platform private key to Secrets Manager
 4. **OIDC wiring** — creates GitLab OIDC provider and pipeline roles, prints ARNs
-5. **First CDK deploy** — deploys all 6 stacks from local machine (not pipeline)
+5. **First CDK deploy** — deploys the 5 bootstrap-supported home-region stacks from the
+   local machine (not pipeline)
 6. **Post-deploy seeding** — creates first admin, seeds SSM, registers echo-agent
 7. **Smoke test** — invokes echo-agent, checks alarms, confirms quota headroom
 8. **Delete bootstrap user** — removes temporary IAM user (MANDATORY)
@@ -102,3 +103,17 @@ make infra-destroy ENV=dev
 ```
 
 Re-bootstrapping after destroy takes ~35 minutes (CDK re-uses existing ECR/S3 ARNs).
+
+## Bootstrap Deploy Scope
+
+The day-zero `first-deploy` bootstrap step intentionally deploys only:
+- `platform-network-{env}`
+- `platform-identity-{env}`
+- `platform-core-{env}`
+- `platform-tenant-stub-{env}`
+- `platform-observability-{env}`
+
+It does not deploy `platform-agentcore-{env}`. `AgentCoreStack` requires explicit runtime
+artifact and metric-stream parameters, and the bootstrap path does not have a supported
+automatic source for those values on a fresh account. The bootstrap flow and runbooks are
+therefore scoped to the 5-stack control-plane deployment until that contract changes.
