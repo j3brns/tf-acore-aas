@@ -57,6 +57,15 @@ In practice, this creates a fast self-service path that separates agent code fro
 - **EU-only data residency** — approved topology keeps data in London and runtime in Dublin, with evaluation capability in Frankfurt
 - **LocalStack developer loop** — full local inner loop without AWS credentials
 
+## Drinking our own champagne
+
+One direction for the platform is a reserved internal `platform` tenant with a
+platform-ops agent that helps operate the system through the same control-plane
+surfaces the product exposes. The point is not to create a hidden super-tenant;
+it is to prove the operational model on ourselves first. If we cannot run release,
+onboarding, and operator-assist flows safely through explicit APIs, audit trails,
+and tenant-scoped context, the platform contract is weaker than it looks.
+
 ## Portal experience
 
 The SPA is the operator and tenant-facing control surface for the platform. It provides:
@@ -468,4 +477,3 @@ sequenceDiagram
     CloudFront-->>Client: 22. Response Stream (Continuous)
     Note right of Client: Response stream is fully delivered.
 ```
-

@@ -139,6 +139,58 @@ compromise tenant data. See [Threat Model](security/THREAT-MODEL.md) for attack 
 
 See [ADR-004](decisions/ADR-004-act-on-behalf-identity.md) for the identity propagation design.
 
+### Reserved Internal Tenant
+
+The platform defines one reserved internal tenant identifier: `platform`.
+
+This tenant is used only for platform-owned control-plane agents and operator-assisted
+automation. It is not assignable to customer tenants and is rejected by tenant
+creation flows.
+
+The `platform` tenant is still a real tenant context for observability and audit:
+- every request carries `tenantid=platform`
+- every log line, metric, and trace annotation includes `tenantid=platform`
+- the acting operator or service principal is recorded alongside the platform tenant
+  context
+
+The `platform` tenant is not a super-tenant. It does not receive implicit cross-tenant
+data access. Any action against a customer tenant must flow through explicit
+control-plane APIs or workflows that:
+- validate the target tenant
+- enforce platform RBAC
+- emit audit events
+- preserve target-tenant identity in downstream actions
+
+See [ADR-016](decisions/ADR-016-platform-internal-tenant.md) for the reserved internal
+tenant model.
+
+## Request Lifecycle (Platform Operator / Internal Agent)
+
+```text
+Operator
+  → SPA / Admin surface
+  → Entra OIDC
+  → REST API Gateway
+  → Authoriser Lambda
+      Validates Entra JWT
+      Confirms platform role claims (for example Platform.Admin / Platform.Operator)
+      Returns caller context with tenantid=platform for platform-agent routes
+  → Platform Agent / Control-Plane Handler
+      Operates within reserved tenant `platform`
+      May inspect platform-owned control-plane state directly where authorised
+      Must use explicit admin/control-plane APIs or workflows for target-tenant actions
+      Emits audit records including:
+        acting principal
+        tenantid=platform
+        targetTenantId (when applicable)
+        operation type
+        outcome
+  → Response back through API Gateway → client
+```
+
+Design rule: platform agents assist and orchestrate control-plane operations; they do
+not bypass the control plane.
+
 ## Entity Lifecycle
 
 ![Entity state diagram: tenant, agent, invocation, job, and session lifecycle states and transitions](images/tf_acore_aas_entities_state_diagram.drawio.png)
@@ -156,8 +208,10 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 - Tenant ID policy (create boundary):
   - Canonicalized to lowercase before persistence
   - Regex: `^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$` (3–32 chars)
-  - No consecutive hyphens; reserved IDs rejected (`admin`, `root`, `system`, `stub`)
+  - No consecutive hyphens; reserved IDs rejected (`platform`, `admin`, `root`, `system`, `stub`)
   - Existing pre-policy tenant IDs remain valid; policy enforced for new creates only
+  - `platform` is reserved for internal control-plane use and must never be created
+    through customer or self-service flows
 
 **platform-agents** — agent registry
 - PK: `AGENT#{agentName}`, SK: `VERSION#{semver}`
@@ -206,6 +260,20 @@ documented response in the [operator runbooks](README.md#operator-runbooks).
 | 3 | AgentCore Runtime | Auto-scales, per-account quota | 70%: [RUNBOOK-002](operations/RUNBOOK-002-quota-monitoring.md); 90%: [RUNBOOK-004](operations/RUNBOOK-004-quota-increase.md) |
 | 4 | DynamoDB | On-demand for invocations, provisioned for config | Jitter suffix on high-volume tenant SKs |
 | 5 | Account topology | Option A (single) → B (tier-split) → C (per-tenant) | Escalate when quota thresholds require |
+
+## Platform-Controlled Cross-Tenant Actions
+
+Cross-tenant actions are permitted only through explicit control-plane paths. The
+reserved `platform` tenant does not authorize broad direct access to customer data.
+
+Approved cross-tenant actions must:
+- originate from a caller with platform RBAC
+- record both acting tenant (`platform`) and target tenant
+- execute through documented admin APIs, workflows, or orchestrations
+- preserve tenant isolation for all direct data-plane access
+
+This preserves the rule that normal tenant data access remains structurally
+tenant-scoped even when initiated by platform-owned automation.
 
 ### Cross-Account Tenant Provisioning (Option B/C)
 
