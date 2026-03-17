@@ -411,10 +411,10 @@ agent-push:
 	fi
 	@echo "==> Packaging agent code"
 	uv run python scripts/package_agent.py $(AGENT)
-	@echo "==> Deploying to AgentCore Runtime"
-	uv run python scripts/deploy_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Running agent tests"
 	$(MAKE) test-agent AGENT=$(AGENT)
+	@echo "==> Deploying to AgentCore Runtime"
+	uv run python scripts/deploy_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Registering agent"
 	uv run python scripts/register_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Agent $(AGENT) deployed successfully to $(ENV)"

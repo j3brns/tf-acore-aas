@@ -58,6 +58,26 @@ def _patch_deploy_agentcore(monkeypatch, fake_client: _FakeAgentCoreClient) -> N
     monkeypatch.setattr(deploy_agent, "boto3", types.SimpleNamespace(client=_client))
 
 
+def _makefile_recipe_lines(target: str) -> list[str]:
+    makefile_lines = (REPO_ROOT / "Makefile").read_text().splitlines()
+    recipe_lines: list[str] = []
+    in_target = False
+
+    for line in makefile_lines:
+        if in_target:
+            if line.startswith("\t"):
+                recipe_lines.append(line.strip())
+                continue
+            break
+        if line == f"{target}:":
+            in_target = True
+
+    if not recipe_lines:
+        raise AssertionError(f"Target {target} not found in Makefile")
+
+    return recipe_lines
+
+
 # ---------------------------------------------------------------------------
 # package_agent.py tests
 # ---------------------------------------------------------------------------
@@ -87,6 +107,18 @@ def test_package_agent_creates_zip(tmp_path, monkeypatch):
         assert "handler.py" in names
         assert "pyproject.toml" in names
         assert "__pycache__/test.pyc" not in names
+
+
+def test_agent_push_runs_tests_before_deploy_and_register():
+    recipe_lines = _makefile_recipe_lines("agent-push")
+
+    test_index = recipe_lines.index("$(MAKE) test-agent AGENT=$(AGENT)")
+    deploy_index = recipe_lines.index("uv run python scripts/deploy_agent.py $(AGENT) --env $(ENV)")
+    register_index = recipe_lines.index(
+        "uv run python scripts/register_agent.py $(AGENT) --env $(ENV)"
+    )
+
+    assert test_index < deploy_index < register_index
 
 
 # ---------------------------------------------------------------------------
