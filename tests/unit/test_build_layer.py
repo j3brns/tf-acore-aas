@@ -136,7 +136,10 @@ def test_run_uploads_zip_and_updates_ssm(tmp_path: Path, monkeypatch: pytest.Mon
     exit_code = bl.run("echo-agent", "dev")
     assert exit_code == 0
 
-    expected_hash = bl.compute_dependency_hash(bl.read_agent_deps("echo-agent"))
+    expected_hash = bl.compute_dependency_hash(
+        bl.read_agent_deps("echo-agent"),
+        lockfile_content=bl.read_agent_lockfile("echo-agent"),
+    )
     expected_key = f"layers/echo-agent-deps-{expected_hash}.zip"
 
     ssm = boto3.client("ssm", region_name=_REGION)
