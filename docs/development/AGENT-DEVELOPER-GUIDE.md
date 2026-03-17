@@ -158,10 +158,10 @@ def invoke(payload: dict, context: RequestContext):
 ## Dependency Management
 
 Dependencies are cross-compiled for arm64 (AgentCore Runtime requirement).
-The platform hashes `[project.dependencies]` to detect changes:
+The platform hashes `[project.dependencies]` **and** `uv.lock` to detect changes:
 
-- **Warm push** (deps unchanged): <30 seconds — zip code only.
-- **Cold push** (deps changed): <2 minutes — `uv` cross-compiles arm64 deps.
+- **Warm push** (deps and lockfile unchanged): <30 seconds — zip code only.
+- **Cold push** (deps or lockfile changed): <2 minutes — `uv` cross-compiles arm64 deps.
 
 To add a dependency:
 ```bash

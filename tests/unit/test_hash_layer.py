@@ -76,6 +76,59 @@ def test_empty_deps_returns_hash() -> None:
 
 
 # ---------------------------------------------------------------------------
+# compute_dependency_hash — lockfile-aware tests (issue #267)
+# ---------------------------------------------------------------------------
+
+
+def test_lockfile_content_changes_hash() -> None:
+    """Changing lockfile content must produce a different hash."""
+    deps = ["boto3>=1.37.0", "requests>=2.31.0"]
+    lockfile_a = "# uv.lock v1\nboto3==1.37.0\nrequests==2.31.0\n"
+    lockfile_b = "# uv.lock v1\nboto3==1.37.1\nrequests==2.31.0\n"
+
+    hash_a = hl.compute_dependency_hash(deps, lockfile_content=lockfile_a)
+    hash_b = hl.compute_dependency_hash(deps, lockfile_content=lockfile_b)
+    assert hash_a != hash_b
+
+
+def test_same_deps_same_lockfile_same_hash() -> None:
+    """Identical deps + lockfile must produce the same hash."""
+    deps = ["boto3>=1.37.0"]
+    lockfile = "# uv.lock v1\nboto3==1.37.0\n"
+    hash_a = hl.compute_dependency_hash(deps, lockfile_content=lockfile)
+    hash_b = hl.compute_dependency_hash(deps, lockfile_content=lockfile)
+    assert hash_a == hash_b
+
+
+def test_no_lockfile_preserves_original_hash() -> None:
+    """When lockfile_content is None, hash matches the original deps-only hash."""
+    deps = ["boto3>=1.37.0", "requests>=2.31.0"]
+    hash_no_lock = hl.compute_dependency_hash(deps)
+    hash_none = hl.compute_dependency_hash(deps, lockfile_content=None)
+    assert hash_no_lock == hash_none
+
+
+def test_lockfile_vs_no_lockfile_different_hash() -> None:
+    """Adding a lockfile where none existed must change the hash."""
+    deps = ["boto3>=1.37.0"]
+    lockfile = "# uv.lock v1\nboto3==1.37.0\n"
+    hash_without = hl.compute_dependency_hash(deps, lockfile_content=None)
+    hash_with = hl.compute_dependency_hash(deps, lockfile_content=lockfile)
+    assert hash_without != hash_with
+
+
+# ---------------------------------------------------------------------------
+# read_agent_lockfile — file-system tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_agent_lockfile_returns_none_when_absent() -> None:
+    """Agents without uv.lock should return None."""
+    result = hl.read_agent_lockfile("nonexistent-agent-xyz")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
 # read_agent_deps — file-system tests against echo-agent fixture
 # ---------------------------------------------------------------------------
 
@@ -135,7 +188,8 @@ def test_run_returns_0_when_hash_matches(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("AWS_REGION", _REGION)
 
     deps = hl.read_agent_deps("echo-agent")
-    computed = hl.compute_dependency_hash(deps)
+    lockfile = hl.read_agent_lockfile("echo-agent")
+    computed = hl.compute_dependency_hash(deps, lockfile_content=lockfile)
 
     ssm = boto3.client("ssm", region_name=_REGION)
     ssm.put_parameter(
