@@ -21,11 +21,11 @@ make test-agent AGENT=my-agent               # Run unit + golden tests
 
 # 4. (Optional) Test platform integration locally (requires Docker)
 make dev                                    # Start local environment (LocalStack + mocks)
-make agent-invoke AGENT=my-agent ENV=local  # Invoke via local bridge (canned mock response)
+make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=local  # Invoke via local bridge
 
 # 5. Deploy to AWS dev (real compute, real compute)
 make agent-push AGENT=my-agent ENV=dev      # Package, deploy to Runtime, and register
-make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
+make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=dev    # Invoke your agent on real AWS
 ```
 
 ## Local vs. AWS Development
@@ -202,7 +202,7 @@ This dataset is used by the evaluation gate during pipeline promotion.
   "sync": [
     {
       "id": "basic-greeting",
-      "input": {"prompt": "Hello", "tenantId": "t-test-001"},
+      "input": {"prompt": "Hello", "tenantId": "t-basic-001"},
       "expected": {"result": "Hello back"}
     }
   ]
