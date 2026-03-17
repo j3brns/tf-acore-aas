@@ -77,13 +77,13 @@ def validate_manifest(agent_name: str) -> bool:
     if "tier_minimum" in manifest and manifest["tier_minimum"] not in VALID_TIERS:
         errors.append(
             f"Invalid tier_minimum: '{manifest['tier_minimum']}'. "
-            f"Must be one of: {', '.join(VALID_TIERS)}"
+            f"Must be one of: {', '.join(sorted(VALID_TIERS))}"
         )
 
     if "invocation_mode" in manifest and manifest["invocation_mode"] not in VALID_INVOCATION_MODES:
         errors.append(
             f"Invalid invocation_mode: '{manifest['invocation_mode']}'. "
-            f"Must be one of: {', '.join(VALID_INVOCATION_MODES)}"
+            f"Must be one of: {', '.join(sorted(VALID_INVOCATION_MODES))}"
         )
 
     # Check name match

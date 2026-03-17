@@ -74,7 +74,7 @@ dev = [
 [tool.agentcore]
 name = "my-agent"
 owner_team = "team-commerce"
-tier_minimum = "standard"      # basic | standard | premium | enterprise
+tier_minimum = "standard"      # basic | standard | premium
 handler = "handler:invoke"
 invocation_mode = "sync"       # sync | streaming | async
 estimated_duration_seconds = 30
