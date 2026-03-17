@@ -62,6 +62,12 @@ After `make dev`, two test tenants are available. Their JWTs are in `.env.test`:
 | PREMIUM_TENANT_JWT    | t-test-002 | premium  |
 | ADMIN_JWT             | admin-001  | Platform.Admin |
 
+To refresh the local JWT fixtures without rerunning bootstrap, keep the dev services up and run:
+
+```bash
+uv run python scripts/dev-bootstrap.py
+```
+
 Use these with `make agent-invoke AGENT=echo-agent TENANT=t-test-001` or in your tests via `conftest.py`.
 
 ## Running Tests
