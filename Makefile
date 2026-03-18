@@ -26,7 +26,7 @@
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
 .PHONY: worktree wt-go wt-batch issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
-.PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
+.PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close finish-worktree-close-json
 .PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
 ENV ?= dev
@@ -827,6 +827,14 @@ finish-worktree-close:
 	uv run python scripts/worktree_issues.py finish-close \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(FORCE),--force,)
+
+## finish-worktree-close-json: Close the current worktree issue and print the closeout report JSON
+## Usage: make finish-worktree-close-json [WT_PATH=../worktrees/wt23] [FORCE=1]
+finish-worktree-close-json:
+	uv run python scripts/worktree_issues.py finish-close \
+		$(if $(WT_PATH),--path "$(WT_PATH)",) \
+		$(if $(FORCE),--force,) \
+		--json
 
 ## agent-handoff: Print/launch agent command with agent selection and yolo modes for current path
 ## Usage: make agent-handoff [AGENT=codex] [AGENT_MODE=yolo] [HANDOFF=print-only]

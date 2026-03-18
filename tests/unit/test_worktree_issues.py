@@ -765,6 +765,55 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     assert all(isinstance(event["pid"], int) for event in report["events"])
 
 
+def test_cmd_finish_close_json_prints_closeout_report(monkeypatch, capsys, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    target = worktree_issues.WorktreeInfo(
+        path=tmp_path / "worktrees" / "wt153",
+        head="abc123",
+        branch="wt/task/153-sample",
+        is_primary=False,
+    )
+    report_path = root / ".build" / "worktree-closeouts" / "issue-153-wt_task_153-sample.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_payload = {
+        "branch": target.branch,
+        "events": [
+            {
+                "stage": "complete",
+                "message": "done",
+                "pid": 1,
+                "ts": "2026-01-01T00:00:00Z",
+            }
+        ],
+        "issue_closed": True,
+        "issue_id": 153,
+        "merged_pr_required": True,
+        "repo": "owner/repo",
+        "stage": "complete",
+        "worktree_path": str(target.path),
+    }
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [target])
+    monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
+    monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
+    monkeypatch.setattr(worktree_issues, "closeout_report_path", lambda _root, _target: report_path)
+    monkeypatch.setattr(
+        worktree_issues,
+        "close_issue_done",
+        lambda *_args, **_kwargs: report_path.write_text(
+            json.dumps(report_payload, indent=2) + "\n", encoding="utf-8"
+        ),
+    )
+
+    rc = worktree_issues.cmd_finish_close(argparse.Namespace(path=None, force=False, json=True))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert json.loads(out.splitlines()[-1]) == report_payload
+
+
 def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
     calls: list[list[str]] = []
 

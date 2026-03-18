@@ -1757,6 +1757,10 @@ def write_closeout_report(root: Path, target: WorktreeInfo, payload: dict[str, o
     return path
 
 
+def read_closeout_report(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def closeout_event(
     *,
     stage: str,
@@ -2316,7 +2320,12 @@ def cmd_finish_summary(args: argparse.Namespace) -> int:
 
 def cmd_finish_close(args: argparse.Namespace) -> int:
     root = repo_root()
-    close_issue_done(root, path=Path(args.path).resolve() if args.path else None, force=args.force)
+    target_path = Path(args.path).resolve() if args.path else None
+    close_issue_done(root, path=target_path, force=args.force)
+    if getattr(args, "json", False):
+        worktrees = list_worktrees(root)
+        target = resolve_current_worktree(target_path or current_path(), worktrees)
+        print(json.dumps(read_closeout_report(closeout_report_path(root, target)), sort_keys=True))
     return 0
 
 
@@ -2737,6 +2746,11 @@ def build_parser() -> argparse.ArgumentParser:
     fc.add_argument("--path", help="Worktree path (default: current path)")
     fc.add_argument(
         "--force", action="store_true", help="Close issue even without a detected merged PR"
+    )
+    fc.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the generated closeout report JSON after closing",
     )
     fc.set_defaults(func=cmd_finish_close)
 
