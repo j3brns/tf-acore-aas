@@ -25,7 +25,7 @@
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
-.PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
+.PHONY: worktree wt-go issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
 .PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
@@ -717,6 +717,7 @@ worktree-next-issue:
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(ZELLIJ),--zellij,) \
 		$(if $(PRINT_ONLY),--print-only,)
 
 ## worktree-create-issue: Create a worktree for a specific issue number
@@ -735,6 +736,7 @@ worktree-create-issue:
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(ZELLIJ),--zellij,) \
 		$(if $(PRINT_ONLY),--print-only,) \
 		$(if $(SCOPE),--scope "$(SCOPE)",) \
 		$(if $(SLUG),--slug "$(SLUG)",) \
@@ -753,7 +755,14 @@ worktree-resume-issue:
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(ZELLIJ),--zellij,) \
 		$(if $(PRINT_ONLY),--print-only,)
+
+## wt-go: Create the next runnable issue worktree and launch it in zellij
+## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task]
+## Behavior: creates a named zellij session with agent + shell panes, or adds a new tab to that session if it already exists.
+wt-go:
+	$(MAKE) --no-print-directory worktree-next-issue OPEN_SHELL=1 HANDOFF=execute-now ZELLIJ=1 $(if $(QUEUE_MODE),QUEUE_MODE=$(QUEUE_MODE),)
 
 ## preflight-session: Run issue-worktree preflight checks for current worktree
 preflight-session:
