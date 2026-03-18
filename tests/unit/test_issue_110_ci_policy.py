@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 CI_FILE = Path(__file__).resolve().parents[2] / ".gitlab-ci.yml"
+TASKS_FILE = Path(__file__).resolve().parents[2] / "docs" / "TASKS.md"
 
 
 def _job_block(name: str, content: str) -> str:
@@ -35,6 +36,18 @@ def test_validate_pipeline_policy_runs_ci_contract_and_protection_script_tests()
     validate = _job_block("validate-pipeline-policy", content)
     assert "tests/unit/test_issue_110_ci_policy.py" in validate
     assert "tests/unit/test_check_gitlab_protected_environment.py" in validate
+
+
+def test_task_044_plan_stage_claim_matches_artifact_only_pipeline() -> None:
+    tasks = TASKS_FILE.read_text(encoding="utf-8")
+    content = CI_FILE.read_text(encoding="utf-8")
+    plan = _job_block("plan-infra", content)
+
+    assert "plan: cdk diff stored as artifacts for review" in tasks
+    assert "plan: cdk diff posted as MR comment" not in tasks
+    assert "dev-diff.txt" in plan
+    assert "staging-diff.txt" in plan
+    assert "prod-diff.txt" in plan
 
 
 def test_staging_and_prod_gates_have_manual_approvals_and_rollout_windows() -> None:
