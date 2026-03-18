@@ -33,6 +33,7 @@ MAKEFILE = ROOT / "Makefile"
 DEV_BOOTSTRAP_PY = ROOT / "scripts" / "dev-bootstrap.py"
 LOCAL_SETUP_MD = ROOT / "docs" / "development" / "LOCAL-SETUP.md"
 AGENT_GUIDE_MD = ROOT / "docs" / "development" / "AGENT-DEVELOPER-GUIDE.md"
+CI_FILE = ROOT / ".gitlab-ci.yml"
 RUNBOOK_008_MD = ROOT / "docs" / "operations" / "RUNBOOK-008-developer-onboarding.md"
 STAMP_FILE = ROOT / "docs" / "DOCS_SYNC.json"
 
@@ -181,6 +182,38 @@ def detect_local_fixture_name_drift() -> list[str]:
     return findings
 
 
+def detect_branch_deploy_flow_drift() -> list[str]:
+    """
+    Detect drift between the agent guide's deployment story and the real GitLab pipeline.
+    """
+    findings: list[str] = []
+    guide_text = AGENT_GUIDE_MD.read_text(encoding="utf-8")
+    ci_text = CI_FILE.read_text(encoding="utf-8")
+
+    guide_describes_old_flow = (
+        any(
+            phrase in guide_text
+            for phrase in (
+                "push-dev",
+                "feature branch triggers",
+            )
+        )
+        and "promote-staging" in guide_text
+    )
+    ci_is_main_only_for_dev = (
+        "deploy-dev:" in ci_text and 'if: $CI_COMMIT_BRANCH == "main"' in ci_text
+    )
+
+    if guide_describes_old_flow and ci_is_main_only_for_dev:
+        findings.append(
+            "docs/development/AGENT-DEVELOPER-GUIDE.md still describes a "
+            "feature-branch push-dev / promote-staging flow, but .gitlab-ci.yml "
+            "only deploys dev on main and keeps staging/prod gated."
+        )
+
+    return findings
+
+
 def load_stamp() -> dict[str, Any]:
     if not STAMP_FILE.exists():
         return {}
@@ -248,6 +281,7 @@ def cmd_check(json_output: bool = False) -> int:
     warnings.extend(detect_ops_cli_stub_drift())
     warnings.extend(detect_local_env_test_key_drift())
     warnings.extend(detect_local_fixture_name_drift())
+    warnings.extend(detect_branch_deploy_flow_drift())
 
     result = {
         "ok": len(errors) == 0,

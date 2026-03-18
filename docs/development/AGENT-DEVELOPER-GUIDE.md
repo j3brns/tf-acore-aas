@@ -231,9 +231,11 @@ returns 403 before the tool Lambda is invoked. The agent sees a tool error, not 
 
 ## Pipeline Promotion
 
-Pushing to a feature branch triggers: validate → test → push-dev (auto).
-Merge to main triggers: promote-staging (manual gate, requires evaluation score).
-Staging → prod: two-reviewer approval in GitLab.
+Pushing any branch triggers validate and test.
+Merge requests also run the plan stage.
+Merge to `main` triggers `deploy-dev` automatically.
+`deploy-staging` is a manual gate on `main` and keeps the evaluation score check.
+`deploy-prod` is a manual gate on `main` and requires two-reviewer approval in GitLab.
 
 Production deploys fail closed unless the GitLab project protects the `prod`
 environment and requires at least two approvals. CI verifies that state by

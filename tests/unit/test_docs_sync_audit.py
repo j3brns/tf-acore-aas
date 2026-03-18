@@ -27,6 +27,40 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
+def test_detect_branch_deploy_flow_drift_reports_old_feature_branch_story(
+    monkeypatch, tmp_path: Path
+) -> None:
+    ci_file = _write(
+        tmp_path / ".gitlab-ci.yml",
+        """
+deploy-dev:
+  stage: deploy-dev
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+""".lstrip(),
+    )
+    agent_guide = _write(
+        tmp_path / "docs" / "development" / "AGENT-DEVELOPER-GUIDE.md",
+        """
+Pipeline Promotion
+
+Pushing to a feature branch triggers: validate → test → push-dev (auto).
+Merge to main triggers: promote-staging (manual gate, requires evaluation score).
+""".lstrip(),
+    )
+
+    monkeypatch.setattr(docs_sync_audit, "CI_FILE", ci_file)
+    monkeypatch.setattr(docs_sync_audit, "AGENT_GUIDE_MD", agent_guide)
+
+    warnings = docs_sync_audit.detect_branch_deploy_flow_drift()
+
+    assert warnings == [
+        "docs/development/AGENT-DEVELOPER-GUIDE.md still describes a "
+        "feature-branch push-dev / promote-staging flow, but .gitlab-ci.yml "
+        "only deploys dev on main and keeps staging/prod gated."
+    ]
+
+
 def test_detect_local_env_test_key_drift_reports_makefile_and_docs_mismatch(
     monkeypatch, tmp_path: Path
 ) -> None:
