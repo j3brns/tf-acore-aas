@@ -24,6 +24,10 @@ handler = "handler:invoke"
 invocation_mode = "sync"
 estimated_duration_seconds = 5
 
+[tool.agentcore.evaluations]
+threshold = 0.8
+evaluation_region = "eu-central-1"
+
 [tool.agentcore.llm]
 model_id = "anthropic.claude-sonnet-4-6"
 max_tokens = 1024

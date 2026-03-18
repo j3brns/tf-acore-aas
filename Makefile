@@ -398,6 +398,13 @@ failover-lock-release:
 # AGENT DEVELOPER COMMANDS
 # =============================================================================
 
+## agent-evaluate: Run evaluation gate against golden test cases
+## Usage: make agent-evaluate AGENT=my-agent [ENV=staging]
+agent-evaluate:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agent-evaluate AGENT=my-agent" && exit 1)
+	@echo "==> Running evaluation gate for $(AGENT)"
+	uv run python scripts/evaluate_agent.py $(AGENT) --env $(ENV)
+
 ## agent-push: Package and deploy an agent
 ## Usage: make agent-push AGENT=my-agent [ENV=dev]
 agent-push:
