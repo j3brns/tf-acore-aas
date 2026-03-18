@@ -591,6 +591,102 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
     assert "Attach:  zellij attach worktrees" in out
 
 
+def test_cmd_wt_batch_hello_world_e2e_two_issues(monkeypatch, capsys):
+    root = Path("/tmp/repo")
+    repo = "owner/repo"
+    issue_41 = _issue(
+        number=41,
+        task_id="TASK-041",
+        seq=410,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    issue_42 = _issue(
+        number=42,
+        task_id="TASK-042",
+        seq=420,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    created: list[int] = []
+    prepared: list[Path] = []
+    launched: dict[str, object] = {}
+    wt_paths: dict[int, Path] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(worktree_issues, "zellij_available", lambda: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_41, issue_42],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[
+                worktree_issues.QueueItem(issue=issue_41, runnable=True),
+                worktree_issues.QueueItem(issue=issue_42, runnable=True),
+            ],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: (
+            created.append(kwargs["issue"].number)
+            or wt_paths.setdefault(
+                kwargs["issue"].number, Path(f"/tmp/worktrees/wt{kwargs['issue'].number}")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "prepare_gitnexus_for_worktree",
+        lambda path: prepared.append(path),
+    )
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "launch_zellij_batch_session",
+        lambda **kwargs: launched.update(kwargs),
+    )
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=2,
+            agents="gemini,codex",
+            agent_mode="yolo",
+            base_dir=None,
+            dry_run=False,
+        )
+    )
+
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert created == [41, 42]
+    assert prepared == [wt_paths[41], wt_paths[42]]
+    assert launched["session_name"] == "worktrees"
+    assert launched["attach"] is True
+    assert launched["announce_tabs"] is False
+    assert [tab for tab, _, _ in launched["launches"]] == ["wt41", "wt42"]
+    assert "Batch session: 2 issue(s)" in out
+    assert "[1/2] #41 -> starting" in out
+    assert "[1/2] #41 -> ready" in out
+    assert "[2/2] #42 -> starting" in out
+    assert "[2/2] #42 -> ready" in out
+
+
 def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):
     path = Path("/tmp/worktrees/wt33")
     captured: dict[str, object] = {}
