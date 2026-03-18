@@ -1004,10 +1004,6 @@ def gitnexus_cli_path() -> Path | None:
         if candidate.exists():
             return candidate
 
-    sibling_cli = repo_root().parent / "gitnexus" / "gitnexus" / "dist" / "cli" / "index.js"
-    if sibling_cli.exists():
-        return sibling_cli
-
     return None
 
 
