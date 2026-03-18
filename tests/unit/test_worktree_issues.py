@@ -758,14 +758,20 @@ def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path)
 
 def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_path):
     calls: list[list[str]] = []
+    subprocess_calls: list[list[str]] = []
 
     monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
     monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def _execvp(file, args):
         calls.append([file, *args[1:]])
         raise SystemExit(0)
 
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
     monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
 
     with pytest.raises(SystemExit):
@@ -777,6 +783,7 @@ def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_pat
         )
 
     assert calls
+    assert subprocess_calls == [["stty", "-ixon"]]
     assert calls[0][0] == "/home/julesb/bin/zellij"
     assert calls[0][1:] == ["attach", "wt123"]
 
@@ -798,14 +805,20 @@ def test_zellij_session_exists_handles_ansi_colored_output(monkeypatch):
 
 def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
     calls: list[list[str]] = []
+    subprocess_calls: list[list[str]] = []
 
     monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
     monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def _execvp(file, args):
         calls.append([file, *args[1:]])
         raise SystemExit(0)
 
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
     monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
 
     with pytest.raises(SystemExit):
@@ -816,6 +829,7 @@ def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp
         )
 
     assert calls
+    assert subprocess_calls == [["stty", "-ixon"]]
     assert calls[0][0] == "/home/julesb/bin/zellij"
     assert calls[0][1] == "--new-session-with-layout"
     assert Path(calls[0][2]).exists()

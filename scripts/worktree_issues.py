@@ -1411,6 +1411,17 @@ def zellij_session_exists(name: str) -> bool:
     return False
 
 
+def disable_terminal_flow_control() -> None:
+    # Ctrl+S is used by our zellij config for scroll mode, so disable XON/XOFF
+    # before handing the terminal over to zellij.
+    subprocess.run(
+        ["stty", "-ixon"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def launch_zellij_session(
     *,
     path: Path,
@@ -1424,6 +1435,7 @@ def launch_zellij_session(
     name = session_name or tmux_session_name_for_worktree(path)
     path_str = str(path)
     venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
+    disable_terminal_flow_control()
 
     if zellij_session_exists(name):
         print(f"zellij session '{name}' already exists — attaching.")
@@ -1502,6 +1514,7 @@ def launch_zellij_batch_session(
     import tempfile
 
     zj = zellij_bin()
+    disable_terminal_flow_control()
     if zellij_session_exists(session_name):
         print(f"zellij session '{session_name}' already exists — attaching.")
         if attach:
