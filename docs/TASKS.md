@@ -367,7 +367,7 @@ No AWS console access permitted during runbook testing.
               ADRs: ADR-011 | Tests: keepalive ping verified against mock Runtime
               Done: 2026-03-08, commit fcf72b2
 
-[ ] TASK-039  Write .gitlab-ci-agent.yml
+[x] TASK-039  Write .gitlab-ci-agent.yml
               Triggered on changes to agents/**
               Stages: validate → test → push-dev → promote-staging → promote-prod
               validate: ruff, pyproject.toml schema check, detect-secrets
@@ -376,6 +376,7 @@ No AWS console access permitted during runbook testing.
               promote-staging: manual gate, runs AgentCore Evaluations gate
               promote-prod: two-reviewer approval
               ADRs: ADR-005 | Tests: pipeline lint, dry run
+              Done: 2026-03-18
 
 **Phase 5 Gate**: make agent-push AGENT=echo-agent ENV=dev completes <30s warm path.
 All three invocation modes work end-to-end in dev AWS environment.
