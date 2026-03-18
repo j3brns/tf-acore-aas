@@ -13,6 +13,8 @@ This intentionally keeps Makefile targets thin; the policy/selection logic lives
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -995,13 +997,32 @@ def gitnexus_npx_cache_corrupted(output: str) -> bool:
     return "enotempty" in lowered and "/_npx/" in lowered
 
 
+def gitnexus_cli_path() -> Path | None:
+    override = os.environ.get("WORKTREE_GITNEXUS_CLI")
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.exists():
+            return candidate
+
+    sibling_cli = repo_root().parent / "gitnexus" / "gitnexus" / "dist" / "cli" / "index.js"
+    if sibling_cli.exists():
+        return sibling_cli
+
+    return None
+
+
 def run_gitnexus_command(
     path: Path,
     args: list[str],
     *,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = ["npx", "gitnexus", *args]
+    cli_path = gitnexus_cli_path()
+    node = shutil_which("node")
+    if cli_path is not None and node is not None:
+        cmd = [node, str(cli_path), *args]
+    else:
+        cmd = ["npx", "gitnexus", *args]
     attempts = 0
     while True:
         attempts += 1
@@ -1404,9 +1425,12 @@ def launch_zellij_session(
     venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
 
     if zellij_session_exists(name):
-        print(f"zellij session '{name}' already exists — adding tab(s).")
-    else:
-        print(f"zellij session '{name}' launching in {path}")
+        print(f"zellij session '{name}' already exists — attaching.")
+        if attach:
+            os.execvp(zj, [zj, "attach", name])
+        return
+
+    print(f"zellij session '{name}' launching in {path}")
 
     layout_content = f"""\
 layout {{
@@ -1436,7 +1460,7 @@ layout {{
     print("  List all:   zellij ls")
 
     if attach:
-        os.execvp(zj, [zj, "--session", name, "--layout", layout_file.name])
+        os.execvp(zj, [zj, "--new-session-with-layout", layout_file.name, "--session", name])
 
 
 def _zellij_worktree_pane_layout(path: Path, agent_command: str, *, focus: bool) -> str:
@@ -1472,14 +1496,18 @@ def launch_zellij_batch_session(
     session_name: str,
     launches: list[tuple[str, Path, str]],
     attach: bool = True,
+    announce_tabs: bool = True,
 ) -> None:
     import tempfile
 
     zj = zellij_bin()
     if zellij_session_exists(session_name):
-        print(f"zellij session '{session_name}' already exists — adding tab(s).")
-    else:
-        print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
+        print(f"zellij session '{session_name}' already exists — attaching.")
+        if attach:
+            os.execvp(zj, [zj, "attach", session_name])
+        return
+
+    print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
 
     tabs: list[str] = []
     for idx, (tab_name, path, agent_command) in enumerate(launches):
@@ -1497,13 +1525,17 @@ def launch_zellij_batch_session(
     layout_file.write(layout_content)
     layout_file.close()
 
-    for tab_name, path, _ in launches:
-        print(f"  {tab_name}: {path}")
+    if announce_tabs:
+        for tab_name, path, _ in launches:
+            print(f"  {tab_name}: {path}")
     print(f"  Reattach:   zellij a -s {session_name}")
     print("  List all:   zellij ls")
 
     if attach:
-        os.execvp(zj, [zj, "--session", session_name, "--layout", layout_file.name])
+        os.execvp(
+            zj,
+            [zj, "--new-session-with-layout", layout_file.name, "--session", session_name],
+        )
 
 
 def resolve_mux_flag(args: argparse.Namespace) -> str | None:
@@ -2149,53 +2181,54 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
     if len(picked) < count:
         print(f"WARNING: only {len(picked)} runnable issue(s) available (requested {count})")
 
-    launched: list[tuple[str, str, str, Path]] = []
     batch_launches: list[tuple[str, Path, str]] = []
+    total = len(picked)
 
-    for item in picked:
+    print(f"Batch session: {total} issue(s)")
+    for idx, item in enumerate(picked, start=1):
         agent = random.choice(agents)
         issue = item.issue
 
-        wt_path = create_worktree_for_issue(
-            root=root,
-            repo=repo,
-            issue=issue,
-            base_dir=base_dir,
-            base_ref=None,
-            scope=None,
-            slug=None,
-            folder_name=None,
-            auto_claim=True,
-            preflight=False,
-            dry_run=args.dry_run,
-        )
+        print(f"[{idx}/{total}] #{issue.number} -> starting ({agent})")
+        with contextlib.redirect_stdout(io.StringIO()):
+            wt_path = create_worktree_for_issue(
+                root=root,
+                repo=repo,
+                issue=issue,
+                base_dir=base_dir,
+                base_ref=None,
+                scope=None,
+                slug=None,
+                folder_name=None,
+                auto_claim=True,
+                preflight=False,
+                dry_run=args.dry_run,
+            )
 
         if args.dry_run:
-            launched.append(("(dry-run)", agent, f"#{issue.number}", wt_path))
+            print(f"[{idx}/{total}] #{issue.number} -> dry-run {wt_path}")
             continue
 
+        with contextlib.redirect_stdout(io.StringIO()):
+            prepare_gitnexus_for_worktree(wt_path)
         prompt = build_agent_prompt_for_worktree(wt_path, root, repo)
         command = build_agent_command(agent, mode, prompt)
         tab_name = f"wt{issue.number}"
         batch_launches.append((tab_name, wt_path, command))
-        launched.append((tab_name, agent, f"#{issue.number}", wt_path))
-
-    print()
-    print(f"{'TAB':<16} {'AGENT':<10} {'ISSUE':<10} PATH")
-    print("-" * 70)
-    for tab, agent, ref, path in launched:
-        print(f"{tab:<16} {agent:<10} {ref:<10} {path}")
+        print(f"[{idx}/{total}] #{issue.number} -> ready {wt_path}")
 
     if not args.dry_run:
         print()
-        print("Attach to session:")
-        print("  zellij a -s worktrees")
+        print("Attach:  zellij a -s worktrees")
+        print("List:    zellij ls")
+        print("Session summary:")
+        print(f"  created {len(batch_launches)} worktree tab(s)")
         print()
-        print("List all:  zellij ls")
         launch_zellij_batch_session(
             session_name="worktrees",
             launches=batch_launches,
             attach=True,
+            announce_tabs=False,
         )
 
     return 0
