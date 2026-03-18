@@ -555,6 +555,64 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
     assert "Attach to session:" in out
 
 
+def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):
+    path = Path("/tmp/worktrees/wt33")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _execvp(bin_path, args):
+        captured["bin_path"] = bin_path
+        captured["args"] = args
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    worktree_issues.launch_zellij_session(
+        path=path,
+        agent_command="codex --yolo",
+        attach=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "already exists — adding tab(s)." in out
+    assert captured["bin_path"] == "/home/julesb/bin/zellij"
+    assert captured["args"][:4] == ["/home/julesb/bin/zellij", "--session", "wt33", "--layout"]
+
+
+def test_launch_zellij_batch_session_adds_tabs_to_existing_session(monkeypatch, capsys):
+    launches = [
+        ("wt33", Path("/tmp/worktrees/wt33"), "codex --yolo"),
+        ("wt35", Path("/tmp/worktrees/wt35"), "gemini --normal"),
+    ]
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _execvp(bin_path, args):
+        captured["bin_path"] = bin_path
+        captured["args"] = args
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    worktree_issues.launch_zellij_batch_session(
+        session_name="worktrees",
+        launches=launches,
+        attach=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "already exists — adding tab(s)." in out
+    assert captured["bin_path"] == "/home/julesb/bin/zellij"
+    assert captured["args"][:4] == [
+        "/home/julesb/bin/zellij",
+        "--session",
+        "worktrees",
+        "--layout",
+    ]
+
+
 def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys):
     root = Path("/tmp/repo")
     target = worktree_issues.WorktreeInfo(

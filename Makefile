@@ -25,8 +25,7 @@
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
-.PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
-.PHONY: wt-go wt-batch
+.PHONY: worktree wt-go wt-batch issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
 .PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
