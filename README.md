@@ -257,7 +257,9 @@ A single-layer failure is not sufficient to compromise tenant data boundaries.
 
 ```text
 tf-acore-aas/
-├── CLAUDE.md                  AI coding assistant rules
+├── AGENTS.md                 Pointer to CLAUDE.md
+├── CLAUDE.md                 AI coding assistant rules
+├── GEMINI.md                 Pointer to CLAUDE.md
 ├── Makefile                   Dev, test, ops, and deploy commands
 ├── .env.example               Required environment variables
 ├── .githooks/                 Repository-local Git hooks
