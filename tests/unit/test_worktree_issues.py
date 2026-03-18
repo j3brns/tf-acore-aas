@@ -945,7 +945,7 @@ def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path)
     assert "--new-session-with-layout" in calls[0][2]
     assert "--session wt123" in calls[0][2]
     layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
-    assert "args \"-lc\"" not in layout
+    assert 'args "-lc"' not in layout
     assert f'pane command="{asset_dir / "agent.sh"}"' in layout
     assert f'pane command="{asset_dir / "shell.sh"}"' in layout
     assert (asset_dir / "agent.sh").read_text(encoding="utf-8").endswith("\n")
@@ -1039,7 +1039,7 @@ def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp
     assert "--new-session-with-layout" in calls[0][2]
     assert "--session worktrees" in calls[0][2]
     layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
-    assert "args \"-lc\"" not in layout
+    assert 'args "-lc"' not in layout
     assert f'pane command="{asset_dir / "wt123-agent.sh"}"' in layout
     assert f'pane command="{asset_dir / "wt123-shell.sh"}"' in layout
 

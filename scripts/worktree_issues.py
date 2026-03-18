@@ -1499,11 +1499,11 @@ def _zellij_worktree_pane_layout(
     focus_str = "true" if focus else "false"
     return (
         '      pane split_direction="vertical" {\n'
-        f'        pane command={json.dumps(str(agent_script))} {{\n'
+        f"        pane command={json.dumps(str(agent_script))} {{\n"
         f'          name "agent"\n'
         f"          focus {focus_str}\n"
         "        }\n"
-        f'        pane command={json.dumps(str(shell_script))} {{\n'
+        f"        pane command={json.dumps(str(shell_script))} {{\n"
         f'          name "shell"\n'
         "        }\n"
         "      }"
@@ -1569,7 +1569,7 @@ def _write_zellij_worktree_wrapper_script(
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         f"cd {shlex.quote(path_str)}",
-        'if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi',
+        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi",
     ]
     if shell:
         body.append("exec bash -l")
