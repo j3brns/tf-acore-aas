@@ -267,7 +267,7 @@ dev:
 	@echo "==> Starting local development environment"
 	docker compose up -d
 	@echo "==> Waiting for LocalStack to be ready..."
-	@until aws --endpoint-url=http://localhost:4566 s3 ls >/dev/null 2>&1; do sleep 2; done
+	@until curl -sf http://localhost:4566/_localstack/health >/dev/null 2>&1; do sleep 2; done
 	uv run python scripts/dev-bootstrap.py
 	@echo ""
 	@echo "==> Local environment ready"
