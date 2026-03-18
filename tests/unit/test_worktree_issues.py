@@ -5,6 +5,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -912,9 +913,16 @@ def test_cmd_finish_close_json_prints_closeout_report(monkeypatch, capsys, tmp_p
 
 def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
     calls: list[list[str]] = []
+    asset_dir = tmp_path / "session-assets"
 
     monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
     monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _mkdtemp(*, prefix):
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        return str(asset_dir)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
 
     def _execvp(file, args):
         calls.append([file, *args[1:]])
@@ -933,9 +941,15 @@ def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path)
     assert calls
     assert calls[0][0] == "bash"
     assert calls[0][1] == "-lc"
-    assert "rm -f " in calls[0][2]
+    assert "rm -rf " in calls[0][2]
     assert "--new-session-with-layout" in calls[0][2]
     assert "--session wt123" in calls[0][2]
+    layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
+    assert "args \"-lc\"" not in layout
+    assert f'pane command="{asset_dir / "agent.sh"}"' in layout
+    assert f'pane command="{asset_dir / "shell.sh"}"' in layout
+    assert (asset_dir / "agent.sh").read_text(encoding="utf-8").endswith("\n")
+    assert (asset_dir / "shell.sh").read_text(encoding="utf-8").endswith("\n")
 
 
 def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_path):
@@ -988,9 +1002,16 @@ def test_zellij_session_exists_handles_ansi_colored_output(monkeypatch):
 def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
     calls: list[list[str]] = []
     subprocess_calls: list[list[str]] = []
+    asset_dir = tmp_path / "batch-assets"
 
     monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
     monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _mkdtemp(*, prefix):
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        return str(asset_dir)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
 
     def _run(cmd, **kwargs):
         subprocess_calls.append(list(cmd))
@@ -1014,9 +1035,13 @@ def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp
     assert subprocess_calls == [["stty", "-ixon"]]
     assert calls[0][0] == "bash"
     assert calls[0][1] == "-lc"
-    assert "rm -f " in calls[0][2]
+    assert "rm -rf " in calls[0][2]
     assert "--new-session-with-layout" in calls[0][2]
     assert "--session worktrees" in calls[0][2]
+    layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
+    assert "args \"-lc\"" not in layout
+    assert f'pane command="{asset_dir / "wt123-agent.sh"}"' in layout
+    assert f'pane command="{asset_dir / "wt123-shell.sh"}"' in layout
 
 
 def test_launch_zellij_batch_session_adds_to_existing_session(monkeypatch, tmp_path):

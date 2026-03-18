@@ -1436,7 +1436,6 @@ def launch_zellij_session(
     zj = zellij_bin()
     name = session_name or tmux_session_name_for_worktree(path)
     path_str = str(path)
-    venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
     disable_terminal_flow_control()
 
     if zellij_session_exists(name):
@@ -1447,27 +1446,31 @@ def launch_zellij_session(
 
     print(f"zellij session '{name}' launching in {path}")
 
-    layout_content = f"""\
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"wt-layout-{name}-"))
+    layout_file = temp_dir / "layout.kdl"
+    agent_script = _write_zellij_worktree_wrapper_script(
+        temp_dir / "agent.sh", path_str=path_str, command=agent_command
+    )
+    shell_script = _write_zellij_worktree_wrapper_script(
+        temp_dir / "shell.sh", path_str=path_str, shell=True
+    )
+    layout_file.write_text(
+        f"""\
 layout {{
     cwd "{path_str}"
     pane split_direction="vertical" {{
-        pane command="bash" {{
-            args "-lc" "{venv_preamble} && {agent_command}"
+        pane command={json.dumps(str(agent_script))} {{
             name "agent"
             focus true
         }}
-        pane command="bash" {{
-            args "-lc" "{venv_preamble} && exec bash -l"
+        pane command={json.dumps(str(shell_script))} {{
             name "shell"
         }}
     }}
 }}
-"""
-    layout_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".kdl", prefix=f"wt-layout-{name}-", delete=False
+""",
+        encoding="utf-8",
     )
-    layout_file.write(layout_content)
-    layout_file.close()
 
     print("  Left pane:  agent running")
     print("  Right pane: shell ready")
@@ -1477,33 +1480,30 @@ layout {{
     if attach:
         _exec_zellij_with_layout_cleanup(
             zj,
-            ["--new-session-with-layout", layout_file.name, "--session", name],
-            layout_file.name,
+            ["--new-session-with-layout", str(layout_file), "--session", name],
+            str(temp_dir),
         )
+    else:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _zellij_worktree_pane_layout(path: Path, agent_command: str, *, focus: bool) -> str:
-    path_str = str(path)
-    agent_shell = (
-        f"cd {shlex.quote(path_str)} && "
-        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
-        f"{agent_command}"
+def _zellij_worktree_pane_layout(
+    temp_dir: Path, tab_name: str, path: Path, agent_command: str, *, focus: bool
+) -> str:
+    agent_script = _write_zellij_worktree_wrapper_script(
+        temp_dir / f"{tab_name}-agent.sh", path_str=str(path), command=agent_command
     )
-    shell_cmd = (
-        f"cd {shlex.quote(path_str)} && "
-        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
-        "exec bash -l"
+    shell_script = _write_zellij_worktree_wrapper_script(
+        temp_dir / f"{tab_name}-shell.sh", path_str=str(path), shell=True
     )
     focus_str = "true" if focus else "false"
     return (
         '      pane split_direction="vertical" {\n'
-        f'        pane command="bash" {{\n'
-        f'          args "-lc" {json.dumps(agent_shell)}\n'
+        f'        pane command={json.dumps(str(agent_script))} {{\n'
         f'          name "agent"\n'
         f"          focus {focus_str}\n"
         "        }\n"
-        f'        pane command="bash" {{\n'
-        f'          args "-lc" {json.dumps(shell_cmd)}\n'
+        f'        pane command={json.dumps(str(shell_script))} {{\n'
         f'          name "shell"\n'
         "        }\n"
         "      }"
@@ -1529,21 +1529,20 @@ def launch_zellij_batch_session(
 
     print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
 
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"wt-batch-{session_name}-"))
     tabs: list[str] = []
     for idx, (tab_name, path, agent_command) in enumerate(launches):
-        pane = _zellij_worktree_pane_layout(path, agent_command, focus=(idx == 0))
+        pane = _zellij_worktree_pane_layout(
+            temp_dir, tab_name, path, agent_command, focus=(idx == 0)
+        )
         tabs.append(
             f"    tab name={json.dumps(tab_name)} focus={'true' if idx == 0 else 'false'} {{\n"
             f"{pane}\n"
             "    }"
         )
 
-    layout_content = "layout {\n" + "\n".join(tabs) + "\n}\n"
-    layout_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".kdl", prefix=f"wt-batch-{session_name}-", delete=False
-    )
-    layout_file.write(layout_content)
-    layout_file.close()
+    layout_file = temp_dir / "layout.kdl"
+    layout_file.write_text("layout {\n" + "\n".join(tabs) + "\n}\n", encoding="utf-8")
 
     if announce_tabs:
         for tab_name, path, _ in launches:
@@ -1554,15 +1553,37 @@ def launch_zellij_batch_session(
     if attach:
         _exec_zellij_with_layout_cleanup(
             zj,
-            ["--new-session-with-layout", layout_file.name, "--session", session_name],
-            layout_file.name,
+            ["--new-session-with-layout", str(layout_file), "--session", session_name],
+            str(temp_dir),
         )
+    else:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _exec_zellij_with_layout_cleanup(zj: str, args: list[str], layout_path: str) -> None:
-    layout_q = shlex.quote(layout_path)
+def _write_zellij_worktree_wrapper_script(
+    path: Path, *, path_str: str, command: str | None = None, shell: bool = False
+) -> Path:
+    if command is None and not shell:
+        raise ValueError("wrapper script requires command or shell")
+    body: list[str] = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        f"cd {shlex.quote(path_str)}",
+        'if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi',
+    ]
+    if shell:
+        body.append("exec bash -l")
+    else:
+        body.append(f"exec bash -lc {shlex.quote(command or '')}")
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _exec_zellij_with_layout_cleanup(zj: str, args: list[str], temp_dir: str) -> None:
+    temp_dir_q = shlex.quote(temp_dir)
     args_q = " ".join(shlex.quote(arg) for arg in [zj, *args])
-    cleanup_cmd = f"trap 'rm -f {layout_q}' EXIT; exec {args_q}"
+    cleanup_cmd = f"trap 'rm -rf {temp_dir_q}' EXIT; exec {args_q}"
     os.execvp("bash", ["bash", "-lc", cleanup_cmd])
 
 
