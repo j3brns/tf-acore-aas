@@ -23,8 +23,8 @@ make test-agent AGENT=my-agent               # Run unit + golden tests
 make dev                                    # Start local environment (LocalStack + mocks)
 make agent-invoke AGENT=my-agent ENV=local  # Invoke via local bridge (canned mock response)
 
-# 5. Deploy to AWS dev (real compute, real compute)
-make agent-push AGENT=my-agent ENV=dev      # Package, deploy to Runtime, and register
+# 5. Validate locally, then push to AWS dev (real compute)
+make agent-push AGENT=my-agent ENV=dev      # Package, run agent tests, deploy to Runtime, and register
 make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
 ```
 
