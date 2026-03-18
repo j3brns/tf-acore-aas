@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-task.py — Task lifecycle management for platform AaaS.
+task.py — Deprecated snapshot task lifecycle management for platform AaaS.
 
 Reads docs/TASKS.md, manages git worktrees, generates structured Claude Code
 prompts, and launches the agent on the task.
@@ -14,7 +14,7 @@ Commands:
     resume [TASK-NNN] Run install-dev-tools.sh, resume existing worktree,
                       relaunch Claude Code.
                       Omit TASK-NNN to auto-select the first [~] task with a worktree.
-    finish TASK-NNN   Print finish checklist and next git/gh commands
+    finish TASK-NNN   Print finish checklist and next git/gh commands (deprecated flow)
     prompt TASK-NNN   Print the agent prompt without creating a worktree
 
 Usage (via make):

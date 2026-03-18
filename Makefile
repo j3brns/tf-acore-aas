@@ -639,7 +639,7 @@ plan-dev:
 	uv run python scripts/plan_dev.py "$(TASK)"
 
 # =============================================================================
-# TASK LIFECYCLE (worktree-based agent sessions)
+# DEPRECATED TASK SNAPSHOT FLOW (use only when explicitly requested)
 # =============================================================================
 
 ## task-next: Print the next not-started task from docs/TASKS.md
@@ -675,7 +675,13 @@ task-prompt:
 	uv run python scripts/task.py prompt $(TASK)
 
 # =============================================================================
-# ISSUE-DRIVEN WORKTREE FLOW (GitHub Issues SoT)
+# ISSUE-DRIVEN WORKTREE FLOW (canonical GitHub Issues path)
+# Start here:
+#   1) issue-queue
+#   2) worktree / worktree-next-issue / worktree-create-issue / worktree-resume-issue
+#   3) preflight-session + pre-validate-session
+#   4) worktree-push-issue
+#   5) finish-worktree-summary + finish-worktree-close
 # =============================================================================
 
 ## issue-queue: Show issue queue ordered by Seq (with dependency blocking)
