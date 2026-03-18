@@ -25,7 +25,7 @@
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
-.PHONY: worktree wt-go issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
+.PHONY: worktree wt-go wt-batch issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
 .PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
@@ -703,6 +703,18 @@ worktree:
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",)
 
+## wt-go: Start the next runnable issue worktree in a visible zellij session
+## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task] [AGENT=gemini] [AGENT_MODE=yolo]
+wt-go:
+	$(MAKE) --no-print-directory worktree-next-issue \
+		OPEN_SHELL=1 \
+		HANDOFF=execute-now \
+		ZELLIJ=1 \
+		$(if $(QUEUE_MODE),QUEUE_MODE=$(QUEUE_MODE),) \
+		$(if $(STREAM),STREAM=$(STREAM),) \
+		AGENT=$(if $(AGENT),$(AGENT),gemini) \
+		AGENT_MODE=$(if $(AGENT_MODE),$(AGENT_MODE),yolo)
+
 ## worktree-next-issue: Create a worktree for the next runnable issue in the queue
 ## Usage: make worktree-next-issue [QUEUE_MODE=auto|ready|open-task] [DRY_RUN=1] [OPEN_SHELL=1]
 worktree-next-issue:
@@ -718,7 +730,20 @@ worktree-next-issue:
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
 		$(if $(ZELLIJ),--zellij,) \
+		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,)
+
+## wt-batch: Create multiple runnable issue worktrees and open them in one zellij session
+## Usage: make wt-batch [COUNT=3] [AGENTS=gemini,codex] [AGENT_MODE=yolo]
+wt-batch:
+	uv run python scripts/worktree_issues.py wt-batch \
+		--count $(if $(COUNT),$(COUNT),3) \
+		--agents "$(if $(AGENTS),$(AGENTS),gemini,codex)" \
+		--agent-mode "$(if $(AGENT_MODE),$(AGENT_MODE),yolo)" \
+		$(if $(QUEUE_MODE),--mode "$(QUEUE_MODE)",--mode auto) \
+		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(BASE_DIR),--base-dir "$(BASE_DIR)",) \
+		$(if $(DRY_RUN),--dry-run,)
 
 ## worktree-create-issue: Create a worktree for a specific issue number
 ## Usage: make worktree-create-issue ISSUE=23 [DRY_RUN=1] [OPEN_SHELL=1]
@@ -737,6 +762,7 @@ worktree-create-issue:
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
 		$(if $(ZELLIJ),--zellij,) \
+		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,) \
 		$(if $(SCOPE),--scope "$(SCOPE)",) \
 		$(if $(SLUG),--slug "$(SLUG)",) \
@@ -756,13 +782,8 @@ worktree-resume-issue:
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
 		$(if $(ZELLIJ),--zellij,) \
+		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,)
-
-## wt-go: Create the next runnable issue worktree and launch it in zellij
-## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task]
-## Behavior: creates a named zellij session with agent + shell panes, or adds a new tab to that session if it already exists.
-wt-go:
-	$(MAKE) --no-print-directory worktree-next-issue OPEN_SHELL=1 HANDOFF=execute-now ZELLIJ=1 $(if $(QUEUE_MODE),QUEUE_MODE=$(QUEUE_MODE),)
 
 ## preflight-session: Run issue-worktree preflight checks for current worktree
 preflight-session:

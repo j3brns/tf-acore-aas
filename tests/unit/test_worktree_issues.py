@@ -699,3 +699,113 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     assert f"Removed worktree {target.path}" in out
     assert "Deleted branch wt/task/153-sample" in out
     assert "Pruned stale worktree refs" in out
+
+
+def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_session(
+            path=tmp_path,
+            agent_command="echo agent",
+            session_name="wt123",
+            attach=True,
+        )
+
+    assert calls
+    assert calls[0][0] == "/home/julesb/bin/zellij"
+    assert calls[0][1] == "--session"
+    assert calls[0][2] == "wt123"
+    assert calls[0][3] == "--layout"
+    assert Path(calls[0][4]).exists()
+
+
+def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_session(
+            path=tmp_path,
+            agent_command="echo agent",
+            session_name="wt123",
+            attach=True,
+        )
+
+    assert calls
+    assert calls[0][0] == "/home/julesb/bin/zellij"
+    assert calls[0][1] == "--session"
+    assert calls[0][2] == "wt123"
+    assert calls[0][3] == "--layout"
+    assert Path(calls[0][4]).exists()
+
+
+def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_batch_session(
+            session_name="worktrees",
+            launches=[("wt123", tmp_path, "echo agent")],
+            attach=True,
+        )
+
+    assert calls
+    assert calls[0][0] == "/home/julesb/bin/zellij"
+    assert calls[0][1] == "--session"
+    assert calls[0][2] == "worktrees"
+    assert calls[0][3] == "--layout"
+    assert Path(calls[0][4]).exists()
+
+
+def test_launch_zellij_batch_session_adds_to_existing_session(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_batch_session(
+            session_name="worktrees",
+            launches=[("wt123", tmp_path, "echo agent")],
+            attach=True,
+        )
+
+    assert calls
+    assert calls[0][0] == "/home/julesb/bin/zellij"
+    assert calls[0][1] == "--session"
+    assert calls[0][2] == "worktrees"
+    assert calls[0][3] == "--layout"
+    assert Path(calls[0][4]).exists()
