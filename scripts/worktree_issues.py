@@ -1781,9 +1781,7 @@ def verify_cleanup_finished(root: Path, target: WorktreeInfo) -> list[str]:
     issues: list[str] = []
     current_worktrees = list_worktrees(root)
     if any(
-        wt.path.resolve() == target.path.resolve()
-        for wt in current_worktrees
-        if wt.path.exists()
+        wt.path.resolve() == target.path.resolve() for wt in current_worktrees if wt.path.exists()
     ):
         issues.append(f"worktree still registered: {target.path}")
     if target.path.exists():
@@ -1807,6 +1805,7 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
     issue_id = extract_issue_id_from_branch(target.branch)
     if issue_id is None:
         raise CliError(f"Could not parse issue id from branch {target.branch}")
+    report_path = closeout_report_path(root, target)
     report_base: dict[str, object] = {
         "issue_id": issue_id,
         "repo": repo,
@@ -1932,6 +1931,7 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
                 "cleanup_verified": True,
             },
         )
+        print(f"Closeout report: {report_path}")
     except Exception as exc:
         if isinstance(events, list):
             events.append(
@@ -1952,6 +1952,7 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
                 "error": str(exc),
             },
         )
+        print(f"Closeout report: {report_path}")
         raise
 
 

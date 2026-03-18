@@ -742,6 +742,7 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     assert "Deleted branch wt/task/153-sample" in out
     assert "Pruned stale worktree refs" in out
     report_path = root / ".build" / "worktree-closeouts" / "issue-153-wt_task_153-sample.json"
+    assert f"Closeout report: {report_path}" in out
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["stage"] == "complete"
     assert report["issue_closed"] is True
