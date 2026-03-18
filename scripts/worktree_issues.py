@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -35,6 +36,7 @@ TASK_ID_TOKEN_RE = re.compile(r"TASK-\d+")
 TITLE_TASK_RE = re.compile(r"^(TASK-\d+):\s")
 STATUS_LABELS = {"status:not-started", "status:in-progress", "status:blocked", "status:done"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+WORKTREE_CLOSEOUT_DIR = ".build/worktree-closeouts"
 
 
 class CliError(RuntimeError):
@@ -1709,22 +1711,91 @@ def finish_summary(root: Path, *, path: Path | None = None) -> None:
     print("            git worktree prune")
 
 
-def cleanup_finished_worktree(root: Path, target: WorktreeInfo) -> None:
+def cleanup_finished_worktree(root: Path, target: WorktreeInfo) -> dict[str, bool]:
+    result = {
+        "worktree_removed": False,
+        "branch_deleted": False,
+        "worktree_pruned": False,
+    }
     branch = target.branch
     print("Cleaning up worktree...")
     if target.path.exists():
         run(["git", "worktree", "remove", str(target.path)], cwd=root)
         print(f"Removed worktree {target.path}")
+        result["worktree_removed"] = True
     else:
         print(f"Worktree path missing, skipping remove: {target.path}")
     if branch and branch != "(detached)" and WORKTREE_BRANCH_REGEX.fullmatch(branch):
         if local_branch_exists(root, branch):
             run(["git", "branch", "-d", branch], cwd=root)
             print(f"Deleted branch {branch}")
+            result["branch_deleted"] = True
         else:
             print(f"Branch already absent, skipping delete: {branch}")
     run(["git", "worktree", "prune"], cwd=root)
     print("Pruned stale worktree refs")
+    result["worktree_pruned"] = True
+    return result
+
+
+def closeout_report_path(root: Path, target: WorktreeInfo) -> Path:
+    issue_id = extract_issue_id_from_branch(target.branch) or "unknown"
+    safe_branch = re.sub(r"[^A-Za-z0-9._-]+", "_", target.branch)
+    return root / WORKTREE_CLOSEOUT_DIR / f"issue-{issue_id}-{safe_branch}.json"
+
+
+def write_closeout_report(root: Path, target: WorktreeInfo, payload: dict[str, object]) -> Path:
+    path = closeout_report_path(root, target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "branch": target.branch,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "worktree_path": str(target.path),
+        **payload,
+    }
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def closeout_event(
+    *,
+    stage: str,
+    message: str,
+    target: WorktreeInfo,
+    repo: str | None,
+    issue_id: int | None,
+) -> dict[str, object]:
+    return {
+        "ts": datetime.now(UTC).isoformat(),
+        "pid": os.getpid(),
+        "stage": stage,
+        "message": message,
+        "branch": target.branch,
+        "worktree_path": str(target.path),
+        "repo": repo,
+        "issue_id": issue_id,
+    }
+
+
+def verify_cleanup_finished(root: Path, target: WorktreeInfo) -> list[str]:
+    issues: list[str] = []
+    current_worktrees = list_worktrees(root)
+    if any(
+        wt.path.resolve() == target.path.resolve()
+        for wt in current_worktrees
+        if wt.path.exists()
+    ):
+        issues.append(f"worktree still registered: {target.path}")
+    if target.path.exists():
+        issues.append(f"worktree path still exists: {target.path}")
+    if (
+        target.branch
+        and target.branch != "(detached)"
+        and WORKTREE_BRANCH_REGEX.fullmatch(target.branch)
+    ):
+        if local_branch_exists(root, target.branch):
+            issues.append(f"local branch still exists: {target.branch}")
+    return issues
 
 
 def close_issue_done(root: Path, *, path: Path | None = None, force: bool = False) -> None:
@@ -1736,35 +1807,152 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
     issue_id = extract_issue_id_from_branch(target.branch)
     if issue_id is None:
         raise CliError(f"Could not parse issue id from branch {target.branch}")
-    merged_pr = pr_for_branch(root, repo, target.branch, "merged")
-    if not merged_pr and not force:
-        raise CliError("No merged PR found for branch; refusing to close issue without --force")
-    info = issue_state_info(root, repo, issue_id)
-    if info and str(info.get("state", "")).upper() == "CLOSED":
-        normalized = normalize_closed_issue_labels(root, repo, issue_id, info)
-        print(f"Issue #{issue_id} already closed.")
-        if normalized:
-            print("Normalized closed-issue lifecycle labels.")
-    else:
-        args = ["issue", "edit", str(issue_id), "-R", repo]
-        if info:
-            label_names = [x["name"] for x in info.get("labels", []) if isinstance(x, dict)]
-            if "review" in label_names:
-                args += ["--remove-label", "review"]
-            if "in-progress" in label_names:
-                args += ["--remove-label", "in-progress"]
-            if "done" not in label_names:
-                args += ["--add-label", "done"]
-            if "status:in-progress" in label_names:
-                args += ["--remove-label", "status:in-progress"]
-            if "status:not-started" in label_names:
-                args += ["--remove-label", "status:not-started"]
-            if "status:done" not in label_names:
-                args += ["--add-label", "status:done"]
-        gh_text(args, root=root)
-        gh_text(["issue", "close", str(issue_id), "-R", repo], root=root)
-        print(f"Closed issue #{issue_id}.")
-    cleanup_finished_worktree(root, target)
+    report_base: dict[str, object] = {
+        "issue_id": issue_id,
+        "repo": repo,
+        "merged_pr_required": not force,
+        "stage": "starting",
+        "events": [],
+    }
+    events = report_base["events"]
+    if isinstance(events, list):
+        events.append(
+            closeout_event(
+                stage="starting",
+                message="closeout started",
+                target=target,
+                repo=repo,
+                issue_id=issue_id,
+            )
+        )
+    write_closeout_report(root, target, report_base)
+    try:
+        merged_pr = pr_for_branch(root, repo, target.branch, "merged")
+        if isinstance(events, list):
+            events.append(
+                closeout_event(
+                    stage="merge-check",
+                    message=f"merged PR lookup {'found' if merged_pr else 'missed'}",
+                    target=target,
+                    repo=repo,
+                    issue_id=issue_id,
+                )
+            )
+        if not merged_pr and not force:
+            raise CliError("No merged PR found for branch; refusing to close issue without --force")
+        info = issue_state_info(root, repo, issue_id)
+        issue_closed = False
+        if info and str(info.get("state", "")).upper() == "CLOSED":
+            normalized = normalize_closed_issue_labels(root, repo, issue_id, info)
+            print(f"Issue #{issue_id} already closed.")
+            if normalized:
+                print("Normalized closed-issue lifecycle labels.")
+            issue_closed = True
+            if isinstance(events, list):
+                events.append(
+                    closeout_event(
+                        stage="issue-close",
+                        message="issue already closed; labels normalized",
+                        target=target,
+                        repo=repo,
+                        issue_id=issue_id,
+                    )
+                )
+        else:
+            args = ["issue", "edit", str(issue_id), "-R", repo]
+            if info:
+                label_names = [x["name"] for x in info.get("labels", []) if isinstance(x, dict)]
+                if "review" in label_names:
+                    args += ["--remove-label", "review"]
+                if "in-progress" in label_names:
+                    args += ["--remove-label", "in-progress"]
+                if "done" not in label_names:
+                    args += ["--add-label", "done"]
+                if "status:in-progress" in label_names:
+                    args += ["--remove-label", "status:in-progress"]
+                if "status:not-started" in label_names:
+                    args += ["--remove-label", "status:not-started"]
+                if "status:done" not in label_names:
+                    args += ["--add-label", "status:done"]
+            gh_text(args, root=root)
+            gh_text(["issue", "close", str(issue_id), "-R", repo], root=root)
+            print(f"Closed issue #{issue_id}.")
+            issue_closed = True
+            if isinstance(events, list):
+                events.append(
+                    closeout_event(
+                        stage="issue-close",
+                        message="issue closed via gh",
+                        target=target,
+                        repo=repo,
+                        issue_id=issue_id,
+                    )
+                )
+        write_closeout_report(
+            root,
+            target,
+            {
+                **report_base,
+                "stage": "issue-closed",
+                "issue_closed": issue_closed,
+            },
+        )
+        if isinstance(events, list):
+            events.append(
+                closeout_event(
+                    stage="cleanup",
+                    message="cleanup started",
+                    target=target,
+                    repo=repo,
+                    issue_id=issue_id,
+                )
+            )
+        cleanup_result = cleanup_finished_worktree(root, target)
+        cleanup_problems = verify_cleanup_finished(root, target)
+        if cleanup_problems:
+            raise CliError("Cleanup verification failed: " + "; ".join(cleanup_problems))
+        if isinstance(events, list):
+            events.append(
+                closeout_event(
+                    stage="cleanup-verified",
+                    message="cleanup verified",
+                    target=target,
+                    repo=repo,
+                    issue_id=issue_id,
+                )
+            )
+        write_closeout_report(
+            root,
+            target,
+            {
+                **report_base,
+                "stage": "complete",
+                "issue_closed": issue_closed,
+                "cleanup": cleanup_result,
+                "cleanup_verified": True,
+            },
+        )
+    except Exception as exc:
+        if isinstance(events, list):
+            events.append(
+                closeout_event(
+                    stage="failed",
+                    message=str(exc),
+                    target=target,
+                    repo=repo,
+                    issue_id=issue_id,
+                )
+            )
+        write_closeout_report(
+            root,
+            target,
+            {
+                **report_base,
+                "stage": "failed",
+                "error": str(exc),
+            },
+        )
+        raise
 
 
 def push_branch_enforced(

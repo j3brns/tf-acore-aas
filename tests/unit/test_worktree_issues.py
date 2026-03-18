@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -384,7 +385,10 @@ def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypat
         is_primary=False,
     )
 
-    monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [primary, target])
+    def _list_worktrees(_root):
+        return [primary, target] if target.path.exists() else [primary]
+
+    monkeypatch.setattr(worktree_issues, "list_worktrees", _list_worktrees)
     monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
     monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
     monkeypatch.setattr(worktree_issues, "gh_repo_ready", lambda _root: (False, None))
@@ -640,10 +644,11 @@ def test_launch_zellij_batch_session_adds_tabs_to_existing_session(monkeypatch, 
     assert captured["args"] == ["/home/julesb/bin/zellij", "attach", "worktrees"]
 
 
-def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys):
-    root = Path("/tmp/repo")
+def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
     target = worktree_issues.WorktreeInfo(
-        path=Path("/tmp/worktrees/wt153"),
+        path=tmp_path / "worktrees" / "wt153",
         head="abc123",
         branch="wt/task/153-sample",
         is_primary=False,
@@ -656,6 +661,7 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     )
     edits: list[list[str]] = []
     cleanup_calls: list[tuple[list[str], Path | None]] = []
+    branch_deleted = False
 
     target.path.mkdir(parents=True, exist_ok=True)
 
@@ -689,10 +695,19 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
 
     monkeypatch.setattr(worktree_issues, "gh_text", _gh_text)
     monkeypatch.setattr(worktree_issues, "ensure_label_exists", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(worktree_issues, "local_branch_exists", lambda _root, _branch: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "local_branch_exists",
+        lambda _root, _branch: not branch_deleted,
+    )
 
     def _run(cmd, *, cwd=None, **_kwargs):
+        nonlocal branch_deleted
         cleanup_calls.append((cmd, cwd))
+        if cmd[:3] == ["git", "worktree", "remove"]:
+            target.path.rmdir()
+        if cmd[:3] == ["git", "branch", "-d"]:
+            branch_deleted = True
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(worktree_issues, "run", _run)
@@ -726,6 +741,27 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     assert f"Removed worktree {target.path}" in out
     assert "Deleted branch wt/task/153-sample" in out
     assert "Pruned stale worktree refs" in out
+    report_path = root / ".build" / "worktree-closeouts" / "issue-153-wt_task_153-sample.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["stage"] == "complete"
+    assert report["issue_closed"] is True
+    assert report["cleanup_verified"] is True
+    assert report["cleanup"] == {
+        "branch_deleted": True,
+        "worktree_pruned": True,
+        "worktree_removed": True,
+    }
+    assert [event["stage"] for event in report["events"]] == [
+        "starting",
+        "merge-check",
+        "issue-close",
+        "cleanup",
+        "cleanup-verified",
+    ]
+    assert report["events"][0]["message"] == "closeout started"
+    assert report["events"][-1]["message"] == "cleanup verified"
+    assert all(isinstance(event["ts"], str) for event in report["events"])
+    assert all(isinstance(event["pid"], int) for event in report["events"])
 
 
 def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
