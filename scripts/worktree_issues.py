@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -977,6 +978,61 @@ def gitnexus_refresh_enabled() -> bool:
     return parse_bool_env("WORKTREE_GITNEXUS_REFRESH", True)
 
 
+def gitnexus_npx_cache_dir() -> Path | None:
+    if shutil_which("npm") is None:
+        return None
+    try:
+        cache_dir = run(["npm", "config", "get", "cache"]).stdout.strip()
+    except subprocess.CalledProcessError:
+        return None
+    if not cache_dir or cache_dir == "undefined":
+        return None
+    return Path(cache_dir) / "_npx"
+
+
+def gitnexus_npx_cache_corrupted(output: str) -> bool:
+    lowered = output.lower()
+    return "enotempty" in lowered and "/_npx/" in lowered
+
+
+def run_gitnexus_command(
+    path: Path,
+    args: list[str],
+    *,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    cmd = ["npx", "gitnexus", *args]
+    attempts = 0
+    while True:
+        attempts += 1
+        proc = subprocess.run(
+            cmd,
+            cwd=path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        combined_output = "\n".join(
+            part.strip() for part in (proc.stdout or "", proc.stderr or "") if part.strip()
+        )
+        if attempts == 1 and gitnexus_npx_cache_corrupted(combined_output):
+            npx_cache_dir = gitnexus_npx_cache_dir()
+            if npx_cache_dir is None:
+                eprint("WARNING: npm cache path unavailable; cannot repair GitNexus npx cache")
+            else:
+                print(f"GitNexus: clearing corrupt npx cache at {npx_cache_dir}")
+                shutil.rmtree(npx_cache_dir, ignore_errors=True)
+                continue
+        if check and proc.returncode != 0:
+            raise subprocess.CalledProcessError(
+                proc.returncode,
+                cmd,
+                output=proc.stdout,
+                stderr=proc.stderr,
+            )
+        return proc
+
+
 def prepare_gitnexus_for_worktree(path: Path) -> None:
     if not gitnexus_refresh_enabled():
         print("GitNexus: refresh disabled by WORKTREE_GITNEXUS_REFRESH=0")
@@ -986,13 +1042,7 @@ def prepare_gitnexus_for_worktree(path: Path) -> None:
         return
 
     print(f"GitNexus: checking local index in {path}")
-    status_proc = subprocess.run(
-        ["npx", "gitnexus", "status"],
-        cwd=path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    status_proc = run_gitnexus_command(path, ["status"], check=False)
     status_output = "\n".join(
         part.strip()
         for part in (status_proc.stdout or "", status_proc.stderr or "")
@@ -1020,7 +1070,7 @@ def prepare_gitnexus_for_worktree(path: Path) -> None:
 
     print("GitNexus: rebuilding local index for this worktree")
     try:
-        subprocess.run(["npx", "gitnexus", "analyze"], cwd=path, check=True)
+        run_gitnexus_command(path, ["analyze"], check=True)
     except subprocess.CalledProcessError as exc:
         eprint(f"WARNING: GitNexus analyze failed in {path}: {exc}")
 
@@ -1155,33 +1205,25 @@ def fetch_issue_labels_for_prompt(root: Path, repo: str | None, issue_id: int | 
 def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) -> str:
     branch = run(["git", "branch", "--show-current"], cwd=path).stdout.strip() or "(detached)"
     issue_id = worktree_issue_id(path)
-    issue_ref = f"#{issue_id}" if issue_id is not None else "(no issue id parsed)"
+    issue_ref = f"#{issue_id}" if issue_id is not None else "(no issue)"
     issue_labels = fetch_issue_labels_for_prompt(root, repo, issue_id)
     labels_clause = f" Labels: {issue_labels}." if issue_labels else ""
     return (
-        "Role: pragmatic, rigorous, concise coding agent. "
         f"Task: issue {issue_ref} on branch {branch} in worktree {path}.{labels_clause} "
-        "First response: confirm you have read AGENTS.md and will follow it as source of truth. "
-        "Read first: AGENTS.md, CLAUDE.md (if present), README.md, docs/ARCHITECTURE.md. "
-        "Scope: work only in this worktree; keep changes scoped to the issue. "
-        "Loop: inspect -> state plan + touched paths -> implement -> validate -> "
-        "rerun checks -> continue until done. "
-        "Required: run make preflight-session now and before commit/push; run "
-        "make pre-validate-session before any push; include "
-        "validation evidence in issue/PR. "
-        "DoD: do not stop at code-complete. "
-        "Done means all tests/validation pass and branch is pushed. "
-        "PR is opened and merged. Merge conflicts are resolved and re-validated. "
-        "Issue is closed via make finish-worktree-close, and worktree cleanup is complete "
-        "(git worktree remove <path>; git branch -d <branch>; git worktree prune). "
-        "Finish: if blocked by required permission/policy, report blocker plus exact next command."
+        "Read docs/ARCHITECTURE.md and the ADRs linked to this issue. "
+        "Scope: changes scoped to the issue only. "
+        "Loop: inspect → plan → implement → make preflight-session → fix → repeat. "
+        "Before push: make pre-validate-session must pass. "
+        "Done: tests pass, branch pushed, PR opened with validation evidence and issue link. "
+        "If blocked by permission or policy, report the blocker and the exact next command."
     )
 
 
 def build_agent_command(agent: str, mode: str, prompt: str) -> str:
     quoted = shell_quote(prompt)
     if agent == "gemini":
-        return f"gemini {'--yolo ' if mode == 'yolo' else ''}{quoted}".strip()
+        approval_flag = "--approval-mode=yolo " if mode == "yolo" else ""
+        return f"gemini {approval_flag}-i {quoted}".strip()
     if agent == "claude":
         flag = "--dangerously-skip-permissions " if mode == "yolo" else ""
         return f"claude {flag}{quoted}".strip()
@@ -1200,6 +1242,7 @@ def handoff_to_agent_or_shell(
     agent_mode: str | None = None,
     handoff: str | None = None,
     print_only_override: bool = False,
+    mux: str | None = None,
 ) -> None:
     ensure_uv_venv(path)
     agent_val = (agent or choose_agent_interactive()).lower()
@@ -1211,16 +1254,23 @@ def handoff_to_agent_or_shell(
     prompt = build_agent_prompt_for_worktree(path, root, repo)
     command = build_agent_command(agent_val, mode_val, prompt)
 
+    if mux is None:
+        mux = auto_detect_mux() if handoff_val == "execute-now" else "none"
+
     print()
-    print(f"Opening shell in {path}")
-    print("Boilerplate prompt (copy/edit if needed):")
-    print(prompt)
-    print(
-        "Final line below is the agent launch command "
-        f"({agent_val}, {mode_val}; handoff={handoff_val})."
-    )
-    print(command)
+    print(f"Target: {path}")
+    print(f"Agent:  {agent_val} ({mode_val})")
+    print(f"Mux:    {mux}")
+    print(f"Prompt: {prompt}")
     sys.stdout.flush()
+
+    if mux == "zellij" and handoff_val == "execute-now":
+        launch_zellij_session(path=path, agent_command=command)
+        return
+
+    if mux == "tmux" and handoff_val == "execute-now":
+        launch_tmux_session(path=path, agent_command=command)
+        return
 
     if handoff_val == "execute-now":
         path_q = shell_quote(str(path))
@@ -1244,6 +1294,235 @@ def run_command_in_worktree(path: Path, command: str) -> None:
 def run_pre_validate(path: Path) -> None:
     print(f"Running pre-push validation in {path} (make validate-pre-push)")
     subprocess.run(["bash", "-lc", "make validate-pre-push"], cwd=path, check=True)
+
+
+def tmux_available() -> bool:
+    return shutil.which("tmux") is not None
+
+
+def tmux_session_exists(name: str) -> bool:
+    result = subprocess.run(["tmux", "has-session", "-t", name], capture_output=True)
+    return result.returncode == 0
+
+
+def tmux_session_name_for_worktree(path: Path) -> str:
+    return path.name
+
+
+def launch_tmux_session(
+    *,
+    path: Path,
+    agent_command: str,
+    session_name: str | None = None,
+    attach: bool = True,
+) -> None:
+    name = session_name or tmux_session_name_for_worktree(path)
+    path_str = str(path)
+    venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
+
+    if tmux_session_exists(name):
+        print(f"tmux session '{name}' already exists — attaching.")
+        if attach:
+            os.execvp("tmux", ["tmux", "attach-session", "-t", name])
+        return
+
+    subprocess.run(
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            path_str,
+            "-x",
+            "220",
+            "-y",
+            "55",
+        ],
+        check=True,
+    )
+    subprocess.run(["tmux", "rename-window", "-t", f"{name}:0", name], check=True)
+    subprocess.run(
+        ["tmux", "split-window", "-h", "-t", f"{name}:0", "-c", path_str],
+        check=True,
+    )
+    subprocess.run(["tmux", "send-keys", "-t", f"{name}:0.1", venv_preamble, "Enter"], check=True)
+    subprocess.run(
+        [
+            "tmux",
+            "send-keys",
+            "-t",
+            f"{name}:0.0",
+            f"{venv_preamble} && {agent_command}",
+            "Enter",
+        ],
+        check=True,
+    )
+    subprocess.run(["tmux", "select-pane", "-t", f"{name}:0.0"], check=True)
+
+    print(f"tmux session '{name}' created in {path}")
+    print("  Left pane:  agent running")
+    print("  Right pane: shell ready")
+    print(f"  Reattach:   tmux a -t {name}")
+    print("  List all:   tmux ls")
+
+    if attach:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", name])
+
+
+def zellij_bin() -> str:
+    return shutil.which("zellij") or os.path.expanduser("~/bin/zellij")
+
+
+def zellij_available() -> bool:
+    path = zellij_bin()
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def zellij_session_exists(name: str) -> bool:
+    zj = zellij_bin()
+    result = subprocess.run([zj, "list-sessions"], capture_output=True, text=True)
+    return any(line.strip().startswith(name) for line in result.stdout.splitlines())
+
+
+def launch_zellij_session(
+    *,
+    path: Path,
+    agent_command: str,
+    session_name: str | None = None,
+    attach: bool = True,
+) -> None:
+    import tempfile
+
+    zj = zellij_bin()
+    name = session_name or tmux_session_name_for_worktree(path)
+    path_str = str(path)
+    venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
+
+    if zellij_session_exists(name):
+        print(f"zellij session '{name}' already exists — attaching.")
+        if attach:
+            os.execvp(zj, [zj, "attach", name])
+        return
+
+    layout_content = f"""\
+layout {{
+    cwd "{path_str}"
+    pane split_direction="vertical" {{
+        pane command="bash" {{
+            args "-lc" "{venv_preamble} && {agent_command}"
+            name "agent"
+            focus true
+        }}
+        pane command="bash" {{
+            args "-lc" "{venv_preamble} && exec bash -l"
+            name "shell"
+        }}
+    }}
+}}
+"""
+    layout_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".kdl", prefix=f"wt-layout-{name}-", delete=False
+    )
+    layout_file.write(layout_content)
+    layout_file.close()
+
+    print(f"zellij session '{name}' launching in {path}")
+    print("  Left pane:  agent running")
+    print("  Right pane: shell ready")
+    print(f"  Reattach:   zellij a -s {name}")
+    print("  List all:   zellij ls")
+
+    if attach:
+        os.execvp(zj, [zj, "--session", name, "--layout", layout_file.name])
+
+
+def _zellij_worktree_pane_layout(path: Path, agent_command: str, *, focus: bool) -> str:
+    path_str = str(path)
+    agent_shell = (
+        f"cd {shlex.quote(path_str)} && "
+        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
+        f"{agent_command}"
+    )
+    shell_cmd = (
+        f"cd {shlex.quote(path_str)} && "
+        "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; "
+        "exec bash -l"
+    )
+    focus_str = "true" if focus else "false"
+    return (
+        '      pane split_direction="vertical" {\n'
+        f'        pane command="bash" {{\n'
+        f'          args "-lc" {json.dumps(agent_shell)}\n'
+        f'          name "agent"\n'
+        f"          focus {focus_str}\n"
+        "        }\n"
+        f'        pane command="bash" {{\n'
+        f'          args "-lc" {json.dumps(shell_cmd)}\n'
+        f'          name "shell"\n'
+        "        }\n"
+        "      }"
+    )
+
+
+def launch_zellij_batch_session(
+    *,
+    session_name: str,
+    launches: list[tuple[str, Path, str]],
+    attach: bool = True,
+) -> None:
+    import tempfile
+
+    zj = zellij_bin()
+    if zellij_session_exists(session_name):
+        print(f"zellij session '{session_name}' already exists — attaching.")
+        if attach:
+            os.execvp(zj, [zj, "attach", session_name])
+        return
+
+    tabs: list[str] = []
+    for idx, (tab_name, path, agent_command) in enumerate(launches):
+        pane = _zellij_worktree_pane_layout(path, agent_command, focus=(idx == 0))
+        tabs.append(
+            f"    tab name={json.dumps(tab_name)} focus={'true' if idx == 0 else 'false'} {{\n"
+            f"{pane}\n"
+            "    }"
+        )
+
+    layout_content = "layout {\n" + "\n".join(tabs) + "\n}\n"
+    layout_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".kdl", prefix=f"wt-batch-{session_name}-", delete=False
+    )
+    layout_file.write(layout_content)
+    layout_file.close()
+
+    print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
+    for tab_name, path, _ in launches:
+        print(f"  {tab_name}: {path}")
+    print(f"  Reattach:   zellij a -s {session_name}")
+    print("  List all:   zellij ls")
+
+    if attach:
+        os.execvp(zj, [zj, "--session", session_name, "--layout", layout_file.name])
+
+
+def resolve_mux_flag(args: argparse.Namespace) -> str | None:
+    if getattr(args, "no_tmux", False) or getattr(args, "no_mux", False):
+        return "none"
+    if getattr(args, "zellij", None):
+        return "zellij"
+    if getattr(args, "tmux", None):
+        return "tmux"
+    return None
+
+
+def auto_detect_mux() -> str:
+    if zellij_available():
+        return "zellij"
+    if tmux_available():
+        return "tmux"
+    return "none"
 
 
 def gh_repo_ready(root: Path) -> tuple[bool, str | None]:
@@ -1382,6 +1661,24 @@ def finish_summary(root: Path, *, path: Path | None = None) -> None:
     print("            git worktree prune")
 
 
+def cleanup_finished_worktree(root: Path, target: WorktreeInfo) -> None:
+    branch = target.branch
+    print("Cleaning up worktree...")
+    if target.path.exists():
+        run(["git", "worktree", "remove", str(target.path)], cwd=root)
+        print(f"Removed worktree {target.path}")
+    else:
+        print(f"Worktree path missing, skipping remove: {target.path}")
+    if branch and branch != "(detached)" and WORKTREE_BRANCH_REGEX.fullmatch(branch):
+        if local_branch_exists(root, branch):
+            run(["git", "branch", "-d", branch], cwd=root)
+            print(f"Deleted branch {branch}")
+        else:
+            print(f"Branch already absent, skipping delete: {branch}")
+    run(["git", "worktree", "prune"], cwd=root)
+    print("Pruned stale worktree refs")
+
+
 def close_issue_done(root: Path, *, path: Path | None = None, force: bool = False) -> None:
     worktrees = list_worktrees(root)
     target = resolve_current_worktree(path or current_path(), worktrees)
@@ -1400,25 +1697,26 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
         print(f"Issue #{issue_id} already closed.")
         if normalized:
             print("Normalized closed-issue lifecycle labels.")
-        return
-    args = ["issue", "edit", str(issue_id), "-R", repo]
-    if info:
-        label_names = [x["name"] for x in info.get("labels", []) if isinstance(x, dict)]
-        if "review" in label_names:
-            args += ["--remove-label", "review"]
-        if "in-progress" in label_names:
-            args += ["--remove-label", "in-progress"]
-        if "done" not in label_names:
-            args += ["--add-label", "done"]
-        if "status:in-progress" in label_names:
-            args += ["--remove-label", "status:in-progress"]
-        if "status:not-started" in label_names:
-            args += ["--remove-label", "status:not-started"]
-        if "status:done" not in label_names:
-            args += ["--add-label", "status:done"]
-    gh_text(args, root=root)
-    gh_text(["issue", "close", str(issue_id), "-R", repo], root=root)
-    print(f"Closed issue #{issue_id}.")
+    else:
+        args = ["issue", "edit", str(issue_id), "-R", repo]
+        if info:
+            label_names = [x["name"] for x in info.get("labels", []) if isinstance(x, dict)]
+            if "review" in label_names:
+                args += ["--remove-label", "review"]
+            if "in-progress" in label_names:
+                args += ["--remove-label", "in-progress"]
+            if "done" not in label_names:
+                args += ["--add-label", "done"]
+            if "status:in-progress" in label_names:
+                args += ["--remove-label", "status:in-progress"]
+            if "status:not-started" in label_names:
+                args += ["--remove-label", "status:not-started"]
+            if "status:done" not in label_names:
+                args += ["--add-label", "status:done"]
+        gh_text(args, root=root)
+        gh_text(["issue", "close", str(issue_id), "-R", repo], root=root)
+        print(f"Closed issue #{issue_id}.")
+    cleanup_finished_worktree(root, target)
 
 
 def push_branch_enforced(
@@ -1620,6 +1918,7 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
                     agent_mode=args.agent_mode,
                     handoff=args.handoff,
                     print_only_override=args.print_only,
+                    mux=resolve_mux_flag(args),
                 )
             return 0
     else:
@@ -1658,6 +1957,7 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
             agent_mode=args.agent_mode,
             handoff=args.handoff,
             print_only_override=args.print_only,
+            mux=resolve_mux_flag(args),
         )
     return 0
 
@@ -1682,6 +1982,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
                 agent_mode=args.agent_mode,
                 handoff=args.handoff,
                 print_only_override=args.print_only,
+                mux=resolve_mux_flag(args),
             )
         return 0
     assert_issue_startable(issue, allow_blocked=args.allow_blocked)
@@ -1716,6 +2017,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
             agent_mode=args.agent_mode,
             handoff=args.handoff,
             print_only_override=args.print_only,
+            mux=resolve_mux_flag(args),
         )
     return 0
 
@@ -1761,6 +2063,7 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
             agent_mode=agent_mode,
             handoff=handoff,
             print_only_override=print_only,
+            mux=resolve_mux_flag(args),
         )
     else:
         print(target.path)
@@ -1804,7 +2107,95 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
         agent_mode=args.agent_mode,
         handoff=args.handoff,
         print_only_override=args.print_only or args.handoff == "print-only",
+        mux=resolve_mux_flag(args),
     )
+    return 0
+
+
+def cmd_wt_batch(args: argparse.Namespace) -> int:
+    """Create N worktrees for the next runnable issues, randomly assign agents, launch zellij."""
+    import random
+
+    count = args.count
+    agents = args.agents.split(",") if args.agents else ["gemini", "codex"]
+    mode = args.agent_mode or "yolo"
+    if not zellij_available():
+        raise CliError("wt-batch requires zellij for visible batch sessions")
+
+    root = repo_root()
+    repo = args.repo or origin_repo_slug(root)
+    issues = fetch_repo_issues(root, repo, state="all")
+    selection = build_queue(issues, stream_label=args.stream_label, mode=args.mode)
+    base_dir = (
+        Path(args.base_dir).expanduser().resolve() if args.base_dir else default_worktrees_dir(root)
+    )
+
+    picked: list[QueueItem] = []
+    for item in selection.items:
+        if len(picked) >= count:
+            break
+        if not item.runnable:
+            continue
+        existing = find_linked_worktree_for_issue(root, item.issue.number)
+        if existing is not None:
+            print(f"Skipping #{item.issue.number}: worktree already exists at {existing.path}")
+            continue
+        picked.append(item)
+
+    if not picked:
+        raise CliError("No runnable issues available for batch creation.")
+    if len(picked) < count:
+        print(f"WARNING: only {len(picked)} runnable issue(s) available (requested {count})")
+
+    launched: list[tuple[str, str, str, Path]] = []
+    batch_launches: list[tuple[str, Path, str]] = []
+
+    for item in picked:
+        agent = random.choice(agents)
+        issue = item.issue
+
+        wt_path = create_worktree_for_issue(
+            root=root,
+            repo=repo,
+            issue=issue,
+            base_dir=base_dir,
+            base_ref=None,
+            scope=None,
+            slug=None,
+            folder_name=None,
+            auto_claim=True,
+            preflight=False,
+            dry_run=args.dry_run,
+        )
+
+        if args.dry_run:
+            launched.append(("(dry-run)", agent, f"#{issue.number}", wt_path))
+            continue
+
+        prompt = build_agent_prompt_for_worktree(wt_path, root, repo)
+        command = build_agent_command(agent, mode, prompt)
+        tab_name = f"wt{issue.number}"
+        batch_launches.append((tab_name, wt_path, command))
+        launched.append((tab_name, agent, f"#{issue.number}", wt_path))
+
+    print()
+    print(f"{'TAB':<16} {'AGENT':<10} {'ISSUE':<10} PATH")
+    print("-" * 70)
+    for tab, agent, ref, path in launched:
+        print(f"{tab:<16} {agent:<10} {ref:<10} {path}")
+
+    if not args.dry_run:
+        print()
+        print("Attach to session:")
+        print("  zellij a -s worktrees")
+        print()
+        print("List all:  zellij ls")
+        launch_zellij_batch_session(
+            session_name="worktrees",
+            launches=batch_launches,
+            attach=True,
+        )
+
     return 0
 
 
@@ -2043,6 +2434,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force print-only handoff when using open-shell (prints prompt/command, opens shell)",
     )
+    mux_group = wt_common.add_mutually_exclusive_group()
+    mux_group.add_argument(
+        "--tmux",
+        action="store_true",
+        default=None,
+        help="Launch agent in a named tmux session",
+    )
+    mux_group.add_argument(
+        "--zellij",
+        action="store_true",
+        default=None,
+        help="Launch agent in a named zellij session",
+    )
+    mux_group.add_argument(
+        "--no-mux",
+        action="store_true",
+        default=False,
+        help="Disable multiplexer, use direct exec",
+    )
 
     nxt = sub.add_parser(
         "worktree-next",
@@ -2075,6 +2485,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force print-only handoff when using open-shell",
     )
+    res_mux = res.add_mutually_exclusive_group()
+    res_mux.add_argument("--tmux", action="store_true", default=None)
+    res_mux.add_argument("--zellij", action="store_true", default=None)
+    res_mux.add_argument("--no-mux", action="store_true", default=False)
     res.set_defaults(func=cmd_worktree_resume)
 
     fs = sub.add_parser("finish-summary", help="Show finish/handoff summary for a worktree")
@@ -2110,7 +2524,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force print-only handoff (recommended for testing)",
     )
+    ah_mux = ah.add_mutually_exclusive_group()
+    ah_mux.add_argument("--tmux", action="store_true", default=None)
+    ah_mux.add_argument("--zellij", action="store_true", default=None)
+    ah_mux.add_argument("--no-mux", action="store_true", default=False)
     ah.set_defaults(func=cmd_agent_handoff)
+
+    batch = sub.add_parser(
+        "wt-batch",
+        parents=[common_repo, queue_common],
+        help="Create N worktrees with randomly assigned agents in a visible zellij session",
+    )
+    batch.add_argument(
+        "--count", "-n", type=int, default=3, help="Number of worktrees to create (default: 3)"
+    )
+    batch.add_argument(
+        "--agents",
+        default="gemini,codex",
+        help="Comma-separated agent pool to randomly pick from (default: gemini,codex)",
+    )
+    batch.add_argument("--agent-mode", choices=["normal", "yolo"], default="yolo")
+    batch.add_argument("--base-dir", help="Worktree base dir (default: ../worktrees)")
+    batch.add_argument("--dry-run", action="store_true", help="Print plan without creating")
+    batch.set_defaults(func=cmd_wt_batch)
 
     menu = sub.add_parser(
         "menu", parents=[common_repo, queue_common], help="Interactive issue worktree menu"
