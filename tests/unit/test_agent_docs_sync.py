@@ -8,6 +8,9 @@ def test_agent_docs_point_to_claude():
     claude = (repo_root / "CLAUDE.md").read_text(encoding="utf-8")
     assert "Read [CLAUDE.md](CLAUDE.md)" in agents
     assert "Read [CLAUDE.md](CLAUDE.md)" in gemini
+    assert ".gitnexus/ai-context.md" in agents
+    assert ".gitnexus/ai-context.md" in gemini
+    assert ".gitnexus/ai-context.md" in claude
     assert agents == gemini
     assert agents != claude
 

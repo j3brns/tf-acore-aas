@@ -424,7 +424,7 @@ sees results. Admin view shows platform health metrics.
               Stages: validate → test → plan → deploy-dev → deploy-staging → deploy-prod
               validate: ruff, mypy, tsc, cdk synth, cfn-guard, detect-secrets
               test: Jest CDK tests + pytest unit + pytest integration
-              plan: cdk diff posted as MR comment
+              plan: cdk diff stored as artifacts for review
               deploy-dev: auto on merge to main
               deploy-staging: manual gate, canary 10% for 30 minutes
               deploy-prod: two-reviewer approval, canary, auto-rollback
