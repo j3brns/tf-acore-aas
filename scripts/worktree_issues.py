@@ -1471,11 +1471,15 @@ layout {{
 
     print("  Left pane:  agent running")
     print("  Right pane: shell ready")
-    print(f"  Reattach:   zellij a -s {name}")
+    print(f"  Reattach:   zellij attach {name}")
     print("  List all:   zellij ls")
 
     if attach:
-        os.execvp(zj, [zj, "--new-session-with-layout", layout_file.name, "--session", name])
+        _exec_zellij_with_layout_cleanup(
+            zj,
+            ["--new-session-with-layout", layout_file.name, "--session", name],
+            layout_file.name,
+        )
 
 
 def _zellij_worktree_pane_layout(path: Path, agent_command: str, *, focus: bool) -> str:
@@ -1544,14 +1548,22 @@ def launch_zellij_batch_session(
     if announce_tabs:
         for tab_name, path, _ in launches:
             print(f"  {tab_name}: {path}")
-    print(f"  Reattach:   zellij a -s {session_name}")
+    print(f"  Reattach:   zellij attach {session_name}")
     print("  List all:   zellij ls")
 
     if attach:
-        os.execvp(
+        _exec_zellij_with_layout_cleanup(
             zj,
-            [zj, "--new-session-with-layout", layout_file.name, "--session", session_name],
+            ["--new-session-with-layout", layout_file.name, "--session", session_name],
+            layout_file.name,
         )
+
+
+def _exec_zellij_with_layout_cleanup(zj: str, args: list[str], layout_path: str) -> None:
+    layout_q = shlex.quote(layout_path)
+    args_q = " ".join(shlex.quote(arg) for arg in [zj, *args])
+    cleanup_cmd = f"trap 'rm -f {layout_q}' EXIT; exec {args_q}"
+    os.execvp("bash", ["bash", "-lc", cleanup_cmd])
 
 
 def resolve_mux_flag(args: argparse.Namespace) -> str | None:
@@ -2431,7 +2443,7 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
 
     if not args.dry_run:
         print()
-        print("Attach:  zellij a -s worktrees")
+        print("Attach:  zellij attach worktrees")
         print("List:    zellij ls")
         print("Session summary:")
         print(f"  created {len(batch_launches)} worktree tab(s)")

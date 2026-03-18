@@ -588,7 +588,7 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
     assert "[1/2] #33 -> ready" in out
     assert "[2/2] #35 -> starting" in out
     assert "[2/2] #35 -> ready" in out
-    assert "Attach:  zellij a -s worktrees" in out
+    assert "Attach:  zellij attach worktrees" in out
 
 
 def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):
@@ -835,11 +835,11 @@ def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path)
         )
 
     assert calls
-    assert calls[0][0] == "/home/julesb/bin/zellij"
-    assert calls[0][1] == "--new-session-with-layout"
-    assert Path(calls[0][2]).exists()
-    assert calls[0][3] == "--session"
-    assert calls[0][4] == "wt123"
+    assert calls[0][0] == "bash"
+    assert calls[0][1] == "-lc"
+    assert "rm -f " in calls[0][2]
+    assert "--new-session-with-layout" in calls[0][2]
+    assert "--session wt123" in calls[0][2]
 
 
 def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_path):
@@ -916,11 +916,11 @@ def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp
 
     assert calls
     assert subprocess_calls == [["stty", "-ixon"]]
-    assert calls[0][0] == "/home/julesb/bin/zellij"
-    assert calls[0][1] == "--new-session-with-layout"
-    assert Path(calls[0][2]).exists()
-    assert calls[0][3] == "--session"
-    assert calls[0][4] == "worktrees"
+    assert calls[0][0] == "bash"
+    assert calls[0][1] == "-lc"
+    assert "rm -f " in calls[0][2]
+    assert "--new-session-with-layout" in calls[0][2]
+    assert "--session worktrees" in calls[0][2]
 
 
 def test_launch_zellij_batch_session_adds_to_existing_session(monkeypatch, tmp_path):
