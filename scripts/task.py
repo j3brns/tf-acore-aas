@@ -285,6 +285,8 @@ def generate_prompt(
             "  - Follow every forbidden pattern in CLAUDE.md\n"
             "  - For any security decision: STOP and ask. Do not guess.\n"
             "  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.\n"
+            "  - Do not treat PR creation as completion; "
+            "merge, issue close, and cleanup are required.\n"
             "  - Do not stop at the first failure; use test output, "
             "validate-local output, synth errors, and logs as signals."
         )
@@ -304,6 +306,8 @@ def generate_prompt(
             "  - Follow every forbidden pattern in CLAUDE.md\n"
             "  - For any security decision: STOP and ask. Do not guess.\n"
             "  - When uncertain about DynamoDB schema, IAM, or authoriser logic: STOP and ask.\n"
+            "  - Do not treat PR creation as completion; "
+            "merge, issue close, and cleanup are required.\n"
             "  - Do not stop at the first failure; use available test output, "
             "logs, and operator-provided signals to continue."
         )
@@ -354,10 +358,13 @@ Primary diagnostic signals (use what is available):
 Constraints:
 {constraints_block}
 
-Closure condition: {
+    Closure condition: {
         "operator sign-off at gate — present findings and stop"
         if task.gate
-        else "all task tests pass, make validate-local passes clean, and errors are cleared"
+        else (
+            "all task tests pass, make validate-local passes clean, PR is merged, "
+            "issue is closed, worktree cleanup is complete, and errors are cleared"
+        )
     }
 
 Finish protocol (perform in order when closure is reached):

@@ -1214,7 +1214,10 @@ def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) ->
         "Scope: changes scoped to the issue only. "
         "Loop: inspect → plan → implement → make preflight-session → fix → repeat. "
         "Before push: make pre-validate-session must pass. "
-        "Done: tests pass, branch pushed, PR opened with validation evidence and issue link. "
+        "Do not stop at PR creation. Continue through merge verification, "
+        "make finish-worktree-close, and worktree cleanup. "
+        "Done: merged PR, closed issue, and cleaned worktree/branch with "
+        "validation evidence and issue link. "
         "If blocked by permission or policy, report the blocker and the exact next command."
     )
 
@@ -1644,7 +1647,10 @@ def finish_summary(root: Path, *, path: Path | None = None) -> None:
         if branch and branch != "(detached)":
             print(f"  then:     gh pr create --fill --head {branch}")
     elif stage in {"review", "pr-open"}:
-        print("  next:     merge PR; if conflicts appear, resolve in this worktree and re-validate")
+        print(
+            "  next:     merge PR; do not stop at PR open. "
+            "If conflicts appear, resolve in this worktree and re-validate"
+        )
     elif stage == "merged":
         print("  next:     make finish-worktree-close")
     print("  conflict: if merge/rebase conflicts appear:")
