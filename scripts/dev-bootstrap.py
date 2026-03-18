@@ -2,7 +2,7 @@
 dev-bootstrap.py — Local development environment seeding script.
 
 Seeds LocalStack with:
-  - Two test tenants: basic-tier (t-basic-001) and premium-tier (t-premium-001)
+  - Two test tenants: basic-tier (t-test-001) and premium-tier (t-test-002)
   - All SSM parameters pointing to LocalStack endpoints
   - DynamoDB tables with fixture data (tables created if missing)
   - Test JWTs written to .env.test
@@ -147,9 +147,9 @@ TABLE_DEFINITIONS: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 TENANT_FIXTURES: list[dict[str, Any]] = [
     {
-        "PK": "TENANT#t-basic-001",
+        "PK": "TENANT#t-test-001",
         "SK": "METADATA",
-        "tenant_id": "t-basic-001",
+        "tenant_id": "t-test-001",
         "app_id": "platform-local",
         "display_name": "Test Tenant Basic",
         "tier": "basic",
@@ -160,14 +160,14 @@ TENANT_FIXTURES: list[dict[str, Any]] = [
         "owner_team": "platform-test",
         "account_id": "000000000000",
         "execution_role_arn": (
-            "arn:aws:iam::000000000000:role/platform-tenant-t-basic-001-execution-role"
+            "arn:aws:iam::000000000000:role/platform-tenant-t-test-001-execution-role"
         ),
         "monthly_budget_usd": Decimal("100"),
     },
     {
-        "PK": "TENANT#t-premium-001",
+        "PK": "TENANT#t-test-002",
         "SK": "METADATA",
-        "tenant_id": "t-premium-001",
+        "tenant_id": "t-test-002",
         "app_id": "platform-local",
         "display_name": "Test Tenant Premium",
         "tier": "premium",
@@ -178,7 +178,7 @@ TENANT_FIXTURES: list[dict[str, Any]] = [
         "owner_team": "platform-test",
         "account_id": "000000000000",
         "execution_role_arn": (
-            "arn:aws:iam::000000000000:role/platform-tenant-t-premium-001-execution-role"
+            "arn:aws:iam::000000000000:role/platform-tenant-t-test-002-execution-role"
         ),
         "monthly_budget_usd": Decimal("1000"),
     },
@@ -301,12 +301,12 @@ def fetch_jwts(mock_jwks_url: str) -> dict[str, str]:
     requests_to_make: list[tuple[str, dict[str, Any]]] = [
         (
             "basic",
-            {"tenant_id": "t-basic-001", "app_id": "platform-local", "tier": "basic", "ttl": 86400},
+            {"tenant_id": "t-test-001", "app_id": "platform-local", "tier": "basic", "ttl": 86400},
         ),
         (
             "premium",
             {
-                "tenant_id": "t-premium-001",
+                "tenant_id": "t-test-002",
                 "app_id": "platform-local",
                 "tier": "premium",
                 "ttl": 86400,
@@ -315,7 +315,7 @@ def fetch_jwts(mock_jwks_url: str) -> dict[str, str]:
         (
             "admin",
             {
-                "tenant_id": "t-basic-001",
+                "tenant_id": "admin-001",
                 "app_id": "platform-local",
                 "tier": "basic",
                 "sub": "admin-user",
@@ -360,16 +360,22 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
     ]
     if tokens:
         lines += [
-            f"TEST_JWT_BASIC={tokens.get('basic', '')}",
-            f"TEST_JWT_PREMIUM={tokens.get('premium', '')}",
-            f"TEST_JWT_ADMIN={tokens.get('admin', '')}",
+            "BASIC_TENANT_ID=t-test-001",
+            f"BASIC_TENANT_JWT={tokens.get('basic', '')}",
+            "PREMIUM_TENANT_ID=t-test-002",
+            f"PREMIUM_TENANT_JWT={tokens.get('premium', '')}",
+            "ADMIN_TENANT_ID=admin-001",
+            f"ADMIN_JWT={tokens.get('admin', '')}",
         ]
     else:
         lines += [
             "# JWTs not available (mock-jwks service was not running)",
-            "TEST_JWT_BASIC=",
-            "TEST_JWT_PREMIUM=",
-            "TEST_JWT_ADMIN=",
+            "BASIC_TENANT_ID=t-test-001",
+            "BASIC_TENANT_JWT=",
+            "PREMIUM_TENANT_ID=t-test-002",
+            "PREMIUM_TENANT_JWT=",
+            "ADMIN_TENANT_ID=admin-001",
+            "ADMIN_JWT=",
         ]
     env_test_path.write_text("\n".join(lines) + "\n")
     logger.info("Written %s", env_test_path)

@@ -54,13 +54,16 @@ for a stronger end-to-end check once the local stack is running.
 
 ## Test Tenants (seeded by dev-bootstrap.py)
 
-After `make dev`, two test tenants are available. Their JWTs are in `.env.test`:
+After `make dev`, two test tenants are available. Their tenant IDs and JWTs are in `.env.test`:
 
-| Variable              | Tenant     | Tier     |
+| Variable              | Value      | Purpose  |
 |-----------------------|------------|----------|
-| BASIC_TENANT_JWT      | t-test-001 | basic    |
-| PREMIUM_TENANT_JWT    | t-test-002 | premium  |
-| ADMIN_JWT             | admin-001  | Platform.Admin |
+| BASIC_TENANT_ID       | t-test-001 | Local basic tenant ID |
+| BASIC_TENANT_JWT      | JWT        | Basic tenant bearer token |
+| PREMIUM_TENANT_ID     | t-test-002 | Local premium tenant ID |
+| PREMIUM_TENANT_JWT    | JWT        | Premium tenant bearer token |
+| ADMIN_TENANT_ID       | admin-001  | Platform admin tenant ID |
+| ADMIN_JWT             | JWT        | Platform.Admin bearer token |
 
 To refresh the local JWT fixtures without rerunning bootstrap, keep the dev services up and run:
 
