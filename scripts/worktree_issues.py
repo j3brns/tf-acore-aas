@@ -34,6 +34,7 @@ DEPENDS_RE = re.compile(r"(?mi)^Depends on:\s*(.+?)\s*$")
 TASK_ID_TOKEN_RE = re.compile(r"TASK-\d+")
 TITLE_TASK_RE = re.compile(r"^(TASK-\d+):\s")
 STATUS_LABELS = {"status:not-started", "status:in-progress", "status:blocked", "status:done"}
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 class CliError(RuntimeError):
@@ -1403,7 +1404,11 @@ def zellij_available() -> bool:
 def zellij_session_exists(name: str) -> bool:
     zj = zellij_bin()
     result = subprocess.run([zj, "list-sessions"], capture_output=True, text=True)
-    return any(line.strip().startswith(name) for line in result.stdout.splitlines())
+    for line in result.stdout.splitlines():
+        cleaned = ANSI_ESCAPE_RE.sub("", line).strip()
+        if cleaned.startswith(name):
+            return True
+    return False
 
 
 def launch_zellij_session(

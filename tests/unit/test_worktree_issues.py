@@ -781,6 +781,21 @@ def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_pat
     assert calls[0][1:] == ["attach", "wt123"]
 
 
+def test_zellij_session_exists_handles_ansi_colored_output(monkeypatch):
+    def _run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            "\x1b[32;1mwt278\x1b[m [Created \x1b[35;1m0s\x1b[m ago]\n",
+            "",
+        )
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+
+    assert worktree_issues.zellij_session_exists("wt278") is True
+
+
 def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
     calls: list[list[str]] = []
 
