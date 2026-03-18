@@ -203,6 +203,7 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
     monkeypatch.setattr(worktree_issues, "select_worktree_interactive", lambda items: wt)
     monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: "owner/repo")
     monkeypatch.setattr(worktree_issues, "run_preflight", lambda **kwargs: None)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
 
     def _handoff(**kwargs):
         called.update(kwargs)
@@ -223,6 +224,7 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
     assert called["agent_mode"] is None
     assert called["handoff"] is None
     assert called["print_only_override"] is False
+    assert called["mux"] is None
 
 
 def test_cmd_worktree_next_skips_runnable_issue_with_existing_worktree(monkeypatch):
@@ -313,6 +315,7 @@ def test_create_worktree_for_issue_attaches_existing_local_branch(monkeypatch, t
 
     monkeypatch.setattr(worktree_issues, "run", _run)
     monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
 
     wt_path = worktree_issues.create_worktree_for_issue(
         root=root,
@@ -357,10 +360,13 @@ def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requ
 
     prompt = worktree_issues.build_agent_prompt_for_worktree(wt, root, "owner/repo")
 
-    assert "DoD: do not stop at code-complete." in prompt
-    assert "Merge conflicts are resolved and re-validated." in prompt
-    assert "make finish-worktree-close" in prompt
-    assert "git worktree prune" in prompt
+    assert "issue #53" in prompt
+    assert "wt/infra/53-explicit-dod" in prompt
+    assert "docs/ARCHITECTURE.md" in prompt
+    assert "make preflight-session" in prompt
+    assert "make pre-validate-session" in prompt
+    assert "validation evidence" in prompt
+    assert "report the blocker" in prompt
 
 
 def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypatch, capsys):
@@ -399,6 +405,156 @@ def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypat
     assert "git worktree prune" in out
 
 
+def test_run_gitnexus_command_clears_corrupt_npx_cache_and_retries(monkeypatch, capsys):
+    calls: list[list[str]] = []
+
+    def _subprocess_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                cmd,
+                217,
+                "",
+                (
+                    "npm error code ENOTEMPTY\n"
+                    "npm error path /home/julesb/.npm/_npx/hash/node_modules/chownr\n"
+                ),
+            )
+        return subprocess.CompletedProcess(cmd, 0, "GitNexus ready\n", "")
+
+    removed: list[Path] = []
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(
+        worktree_issues,
+        "gitnexus_npx_cache_dir",
+        lambda: Path("/home/julesb/.npm/_npx"),
+    )
+    monkeypatch.setattr(
+        worktree_issues.shutil,
+        "rmtree",
+        lambda path, ignore_errors: removed.append(path),
+    )
+
+    proc = worktree_issues.run_gitnexus_command(Path("/tmp/repo"), ["status"], check=False)
+
+    assert proc.returncode == 0
+    assert calls == [["npx", "gitnexus", "status"], ["npx", "gitnexus", "status"]]
+    assert removed == [Path("/home/julesb/.npm/_npx")]
+    assert "clearing corrupt npx cache" in capsys.readouterr().out
+
+
+def test_prepare_gitnexus_for_worktree_warns_when_npm_cache_path_unavailable(monkeypatch, capsys):
+    calls: list[list[str]] = []
+
+    def _subprocess_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            217,
+            "",
+            (
+                "npm error code ENOTEMPTY\n"
+                "npm error path /home/julesb/.npm/_npx/hash/node_modules/chownr\n"
+            ),
+        )
+
+    monkeypatch.setattr(worktree_issues, "shutil_which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(worktree_issues, "gitnexus_npx_cache_dir", lambda: None)
+
+    worktree_issues.prepare_gitnexus_for_worktree(Path("/tmp/repo"))
+
+    captured = capsys.readouterr()
+    assert calls == [["npx", "gitnexus", "status"], ["npx", "gitnexus", "analyze"]]
+    assert "npm cache path unavailable" in captured.err
+    assert "rebuilding local index" in captured.out
+
+
+def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypatch, capsys):
+    root = Path("/tmp/repo")
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    issue_35 = _issue(
+        number=35,
+        task_id="TASK-028",
+        seq=280,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    created: list[int] = []
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(worktree_issues, "zellij_available", lambda: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_33, issue_35],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[
+                worktree_issues.QueueItem(issue=issue_33, runnable=True),
+                worktree_issues.QueueItem(issue=issue_35, runnable=True),
+            ],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: (
+            created.append(kwargs["issue"].number)
+            or Path(f"/tmp/worktrees/wt{kwargs['issue'].number}")
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+
+    def _launch(*, session_name, launches, attach):
+        captured["session_name"] = session_name
+        captured["launches"] = launches
+        captured["attach"] = attach
+
+    monkeypatch.setattr(worktree_issues, "launch_zellij_batch_session", _launch)
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=2,
+            agents="gemini,codex",
+            agent_mode="yolo",
+            base_dir=None,
+            dry_run=False,
+        )
+    )
+
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert created == [33, 35]
+    assert captured["session_name"] == "worktrees"
+    assert captured["attach"] is True
+    assert [tab for tab, _, _ in captured["launches"]] == ["wt33", "wt35"]
+    assert "TAB" in out
+    assert "Attach to session:" in out
+
+
 def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys):
     root = Path("/tmp/repo")
     target = worktree_issues.WorktreeInfo(
@@ -414,6 +570,9 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
         is_primary=True,
     )
     edits: list[list[str]] = []
+    cleanup_calls: list[tuple[list[str], Path | None]] = []
+
+    target.path.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [primary, target])
     monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
@@ -445,6 +604,13 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
 
     monkeypatch.setattr(worktree_issues, "gh_text", _gh_text)
     monkeypatch.setattr(worktree_issues, "ensure_label_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worktree_issues, "local_branch_exists", lambda _root, _branch: True)
+
+    def _run(cmd, *, cwd=None, **_kwargs):
+        cleanup_calls.append((cmd, cwd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(worktree_issues, "run", _run)
 
     worktree_issues.close_issue_done(root, path=target.path, force=False)
     out = capsys.readouterr().out
@@ -464,5 +630,14 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
             "status:in-progress",
         ]
     ]
+    assert cleanup_calls == [
+        (["git", "worktree", "remove", str(target.path)], root),
+        (["git", "branch", "-d", "wt/task/153-sample"], root),
+        (["git", "worktree", "prune"], root),
+    ]
     assert "Issue #153 already closed." in out
     assert "Normalized closed-issue lifecycle labels." in out
+    assert "Cleaning up worktree..." in out
+    assert f"Removed worktree {target.path}" in out
+    assert "Deleted branch wt/task/153-sample" in out
+    assert "Pruned stale worktree refs" in out
