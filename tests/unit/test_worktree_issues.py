@@ -425,6 +425,7 @@ def test_run_gitnexus_command_clears_corrupt_npx_cache_and_retries(monkeypatch, 
     removed: list[Path] = []
 
     monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(worktree_issues, "gitnexus_cli_path", lambda: None)
     monkeypatch.setattr(
         worktree_issues,
         "gitnexus_npx_cache_dir",
@@ -444,6 +445,29 @@ def test_run_gitnexus_command_clears_corrupt_npx_cache_and_retries(monkeypatch, 
     assert "clearing corrupt npx cache" in capsys.readouterr().out
 
 
+def test_run_gitnexus_command_prefers_local_gitnexus_cli(monkeypatch):
+    calls: list[list[str]] = []
+
+    def _subprocess_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "GitNexus ready\n", "")
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(
+        worktree_issues,
+        "gitnexus_cli_path",
+        lambda: Path("/mnt/c/Users/julia/gitnexus/gitnexus/dist/cli/index.js"),
+    )
+    monkeypatch.setattr(worktree_issues, "shutil_which", lambda name: f"/usr/bin/{name}")
+
+    proc = worktree_issues.run_gitnexus_command(Path("/tmp/repo"), ["status"], check=False)
+
+    assert proc.returncode == 0
+    assert calls == [
+        ["/usr/bin/node", "/mnt/c/Users/julia/gitnexus/gitnexus/dist/cli/index.js", "status"]
+    ]
+
+
 def test_prepare_gitnexus_for_worktree_warns_when_npm_cache_path_unavailable(monkeypatch, capsys):
     calls: list[list[str]] = []
 
@@ -459,6 +483,7 @@ def test_prepare_gitnexus_for_worktree_warns_when_npm_cache_path_unavailable(mon
             ),
         )
 
+    monkeypatch.setattr(worktree_issues, "gitnexus_cli_path", lambda: None)
     monkeypatch.setattr(worktree_issues, "shutil_which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
     monkeypatch.setattr(worktree_issues, "gitnexus_npx_cache_dir", lambda: None)
@@ -517,6 +542,7 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
             or Path(f"/tmp/worktrees/wt{kwargs['issue'].number}")
         ),
     )
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
     monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
     monkeypatch.setattr(
         worktree_issues,
@@ -524,10 +550,11 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
         lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
     )
 
-    def _launch(*, session_name, launches, attach):
+    def _launch(*, session_name, launches, attach, announce_tabs=True):
         captured["session_name"] = session_name
         captured["launches"] = launches
         captured["attach"] = attach
+        captured["announce_tabs"] = announce_tabs
 
     monkeypatch.setattr(worktree_issues, "launch_zellij_batch_session", _launch)
 
@@ -550,9 +577,14 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
     assert created == [33, 35]
     assert captured["session_name"] == "worktrees"
     assert captured["attach"] is True
+    assert captured["announce_tabs"] is False
     assert [tab for tab, _, _ in captured["launches"]] == ["wt33", "wt35"]
-    assert "TAB" in out
-    assert "Attach to session:" in out
+    assert "Batch session: 2 issue(s)" in out
+    assert "[1/2] #33 -> starting" in out
+    assert "[1/2] #33 -> ready" in out
+    assert "[2/2] #35 -> starting" in out
+    assert "[2/2] #35 -> ready" in out
+    assert "Attach:  zellij a -s worktrees" in out
 
 
 def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):
@@ -575,9 +607,9 @@ def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, caps
     )
 
     out = capsys.readouterr().out
-    assert "already exists — adding tab(s)." in out
+    assert "already exists — attaching." in out
     assert captured["bin_path"] == "/home/julesb/bin/zellij"
-    assert captured["args"][:4] == ["/home/julesb/bin/zellij", "--session", "wt33", "--layout"]
+    assert captured["args"] == ["/home/julesb/bin/zellij", "attach", "wt33"]
 
 
 def test_launch_zellij_batch_session_adds_tabs_to_existing_session(monkeypatch, capsys):
@@ -603,14 +635,9 @@ def test_launch_zellij_batch_session_adds_tabs_to_existing_session(monkeypatch, 
     )
 
     out = capsys.readouterr().out
-    assert "already exists — adding tab(s)." in out
+    assert "already exists — attaching." in out
     assert captured["bin_path"] == "/home/julesb/bin/zellij"
-    assert captured["args"][:4] == [
-        "/home/julesb/bin/zellij",
-        "--session",
-        "worktrees",
-        "--layout",
-    ]
+    assert captured["args"] == ["/home/julesb/bin/zellij", "attach", "worktrees"]
 
 
 def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys):
@@ -723,10 +750,10 @@ def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path)
 
     assert calls
     assert calls[0][0] == "/home/julesb/bin/zellij"
-    assert calls[0][1] == "--session"
-    assert calls[0][2] == "wt123"
-    assert calls[0][3] == "--layout"
-    assert Path(calls[0][4]).exists()
+    assert calls[0][1] == "--new-session-with-layout"
+    assert Path(calls[0][2]).exists()
+    assert calls[0][3] == "--session"
+    assert calls[0][4] == "wt123"
 
 
 def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_path):
@@ -751,10 +778,7 @@ def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_pat
 
     assert calls
     assert calls[0][0] == "/home/julesb/bin/zellij"
-    assert calls[0][1] == "--session"
-    assert calls[0][2] == "wt123"
-    assert calls[0][3] == "--layout"
-    assert Path(calls[0][4]).exists()
+    assert calls[0][1:] == ["attach", "wt123"]
 
 
 def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
@@ -778,10 +802,10 @@ def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp
 
     assert calls
     assert calls[0][0] == "/home/julesb/bin/zellij"
-    assert calls[0][1] == "--session"
-    assert calls[0][2] == "worktrees"
-    assert calls[0][3] == "--layout"
-    assert Path(calls[0][4]).exists()
+    assert calls[0][1] == "--new-session-with-layout"
+    assert Path(calls[0][2]).exists()
+    assert calls[0][3] == "--session"
+    assert calls[0][4] == "worktrees"
 
 
 def test_launch_zellij_batch_session_adds_to_existing_session(monkeypatch, tmp_path):
@@ -805,7 +829,4 @@ def test_launch_zellij_batch_session_adds_to_existing_session(monkeypatch, tmp_p
 
     assert calls
     assert calls[0][0] == "/home/julesb/bin/zellij"
-    assert calls[0][1] == "--session"
-    assert calls[0][2] == "worktrees"
-    assert calls[0][3] == "--layout"
-    assert Path(calls[0][4]).exists()
+    assert calls[0][1:] == ["attach", "worktrees"]
