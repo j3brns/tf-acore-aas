@@ -317,6 +317,7 @@ All work is tracked through [GitHub Issues](https://github.com/j3brns/tf-acore-a
 make issue-queue              # Dependency-aware queue ordered by Seq
 make worktree-next-issue      # Create worktree for next runnable issue
 make worktree                 # Interactive worktree menu
+make wt-go                    # Create next runnable worktree and launch zellij session
 make preflight-session        # Branch and issue policy checks
 make pre-validate-session     # Fast pre-push validation without cdk synth
 make worktree-push-issue      # Push with preflight and validation enforced

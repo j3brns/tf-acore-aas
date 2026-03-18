@@ -1401,10 +1401,9 @@ def launch_zellij_session(
     venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
 
     if zellij_session_exists(name):
-        print(f"zellij session '{name}' already exists — attaching.")
-        if attach:
-            os.execvp(zj, [zj, "attach", name])
-        return
+        print(f"zellij session '{name}' already exists — adding tab(s).")
+    else:
+        print(f"zellij session '{name}' launching in {path}")
 
     layout_content = f"""\
 layout {{
@@ -1428,7 +1427,6 @@ layout {{
     layout_file.write(layout_content)
     layout_file.close()
 
-    print(f"zellij session '{name}' launching in {path}")
     print("  Left pane:  agent running")
     print("  Right pane: shell ready")
     print(f"  Reattach:   zellij a -s {name}")
@@ -1476,10 +1474,9 @@ def launch_zellij_batch_session(
 
     zj = zellij_bin()
     if zellij_session_exists(session_name):
-        print(f"zellij session '{session_name}' already exists — attaching.")
-        if attach:
-            os.execvp(zj, [zj, "attach", session_name])
-        return
+        print(f"zellij session '{session_name}' already exists — adding tab(s).")
+    else:
+        print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
 
     tabs: list[str] = []
     for idx, (tab_name, path, agent_command) in enumerate(launches):
@@ -1497,7 +1494,6 @@ def launch_zellij_batch_session(
     layout_file.write(layout_content)
     layout_file.close()
 
-    print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
     for tab_name, path, _ in launches:
         print(f"  {tab_name}: {path}")
     print(f"  Reattach:   zellij a -s {session_name}")
