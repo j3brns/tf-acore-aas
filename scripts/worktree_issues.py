@@ -1522,10 +1522,8 @@ def launch_zellij_batch_session(
     zj = zellij_bin()
     disable_terminal_flow_control()
     if zellij_session_exists(session_name):
-        print(f"zellij session '{session_name}' already exists — attaching.")
-        if attach:
-            os.execvp(zj, [zj, "attach", session_name])
-        return
+        print(f"zellij session '{session_name}' already exists — replacing.")
+        run([zj, "delete-session", session_name], check=False)
 
     print(f"zellij session '{session_name}' launching with {len(launches)} worktree tab(s)")
 
