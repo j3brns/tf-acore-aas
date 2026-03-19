@@ -501,7 +501,7 @@ def test_prepare_gitnexus_for_worktree_warns_when_npm_cache_path_unavailable(mon
     assert "rebuilding local index" in captured.out
 
 
-def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypatch, capsys):
+def test_cmd_wt_batch_uses_single_tmux_session_for_multiple_worktrees(monkeypatch, capsys):
     root = Path("/tmp/repo")
     repo = "owner/repo"
     issue_33 = _issue(
@@ -521,7 +521,7 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
 
     monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
     monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
-    monkeypatch.setattr(worktree_issues, "zellij_available", lambda: True)
+    monkeypatch.setattr(worktree_issues, "tmux_available", lambda: True)
     monkeypatch.setattr(
         worktree_issues,
         "fetch_repo_issues",
@@ -555,13 +555,13 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
         lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
     )
 
-    def _launch(*, session_name, launches, attach, announce_tabs=True):
+    def _launch(*, session_name, launches, attach, announce_windows=True):
         captured["session_name"] = session_name
         captured["launches"] = launches
         captured["attach"] = attach
-        captured["announce_tabs"] = announce_tabs
+        captured["announce_windows"] = announce_windows
 
-    monkeypatch.setattr(worktree_issues, "launch_zellij_batch_session", _launch)
+    monkeypatch.setattr(worktree_issues, "launch_tmux_batch_session", _launch)
 
     rc = worktree_issues.cmd_wt_batch(
         argparse.Namespace(
@@ -582,14 +582,14 @@ def test_cmd_wt_batch_uses_single_zellij_session_for_multiple_worktrees(monkeypa
     assert created == [33, 35]
     assert captured["session_name"] == "worktrees"
     assert captured["attach"] is True
-    assert captured["announce_tabs"] is False
+    assert captured["announce_windows"] is False
     assert [tab for tab, _, _ in captured["launches"]] == ["wt33", "wt35"]
     assert "Batch session: 2 issue(s)" in out
     assert "[1/2] #33 -> starting" in out
     assert "[1/2] #33 -> ready" in out
     assert "[2/2] #35 -> starting" in out
     assert "[2/2] #35 -> ready" in out
-    assert "Attach:  zellij attach worktrees" in out
+    assert "Attach:  tmux a -t worktrees" in out
 
 
 def test_cmd_wt_batch_hello_world_e2e_two_issues(monkeypatch, capsys):
@@ -614,7 +614,7 @@ def test_cmd_wt_batch_hello_world_e2e_two_issues(monkeypatch, capsys):
 
     monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
     monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
-    monkeypatch.setattr(worktree_issues, "zellij_available", lambda: True)
+    monkeypatch.setattr(worktree_issues, "tmux_available", lambda: True)
     monkeypatch.setattr(
         worktree_issues,
         "fetch_repo_issues",
@@ -655,7 +655,7 @@ def test_cmd_wt_batch_hello_world_e2e_two_issues(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         worktree_issues,
-        "launch_zellij_batch_session",
+        "launch_tmux_batch_session",
         lambda **kwargs: launched.update(kwargs),
     )
 
@@ -679,13 +679,87 @@ def test_cmd_wt_batch_hello_world_e2e_two_issues(monkeypatch, capsys):
     assert prepared == [wt_paths[41], wt_paths[42]]
     assert launched["session_name"] == "worktrees"
     assert launched["attach"] is True
-    assert launched["announce_tabs"] is False
+    assert launched["announce_windows"] is False
     assert [tab for tab, _, _ in launched["launches"]] == ["wt41", "wt42"]
     assert "Batch session: 2 issue(s)" in out
     assert "[1/2] #41 -> starting" in out
     assert "[1/2] #41 -> ready" in out
     assert "[2/2] #42 -> starting" in out
     assert "[2/2] #42 -> ready" in out
+
+
+def test_launch_tmux_batch_session_starts_grid(monkeypatch, capsys):
+    launches = [
+        ("wt33", Path("/tmp/worktrees/wt33"), "codex --yolo"),
+        ("wt35", Path("/tmp/worktrees/wt35"), "gemini --normal"),
+    ]
+    calls: list[list[str]] = []
+    attached: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "tmux_session_exists", lambda _name: False)
+
+    def _run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(bin_path, args):
+        attached["bin_path"] = bin_path
+        attached["args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_tmux_batch_session(
+            session_name="worktrees",
+            launches=launches,
+            attach=True,
+            announce_windows=False,
+        )
+
+    out = capsys.readouterr().out
+    assert "tmux session 'worktrees' launching with 2 worktree window(s)" in out
+    assert calls[0][:4] == ["tmux", "new-session", "-d", "-s"]
+    assert calls[0][4] == "worktrees"
+    assert calls[1][:3] == ["tmux", "split-window", "-h"]
+    assert any(cmd[:3] == ["tmux", "new-window", "-t"] for cmd in calls)
+    assert any(cmd[:3] == ["tmux", "select-window", "-t"] for cmd in calls)
+    assert attached["bin_path"] == "tmux"
+    assert attached["args"] == ["tmux", "attach-session", "-t", "worktrees"]
+
+
+def test_launch_tmux_batch_session_replaces_existing_session(monkeypatch, capsys):
+    launches = [("wt33", Path("/tmp/worktrees/wt33"), "codex --yolo")]
+    calls: list[list[str]] = []
+    attached: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "tmux_session_exists", lambda _name: True)
+
+    def _run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(bin_path, args):
+        attached["bin_path"] = bin_path
+        attached["args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_tmux_batch_session(
+            session_name="worktrees",
+            launches=launches,
+            attach=True,
+            announce_windows=True,
+        )
+
+    out = capsys.readouterr().out
+    assert "already exists — replacing." in out
+    assert calls[0] == ["tmux", "kill-session", "-t", "worktrees"]
+    assert attached["args"] == ["tmux", "attach-session", "-t", "worktrees"]
 
 
 def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):

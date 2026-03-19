@@ -1394,6 +1394,98 @@ def launch_tmux_session(
         os.execvp("tmux", ["tmux", "attach-session", "-t", name])
 
 
+def _launch_tmux_worktree_window(
+    *,
+    session_name: str,
+    window_name: str,
+    path: Path,
+    agent_command: str,
+    create_session: bool,
+) -> None:
+    path_str = str(path)
+    venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
+    target = f"{session_name}:{window_name}"
+
+    if create_session:
+        subprocess.run(
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "-n",
+                window_name,
+                "-c",
+                path_str,
+                "-x",
+                "220",
+                "-y",
+                "55",
+            ],
+            check=True,
+        )
+    else:
+        subprocess.run(
+            [
+                "tmux",
+                "new-window",
+                "-t",
+                session_name,
+                "-n",
+                window_name,
+                "-c",
+                path_str,
+            ],
+            check=True,
+        )
+
+    subprocess.run(["tmux", "split-window", "-h", "-t", target, "-c", path_str], check=True)
+    subprocess.run(["tmux", "send-keys", "-t", f"{target}.1", venv_preamble, "Enter"], check=True)
+    subprocess.run(
+        ["tmux", "send-keys", "-t", f"{target}.0", f"{venv_preamble} && {agent_command}", "Enter"],
+        check=True,
+    )
+    subprocess.run(["tmux", "select-pane", "-t", f"{target}.0"], check=True)
+
+
+def launch_tmux_batch_session(
+    *,
+    session_name: str,
+    launches: list[tuple[str, Path, str]],
+    attach: bool = True,
+    announce_windows: bool = True,
+) -> None:
+    if tmux_session_exists(session_name):
+        print(f"tmux session '{session_name}' already exists — replacing.")
+        subprocess.run(["tmux", "kill-session", "-t", session_name], check=False)
+
+    if not launches:
+        raise CliError("No launches provided for tmux batch session.")
+
+    print(f"tmux session '{session_name}' launching with {len(launches)} worktree window(s)")
+
+    for idx, (window_name, path, agent_command) in enumerate(launches):
+        _launch_tmux_worktree_window(
+            session_name=session_name,
+            window_name=window_name,
+            path=path,
+            agent_command=agent_command,
+            create_session=(idx == 0),
+        )
+
+    subprocess.run(["tmux", "select-window", "-t", f"{session_name}:0"], check=True)
+
+    if announce_windows:
+        for window_name, path, _ in launches:
+            print(f"  {window_name}: {path}")
+    print(f"  Reattach:   tmux a -t {session_name}")
+    print("  List all:   tmux ls")
+
+    if attach:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", session_name])
+
+
 def zellij_bin() -> str:
     return shutil.which("zellij") or os.path.expanduser("~/bin/zellij")
 
@@ -2390,14 +2482,14 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
 
 
 def cmd_wt_batch(args: argparse.Namespace) -> int:
-    """Create N worktrees for the next runnable issues, randomly assign agents, launch zellij."""
+    """Create N worktrees for the next runnable issues, randomly assign agents, launch tmux."""
     import random
 
     count = args.count
     agents = args.agents.split(",") if args.agents else ["gemini", "codex"]
     mode = args.agent_mode or "yolo"
-    if not zellij_available():
-        raise CliError("wt-batch requires zellij for visible batch sessions")
+    if not tmux_available():
+        raise CliError("wt-batch requires tmux for visible batch sessions")
 
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
@@ -2462,16 +2554,16 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
 
     if not args.dry_run:
         print()
-        print("Attach:  zellij attach worktrees")
-        print("List:    zellij ls")
+        print("Attach:  tmux a -t worktrees")
+        print("List:    tmux ls")
         print("Session summary:")
-        print(f"  created {len(batch_launches)} worktree tab(s)")
+        print(f"  created {len(batch_launches)} worktree window(s)")
         print()
-        launch_zellij_batch_session(
+        launch_tmux_batch_session(
             session_name="worktrees",
             launches=batch_launches,
             attach=True,
-            announce_tabs=False,
+            announce_windows=False,
         )
 
     return 0
@@ -2816,7 +2908,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch = sub.add_parser(
         "wt-batch",
         parents=[common_repo, queue_common],
-        help="Create N worktrees with randomly assigned agents in a visible zellij session",
+        help="Create N worktrees with randomly assigned agents in a visible tmux session grid",
     )
     batch.add_argument(
         "--count", "-n", type=int, default=3, help="Number of worktrees to create (default: 3)"

@@ -779,7 +779,7 @@ worktree-next-issue:
 		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,)
 
-## wt-batch: Create multiple runnable issue worktrees and open them in one zellij session
+## wt-batch: Create multiple runnable issue worktrees and open them in one tmux session grid
 ## Usage: make wt-batch [COUNT=3] [AGENTS=gemini,codex] [AGENT_MODE=yolo]
 wt-batch:
 	uv run python scripts/worktree_issues.py wt-batch \
