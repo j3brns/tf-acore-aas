@@ -12,6 +12,7 @@
 .PHONY: worktree-create worktree-list worktree-clean
 .PHONY: infra-synth infra-diff infra-deploy infra-deploy-prod-ci infra-destroy
 .PHONY: infra-rollback-lambda infra-set-runtime-region
+.PHONY: tf-validate tf-fmt-check tf-plan tf-apply
 .PHONY: failover-lock-acquire failover-lock-release
 .PHONY: bootstrap-cdk bootstrap-secrets bootstrap-gitlab-oidc
 .PHONY: bootstrap-post-deploy bootstrap-verify bootstrap-delete-iam-user
@@ -393,6 +394,38 @@ failover-lock-acquire:
 ## failover-lock-release: Release distributed lock after region failover
 failover-lock-release:
 	uv run python scripts/failover_lock.py release --env $(ENV)
+
+# =============================================================================
+# ACCOUNT VENDING (Terraform)
+# =============================================================================
+
+## tf-validate: Validate Terraform account-vending configuration (no credentials required)
+tf-validate:
+	@echo "==> Terraform validate (account vending)"
+	cd infra/terraform && terraform init -backend=false -input=false >/dev/null 2>&1 && \
+		terraform validate
+	@echo "==> Terraform validation passed"
+
+## tf-fmt-check: Check Terraform formatting
+tf-fmt-check:
+	@echo "==> Terraform fmt check"
+	terraform fmt -check -recursive infra/terraform/
+	@echo "==> Terraform fmt passed"
+
+## tf-plan: Plan Terraform account-vending changes (requires Organizations admin credentials)
+## Usage: make tf-plan ENV=prod
+tf-plan:
+	@test -n "$(ENV)" || (echo "ERROR: ENV required. Usage: make tf-plan ENV=prod" && exit 1)
+	cd infra/terraform && terraform plan \
+		-var-file=envs/$(ENV)/terraform.tfvars \
+		-out=tfplan-$(ENV)
+
+## tf-apply: Apply Terraform account-vending changes (requires operator approval)
+## Usage: make tf-apply ENV=prod
+tf-apply:
+	@test -n "$(ENV)" || (echo "ERROR: ENV required. Usage: make tf-apply ENV=prod" && exit 1)
+	@test "$(ENV)" != "prod" || (echo "WARNING: Applying to PRODUCTION. Ensure plan has been reviewed." && read -p "Type 'apply-prod' to confirm: " confirm && [ "$$confirm" = "apply-prod" ])
+	cd infra/terraform && terraform apply tfplan-$(ENV)
 
 # =============================================================================
 # AGENT DEVELOPER COMMANDS
