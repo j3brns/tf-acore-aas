@@ -731,7 +731,13 @@ def _handle_create(
     _put_event(
         deps,
         detail_type="tenant.created",
-        detail={"tenantId": tenant_id, "appId": app_id, "actorSub": caller.sub},
+        detail={
+            "tenantId": tenant_id,
+            "appId": app_id,
+            "tier": tier,
+            "accountId": attributes["accountId"],
+            "actorSub": caller.sub,
+        },
     )
     return _response(201, {"tenant": _serialize_tenant(item)})
 
