@@ -188,6 +188,8 @@ export class ObservabilityStack extends cdk.Stack {
     );
 
     // --- 2. Cross-Region Observability Sink ---
+    // This stack owns the monitoring-account sink only.
+    // Regional member links belong in source-region stacks when that topology is added.
 
     new oam.CfnSink(this, 'ObservabilitySink', {
       name: 'PlatformObservabilitySink',
@@ -209,6 +211,12 @@ export class ObservabilityStack extends cdk.Stack {
           },
         ],
       },
+    });
+
+    new cdk.CfnOutput(this, 'CrossRegionObservabilityTopology', {
+      value: 'SINK_ONLY_NO_OAM_LINKS',
+      description:
+        'ObservabilityStack provisions the monitoring-account OAM sink only; regional member links are not yet provisioned.',
     });
 
     // --- 3. Failure Mode (FM) Alarms ---

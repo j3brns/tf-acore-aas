@@ -41,7 +41,7 @@ eu-west-2 London (HOME — owns everything)
 
 eu-west-1 Dublin (COMPUTE — current primary runtime region by platform policy)
 ├── AgentCore Runtime (arm64 Firecracker microVM)
-├── AgentCore Observability (traces forwarded to London)
+├── AgentCore runtime telemetry metric stream to London
 ├── AgentCore Browser
 └── AgentCore Code Interpreter
 
@@ -337,12 +337,16 @@ See [ADR-007](decisions/ADR-007-cdk-terraform.md) for the CDK vs Terraform split
 | 2 | IdentityStack | eu-west-2 | GitLab OIDC WIF roles, Entra JWKS layer, KMS keys |
 | 3 | PlatformStack | eu-west-2 | REST API, WAF, CloudFront, Bridge, BFF, Authoriser, Gateway |
 | 4 | TenantStack | eu-west-2 | Per-tenant Memory store, execution role, usage plan key, SSM |
-| 5 | ObservabilityStack | eu-west-1→2 | Dashboards, alarms, metric streams |
-| 6 | AgentCoreStack | eu-west-1 | Runtime config, cross-region resource wiring |
+| 5 | ObservabilityStack | eu-west-2 | Dashboards, alarms, monitoring-account OAM sink only |
+| 6 | AgentCoreStack | eu-west-1 | Runtime config, metric stream to eu-west-2 observability |
 
 TenantStack deploys per-tenant on EventBridge `platform.tenant.created` event.
 It is **not** deployed by the platform pipeline — only triggered by tenant provisioning.
 Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
+
+ObservabilityStack currently provisions the eu-west-2 monitoring-account OAM sink only.
+No regional OAM member links are deployed yet, so the cross-region observability path
+is represented today by the AgentCoreStack metric stream into eu-west-2 dashboards.
 
 ## Failure Modes
 
