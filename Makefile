@@ -1,9 +1,9 @@
 # =============================================================================
 # PLATFORM MAKEFILE
-# Run `make help` to see all targets
+# Run `make help` for a grouped summary, or `make help-all` for the full dump
 # =============================================================================
 
-.PHONY: help bootstrap ensure-tools validate-local validate-local-full
+.PHONY: help help-all bootstrap ensure-tools validate-local validate-local-full
 .PHONY: validate-local-prereqs validate-python validate-openapi validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
 .PHONY: docs-sync-audit docs-sync-stamp rules-sync-audit
@@ -37,11 +37,75 @@ all: help
 
 ## help: Print available targets
 help:
-	@echo "Platform Makefile"
-	@echo ""
-	@echo "Usage: make <target> [ENV=dev|staging|prod] [AGENT=name] [TENANT=id]"
-	@echo ""
-	@grep -E '^## ' Makefile | sed 's/^## /  /'
+	@pager="$$(command -v more.exe 2>/dev/null || command -v more 2>/dev/null || command -v cat 2>/dev/null || echo cat)"; \
+	if [ -t 1 ] && [ -z "$$NO_COLOR" ]; then c_def="$$(printf '\033[36m')"; c_rst="$$(printf '\033[0m')"; else c_def=""; c_rst=""; fi; \
+	build_help() { \
+		echo "Platform Makefile"; \
+		echo ""; \
+		echo "Categories:"; \
+		ex() { printf '    %-26s %s\n' "$$1" "$$2"; }; \
+		echo "  Setup"; \
+		ex "bootstrap" "install tools and check prerequisites"; \
+		ex "ensure-tools" "install missing dev tools"; \
+		echo ""; \
+		echo "  Validation"; \
+		ex "validate-local" "fast local validation"; \
+		ex "validate-pre-push" "pre-push checks without cdk synth"; \
+		echo ""; \
+		echo "  Development"; \
+		ex "dev" "start local development environment"; \
+		ex "dev-logs" "stream local service logs"; \
+		ex "dev-invoke" "invoke the echo agent locally"; \
+		echo ""; \
+		echo "  Tests"; \
+		ex "test-unit" "run unit tests"; \
+		ex "test-int" "run integration tests"; \
+		ex "test-agent AGENT=echo-agent" "run one agent's tests"; \
+		echo ""; \
+		echo "  Worktrees / issues"; \
+		ex "worktree" "open the interactive issue queue"; \
+		ex "wt-go" "launch the next runnable issue in zellij"; \
+		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini,codex${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}]" "open several runnable issue worktrees"; \
+		ex "worktree-next-issue" "create a worktree for the next queued issue"; \
+		ex "worktree-create-issue" "create a worktree for a specific issue"; \
+		ex "worktree-resume-issue [OPEN_SHELL=off] [CMD='make test-unit']" "resume a linked issue worktree"; \
+		ex "worktree-push-issue" "push the current issue worktree branch"; \
+		ex "issue-queue" "show the issue queue"; \
+		ex "issues-audit" "check issue lifecycle and queue invariants"; \
+		ex "issues-reconcile" "repair task issue labels"; \
+		echo ""; \
+		echo "  Infrastructure / bootstrap"; \
+		ex "infra-synth" "synthesise all CDK stacks"; \
+		ex "infra-diff" "show CDK diff before deployment"; \
+		ex "infra-deploy" "deploy CDK stacks to a non-prod env"; \
+		ex "tf-plan ENV=${c_def}prod${c_rst}" "plan Terraform account-vending changes"; \
+		ex "tf-apply ENV=${c_def}prod${c_rst}" "apply Terraform account-vending changes"; \
+		ex "bootstrap-*" "bootstrap and seed platform resources"; \
+		echo ""; \
+		echo "  Agent / SPA / ops"; \
+		ex "agent-* [AGENT=${c_def}name${c_rst}] [ENV=${c_def}dev${c_rst}|staging|prod]" "package, deploy, invoke, or roll back agents"; \
+		ex "spa-push" "build and deploy the SPA"; \
+		ex "ops-login" "authenticate as operator via Entra"; \
+		ex "ops-top-tenants" "show top tenants by token consumption"; \
+		ex "logs-* [ENV=${c_def}prod${c_rst}] [MINUTES=${c_def}30${c_rst}]" "tail Lambda logs"; \
+		echo ""; \
+		echo "  Meta"; \
+		ex "preflight-session" "run issue-worktree preflight checks"; \
+		ex "pre-validate-session" "run enforced pre-push validation"; \
+		ex "install-git-hooks" "install local git hooks"; \
+		ex "gitnexus-refresh" "refresh the local GitNexus index"; \
+		echo ""; \
+		echo "Run 'make help-all' for the full reference."; \
+	}; \
+	if [ -t 1 ] && [ "$$pager" != "cat" ]; then \
+		build_help | "$$pager"; \
+	else \
+		build_help; \
+	fi
+
+## help-all: Print every documented target
+help-all:
+	@grep -E '^## ' Makefile | sed 's/^## /  /' || true
 
 # =============================================================================
 # BOOTSTRAP AND SETUP
