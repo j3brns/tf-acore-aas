@@ -40,6 +40,7 @@ EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 _ssm = boto3.client("ssm", region_name=os.environ["AWS_REGION"])
 _events = boto3.client("events", region_name=os.environ["AWS_REGION"])
 _dynamodb = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION"])
+_cloudwatch = boto3.client("cloudwatch", region_name=os.environ["AWS_REGION"])
 
 
 class PricingResolutionError(RuntimeError):
@@ -188,7 +189,46 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
     }
     db.put_item(TENANTS_TABLE, new_summary)
 
-    # 4. Check budget
+    # 4. Emit metrics for observability
+    # Monthly cost metric used for per-tenant budget alarms
+    try:
+        dimensions = [
+            {"Name": "TenantId", "Value": tenant_id},
+            {"Name": "Tier", "Value": tier},
+        ]
+        _cloudwatch.put_metric_data(
+            Namespace="Platform/Billing",
+            MetricData=[
+                {
+                    "MetricName": "MonthlyCost",
+                    "Value": total_cost,
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+                {
+                    "MetricName": "DailyCost",
+                    "Value": day_cost,
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+                {
+                    "MetricName": "InputTokens",
+                    "Value": float(total_input),
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+                {
+                    "MetricName": "OutputTokens",
+                    "Value": float(total_output),
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+            ],
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to emit cost metrics for {tenant_id}: {exc}")
+
+    # 5. Check budget
     if budget > 0 and total_cost > budget:
         if tenant["status"] == TenantStatus.ACTIVE:
             logger.warning(

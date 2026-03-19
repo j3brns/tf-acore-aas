@@ -171,6 +171,40 @@ describe('TenantStack (TASK-025)', () => {
     ]);
   });
 
+  test('creates per-tenant CloudWatch dashboard and budget alarm', () => {
+    const template = synthTemplate({
+      ...defaultContext,
+      monthlyBudgetUsd: '500',
+    });
+
+    template.hasResourceProperties('AWS::CloudWatch::Dashboard', {
+      DashboardName: 'platform-tenant-t-test123',
+      DashboardBody: Match.anyValue(),
+    });
+
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'platform-tenant-t-test123-budget-exceeded',
+      AlarmDescription: 'Monthly budget exceeded for tenant t-test123 (Limit: $500)',
+      Threshold: 500,
+      ComparisonOperator: 'GreaterThanThreshold',
+      MetricName: 'MonthlyCost',
+      Namespace: 'Platform/Billing',
+      Dimensions: Match.arrayWith([
+        Match.objectLike({ Name: 'TenantId', Value: 't-test123' }),
+        Match.objectLike({ Name: 'Tier', Value: 'basic' }),
+      ]),
+    });
+  });
+
+  test('uses default budget if context is missing', () => {
+    const template = synthTemplate(defaultContext);
+
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'platform-tenant-t-test123-budget-exceeded',
+      Threshold: 100, // Default in code
+    });
+  });
+
   test('fails if context is missing', () => {
     const app = new cdk.App();
     expect(() => {
