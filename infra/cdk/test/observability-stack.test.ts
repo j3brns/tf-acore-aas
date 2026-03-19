@@ -109,13 +109,30 @@ describe('ObservabilityStack (TASK-026)', () => {
     });
   });
 
+  test('exposes sink-only observability topology and no OAM links yet', () => {
+    const template = synthStack();
+    template.resourceCountIs('AWS::Oam::Link', 0);
+    template.hasOutput('CrossRegionObservabilityTopology', {
+      Value: 'SINK_ONLY_NO_OAM_LINKS',
+    });
+  });
+
   test('creates WAF and CloudFront alarms', () => {
     const template = synthStack();
+    const api5xxAlarmName = ['ObservabilityStack', 'Platform', 'API', '5xx', 'Errors'].join('-');
+    const wafBlockedAlarmName = [
+      'ObservabilityStack',
+      'Platform',
+      'WAF',
+      'Blocked',
+      'Requests',
+    ].join('-');
+
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'ObservabilityStack-Platform-API-5xx-Errors',
+      AlarmName: api5xxAlarmName,
     });
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-      AlarmName: 'ObservabilityStack-Platform-WAF-Blocked-Requests',
+      AlarmName: wafBlockedAlarmName,
     });
   });
 });
