@@ -350,18 +350,18 @@ is represented today by the AgentCoreStack metric stream into eu-west-2 dashboar
 
 ## Failure Modes
 
-| ID | Failure | Detection | Response |
-|----|---------|-----------|----------|
-| FM-1 | Runtime region unavailable | `ServiceUnavailableException` | [RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md) |
-| FM-2 | Authoriser cold start spike | P99 > 500ms | Provisioned concurrency |
-| FM-3 | Secrets Manager throttling | Cache miss rate | By design (Lambda /tmp cache with TTL) |
-| FM-4 | DynamoDB hot partition | Throttle events on invocations table | Jitter suffix on SK |
-| FM-5 | Bridge Lambda timeout | 504 to client | 16-min Lambda timeout |
-| FM-6 | Interceptor retry storm | DLQ alarm | Idempotency key |
-| FM-7 | AgentCore Memory unavailable | Degraded mode metric | Agent runs without long-term memory |
-| FM-8 | Usage plan quota exhausted | 429 from API Gateway | By design (native enforcement) |
-| FM-9 | DLQ message arrival | DLQ CloudWatch alarm | [RUNBOOK-005](operations/RUNBOOK-005-dlq-management.md) |
-| FM-10 | Billing Lambda failure | DLQ alarm | [RUNBOOK-006](operations/RUNBOOK-006-budget-and-suspension.md) |
+| ID | Failure | Detection | Alarm | Response |
+|----|---------|-----------|-------|----------|
+| FM-1 | Runtime region unavailable | `ServiceUnavailableException` | `FM-1-RuntimeRegionUnavailable` | [RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md) |
+| FM-2 | Authoriser cold start spike | P99 > 500ms | `FM-2-AuthoriserColdStartSpike` | Provisioned concurrency |
+| FM-3 | Secrets Manager throttling | Cache miss rate | `FM-3-SecretsManagerThrottling` | By design (Lambda /tmp cache with TTL) |
+| FM-4 | DynamoDB hot partition | Throttle events on invocations table | `FM-4-DynamoDbHotPartition` | Jitter suffix on SK |
+| FM-5 | Bridge Lambda timeout | 504 to client | `FM-5-BridgeTimeout` | 16-min Lambda timeout |
+| FM-6 | Interceptor retry storm | Interceptor error rate | `FM-6-InterceptorRetryStorm` | Idempotency key |
+| FM-7 | AgentCore Memory unavailable | Degraded mode metric | `FM-7-AgentCoreMemoryDegraded` | Agent runs without long-term memory |
+| FM-8 | Usage plan quota exhausted | 429 from API Gateway | `FM-8-UsagePlanQuotaExhausted` | By design (native enforcement) |
+| FM-9 | DLQ message arrival | DLQ CloudWatch alarm | `FM-9-DLQ-Arrival-{name}` | [RUNBOOK-005](operations/RUNBOOK-005-dlq-management.md) |
+| FM-10 | Billing Lambda failure | Billing Lambda errors | `FM-10-BillingLambdaFailure` | [RUNBOOK-006](operations/RUNBOOK-006-budget-and-suspension.md) |
 
 ## Security Model
 
