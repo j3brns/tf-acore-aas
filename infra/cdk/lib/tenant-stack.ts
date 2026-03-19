@@ -53,16 +53,36 @@ export class TenantStack extends cdk.Stack {
       throw new Error('env context is required');
     }
 
-    const tenantId = this.node.tryGetContext('tenantId') || 'stub';
-    const tier = this.node.tryGetContext('tier') || 'basic';
-    const accountId = this.node.tryGetContext('accountId') || cdk.Aws.ACCOUNT_ID;
-    const monthlyBudgetUsd = parseFloat(this.node.tryGetContext('monthlyBudgetUsd') || '100');
+    const tenantIdParam = new cdk.CfnParameter(this, 'tenantId', {
+      type: 'String',
+      description: 'The unique identifier for the tenant',
+      noEcho: false,
+    });
+    const tierParam = new cdk.CfnParameter(this, 'tier', {
+      type: 'String',
+      description: 'The service tier for the tenant (basic, standard, premium)',
+      default: 'basic',
+    });
+    const accountIdParam = new cdk.CfnParameter(this, 'accountId', {
+      type: 'String',
+      description: 'The AWS account ID where tenant-scoped resources are authorized',
+      default: cdk.Aws.ACCOUNT_ID,
+    });
+    const monthlyBudgetUsdParam = new cdk.CfnParameter(this, 'monthlyBudgetUsd', {
+      type: 'Number',
+      description: 'Monthly budget in USD for the tenant',
+      default: 100,
+    });
+
+    const tenantId = this.node.tryGetContext('tenantId') || tenantIdParam.valueAsString;
+    const tier = this.node.tryGetContext('tier') || tierParam.valueAsString;
+    const accountId = this.node.tryGetContext('accountId') || accountIdParam.valueAsString;
+    const monthlyBudgetUsdContext = this.node.tryGetContext('monthlyBudgetUsd');
+    const monthlyBudgetUsd = monthlyBudgetUsdContext ? parseFloat(monthlyBudgetUsdContext) : monthlyBudgetUsdParam.valueAsNumber;
 
     const authorizedRuntimeRegions = resolveAuthorizedRuntimeRegions(
       props?.authorizedRuntimeRegions,
     );
-
-    const isStub = tenantId === 'stub';
 
     // 1. Look up shared resources from SSM
     const tenantDataKeyArn = ssm.StringParameter.valueForStringParameter(
@@ -73,10 +93,10 @@ export class TenantStack extends cdk.Stack {
       this,
       `/platform/core/${env}/rest-api-id`,
     );
-    const usagePlanId = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/platform/core/${env}/usage-plan-${tier}-id`,
-    );
+    const usagePlanId = ssm.StringParameter.fromStringParameterAttributes(this, 'UsagePlanIdLookup', {
+      parameterName: `/platform/core/${env}/usage-plan-${tier}-id`,
+      simpleName: false,
+    }).stringValue;
     const bridgeLambdaRoleArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/platform/core/${env}/bridge-lambda-role-arn`,
@@ -188,21 +208,24 @@ export class TenantStack extends cdk.Stack {
     usagePlan.addApiKey(apiKey);
 
     // 5. SSM Parameters for tenant configuration (used by Bridge/Authoriser)
-    new ssm.StringParameter(this, 'TenantExecutionRoleArnParam', {
-      parameterName: `/platform/tenants/${tenantId}/execution-role-arn`,
-      stringValue: executionRole.roleArn,
+    new ssm.CfnParameter(this, 'TenantExecutionRoleArnParam', {
+      name: `/platform/tenants/${tenantId}/execution-role-arn`,
+      type: 'String',
+      value: executionRole.roleArn,
       description: `Execution role ARN for tenant ${tenantId}`,
     });
 
-    new ssm.StringParameter(this, 'TenantMemoryStoreArnParam', {
-      parameterName: `/platform/tenants/${tenantId}/memory-store-arn`,
-      stringValue: memoryStore.getAtt('Arn').toString(),
+    new ssm.CfnParameter(this, 'TenantMemoryStoreArnParam', {
+      name: `/platform/tenants/${tenantId}/memory-store-arn`,
+      type: 'String',
+      value: memoryStore.getAtt('Arn').toString(),
       description: `Memory store ARN for tenant ${tenantId}`,
     });
 
-    new ssm.StringParameter(this, 'TenantApiKeyIdParam', {
-      parameterName: `/platform/tenants/${tenantId}/api-key-id`,
-      stringValue: apiKey.keyId,
+    new ssm.CfnParameter(this, 'TenantApiKeyIdParam', {
+      name: `/platform/tenants/${tenantId}/api-key-id`,
+      type: 'String',
+      value: apiKey.keyId,
       description: `API key ID for tenant ${tenantId}`,
     });
 

@@ -534,6 +534,9 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.created"
     assert detail["tenantId"] == "t-001"
+    assert detail["appId"] == "app-001"
+    assert detail["tier"] == "standard"
+    assert detail["accountId"] == "123456789012"
 
 
 def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, Any]) -> None:

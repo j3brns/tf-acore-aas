@@ -36,6 +36,7 @@ describe('TenantStack (TASK-025)', () => {
     tenantId: 't-test123',
     tier: 'basic',
     accountId: '123456789012',
+    monthlyBudgetUsd: '100',
   };
 
   test('creates tenant execution role with scoped DynamoDB and S3 permissions', () => {
