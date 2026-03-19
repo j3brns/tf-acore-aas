@@ -73,11 +73,10 @@ make bootstrap-post-deploy ENV=dev
 ### Step 6: Smoke Test
 ```bash
 make bootstrap-verify ENV=dev
-# Invokes echo-agent as admin user
-# Checks all 10 FM alarms exist and are in OK state
-# Checks quota headroom (should be near 0%)
-# Prints: "Bootstrap complete. Delete bootstrap IAM user."
-# Expected output: All checks pass
+# Validates the deployed stacks and seeded records
+# Invokes echo-agent as admin user when BOOTSTRAP_ADMIN_JWT is set
+# Prints the recorded verification summary to bootstrap-report.json
+# Expected output: stack, seed, and smoke checks pass
 ```
 
 ### Step 7: Delete Bootstrap IAM User (MANDATORY)
