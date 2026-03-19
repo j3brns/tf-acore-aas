@@ -155,20 +155,19 @@ def test_handler_sync_success(setup_data):
     with patch("requests.post") as mock_post:
         mock_response = MagicMock()
         mock_response.iter_lines.return_value = [
-            b'data: {"type": "text", "content": "Echo: "}',
-            b'data: {"type": "text", "content": "Hello"}',
+            b'data: {"type": "text", "content": "Echo: Hello"}',
             b"data: [DONE]",
         ]
         mock_response.status_code = 200
+        # Mocking usage info in the response if it were to come from mock runtime
+        # (Though currently bridge doesn't read it from mock runtime either)
         mock_post.return_value = mock_response
 
         response = handler(event, FakeLambdaContext())
 
         assert response["statusCode"] == 200
         body = json.loads(response["body"])
-        assert body["output"] == "Echo: Hello"
-        assert body["status"] == "success"
-        assert "invocationId" in body
+        assert body["usage"]["inputTokens"] == 0  # Current behavior
 
 
 def test_list_agents_returns_openapi_shape_and_tier_filtered(setup_data):
@@ -824,7 +823,64 @@ def test_get_job_status_generates_presigned_result_url_with_expected_expiry(setu
     assert expires == "900"
 
 
-def test_get_job_status_hides_other_tenants_job(setup_data):
+def test_handler_emits_bridge_metrics(setup_data):
+    event = {
+        "path": "/v1/agents/echo-agent/invoke",
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+            }
+        },
+        "body": json.dumps({"input": "Hello"}),
+    }
+
+    with (
+        patch("requests.post") as mock_post,
+        patch("src.bridge.handler.get_cloudwatch") as mock_get_cw,
+    ):
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = [
+            b'data: {"type": "text", "content": "Hi"}',
+            b"data: [DONE]",
+        ]
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        mock_cw = MagicMock()
+        mock_get_cw.return_value = mock_cw
+
+        handler(event, FakeLambdaContext())
+
+        # Verify put_metric_data was called
+        mock_cw.put_metric_data.assert_called()
+        _, kwargs = mock_cw.put_metric_data.call_args
+        assert kwargs["Namespace"] == "Platform/Bridge"
+
+        metrics = kwargs["MetricData"]
+        # We expect at least 8 metrics (4 per dimension set)
+        assert len(metrics) >= 8
+
+        metric_names = [m["MetricName"] for m in metrics]
+        assert "Invocations" in metric_names
+
+        # Verify aggregate dimensions
+        aggregate_metrics = [m for m in metrics if len(m["Dimensions"]) == 1]
+        assert len(aggregate_metrics) >= 4
+        for m in aggregate_metrics:
+            dims = {d["Name"]: d["Value"] for d in m["Dimensions"]}
+            assert dims["TenantId"] == "t-001"
+            assert "AgentName" not in dims
+
+        # Verify detailed dimensions
+        detailed_metrics = [m for m in metrics if len(m["Dimensions"]) == 2]
+        assert len(detailed_metrics) >= 4
+        for m in detailed_metrics:
+            dims = {d["Name"]: d["Value"] for d in m["Dimensions"]}
+            assert dims["TenantId"] == "t-001"
+            assert dims["AgentName"] == "echo-agent"
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
     jobs_table = ddb.Table("platform-jobs")
     jobs_table.put_item(

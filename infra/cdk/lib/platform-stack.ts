@@ -446,6 +446,12 @@ export class PlatformStack extends cdk.Stack {
     );
     this.billingFn.addToRolePolicy(
       new iam.PolicyStatement({
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      }),
+    );
+    this.billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
         actions: ['events:PutEvents'],
         resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
       }),
@@ -805,6 +811,36 @@ export class PlatformStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    apiAccessLogGroup.addMetricFilter('TenantRequestCountFilter', {
+      metricName: 'RequestCount',
+      metricNamespace: 'Platform/API',
+      metricValue: '1',
+      filterPattern: logs.FilterPattern.exists('$.tenantId'),
+      dimensions: {
+        TenantId: '$.tenantId',
+      },
+    });
+
+    apiAccessLogGroup.addMetricFilter('TenantErrorCountFilter', {
+      metricName: 'ErrorCount',
+      metricNamespace: 'Platform/API',
+      metricValue: '1',
+      filterPattern: logs.FilterPattern.numberValue('$.status', '>=', 400),
+      dimensions: {
+        TenantId: '$.tenantId',
+      },
+    });
+
+    apiAccessLogGroup.addMetricFilter('TenantLatencyFilter', {
+      metricName: 'Latency',
+      metricNamespace: 'Platform/API',
+      metricValue: '$.latency',
+      filterPattern: logs.FilterPattern.exists('$.latency'),
+      dimensions: {
+        TenantId: '$.tenantId',
+      },
+    });
+
     this.api = new apigateway.RestApi(this, 'PlatformRestApi', {
       restApiName: `${this.stackName}-rest-api`,
       description: 'Platform northbound REST API (ADR-003)',
@@ -841,14 +877,15 @@ export class PlatformStack extends cdk.Stack {
           requestTime: '$context.requestTime',
           httpMethod: '$context.httpMethod',
           resourcePath: '$context.resourcePath',
-          status: '$context.status',
+          status: 0, // Placeholder for numeric type in JSON.stringify
           protocol: '$context.protocol',
-          responseLength: '$context.responseLength',
+          responseLength: 0, // Placeholder
           tenantId: '$context.authorizer.tenantid',
           appId: '$context.authorizer.appid',
           sub: '$context.authorizer.sub',
           tier: '$context.authorizer.tier',
-        })),
+          latency: 0, // Placeholder
+        }).replace(':0', ':$context.status').replace(':0', ':$context.responseLength').replace(':0', ':$context.responseLatency')),
         dataTraceEnabled: false,
         loggingLevel: apigateway.MethodLoggingLevel.INFO,
         methodOptions: {

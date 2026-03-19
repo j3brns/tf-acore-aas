@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
@@ -303,3 +303,34 @@ def test_pricing_lookup_failure_is_reported_in_pipeline_logs(
         "Billing pricing resolution failed",
         extra={"pricing_path": f"/platform/billing/pricing/{TIER}", "tier": TIER},
     )
+
+
+def test_billing_emits_token_metrics(mock_aws_clients: Any) -> None:
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    _seed_tenant(ddb)
+
+    # Seed invocations for "yesterday"
+    yesterday = datetime.now(UTC) - timedelta(days=1)
+    ts = yesterday.replace(hour=10).isoformat()
+
+    _seed_invocation(ddb, timestamp=ts, input_tokens=1000, output_tokens=500)
+
+    # Run handler with cloudwatch patch
+    event = {"date": yesterday.date().isoformat()}
+    with patch("src.billing.handler._cloudwatch") as mock_cw:
+        lambda_handler(event, MagicMock())
+
+        # Verify put_metric_data was called with token metrics
+        mock_cw.put_metric_data.assert_called()
+        _, kwargs = mock_cw.put_metric_data.call_args
+        metrics = kwargs["MetricData"]
+        metric_names = [m["MetricName"] for m in metrics]
+
+        assert "InputTokens" in metric_names
+        assert "OutputTokens" in metric_names
+
+        for m in metrics:
+            if m["MetricName"] == "InputTokens":
+                assert m["Value"] == 1000.0
+            if m["MetricName"] == "OutputTokens":
+                assert m["Value"] == 500.0

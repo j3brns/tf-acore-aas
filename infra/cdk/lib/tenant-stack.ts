@@ -17,6 +17,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
@@ -67,10 +68,17 @@ export class TenantStack extends cdk.Stack {
       description: 'The AWS account ID where tenant-scoped resources are authorized',
       default: cdk.Aws.ACCOUNT_ID,
     });
+    const monthlyBudgetUsdParam = new cdk.CfnParameter(this, 'monthlyBudgetUsd', {
+      type: 'Number',
+      description: 'Monthly budget in USD for the tenant',
+      default: 100,
+    });
 
-    const tenantId = tenantIdParam.valueAsString;
-    const tier = tierParam.valueAsString;
-    const accountId = accountIdParam.valueAsString;
+    const tenantId = this.node.tryGetContext('tenantId') || tenantIdParam.valueAsString;
+    const tier = this.node.tryGetContext('tier') || tierParam.valueAsString;
+    const accountId = this.node.tryGetContext('accountId') || accountIdParam.valueAsString;
+    const monthlyBudgetUsdContext = this.node.tryGetContext('monthlyBudgetUsd');
+    const monthlyBudgetUsd = monthlyBudgetUsdContext ? parseFloat(monthlyBudgetUsdContext) : monthlyBudgetUsdParam.valueAsNumber;
 
     const authorizedRuntimeRegions = resolveAuthorizedRuntimeRegions(
       props?.authorizedRuntimeRegions,
@@ -221,9 +229,216 @@ export class TenantStack extends cdk.Stack {
       description: `API key ID for tenant ${tenantId}`,
     });
 
-    // 6. Outputs
+    // 6. Per-Tenant Observability (TASK-026/TASK-290)
+
+    const dashboard = new cloudwatch.Dashboard(this, 'TenantDashboard', {
+      dashboardName: `platform-tenant-${tenantId}`,
+    });
+
+    const tenantDimensions = { TenantId: tenantId };
+
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        markdown: `# Tenant Usage: ${tenantId} (${tier} tier)`,
+        width: 24,
+        height: 1,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'API Request Count',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/API',
+            metricName: 'RequestCount',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(5),
+          }),
+        ],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'API Latency (p99)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/API',
+            metricName: 'Latency',
+            dimensionsMap: tenantDimensions,
+            statistic: 'p99',
+            period: cdk.Duration.minutes(5),
+          }),
+        ],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'API Errors (4xx/5xx)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/API',
+            metricName: 'ErrorCount',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(5),
+          }),
+        ],
+        width: 8,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        markdown: '# Agent Performance (Bridge Real-time)',
+        width: 24,
+        height: 1,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Invocations (Count)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Bridge',
+            metricName: 'Invocations',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(5),
+          }),
+        ],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Bridge Latency (Avg)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Bridge',
+            metricName: 'Latency',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Average',
+            period: cdk.Duration.minutes(5),
+          }),
+        ],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Bridge Errors (Count)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Bridge',
+            metricName: 'Errors',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(5),
+          }),
+        ],
+        width: 8,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        markdown: '# Token Usage',
+        width: 24,
+        height: 1,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Daily Token Usage (Cumulative Monthly)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Billing',
+            metricName: 'InputTokens',
+            dimensionsMap: { ...tenantDimensions, Tier: tier },
+            statistic: 'Maximum',
+            period: cdk.Duration.days(1),
+            label: 'Input Tokens',
+          }),
+          new cloudwatch.Metric({
+            namespace: 'Platform/Billing',
+            metricName: 'OutputTokens',
+            dimensionsMap: { ...tenantDimensions, Tier: tier },
+            statistic: 'Maximum',
+            period: cdk.Duration.days(1),
+            label: 'Output Tokens',
+          }),
+        ],
+        width: 12,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Real-time Token Throughput',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Bridge',
+            metricName: 'InputTokens',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(5),
+            label: 'Input (5m Sum)',
+          }),
+          new cloudwatch.Metric({
+            namespace: 'Platform/Bridge',
+            metricName: 'OutputTokens',
+            dimensionsMap: tenantDimensions,
+            statistic: 'Sum',
+            period: cdk.Duration.minutes(5),
+            label: 'Output (5m Sum)',
+          }),
+        ],
+        width: 12,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        markdown: '# Billing & Budget',
+        width: 24,
+        height: 1,
+      }),
+      new cloudwatch.SingleValueWidget({
+        title: 'Current Monthly Cost (USD)',
+        metrics: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Billing',
+            metricName: 'MonthlyCost',
+            dimensionsMap: { ...tenantDimensions, Tier: tier },
+            statistic: 'Maximum',
+            period: cdk.Duration.days(1),
+          }),
+        ],
+        width: 12,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Daily Cost Trend (USD)',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'Platform/Billing',
+            metricName: 'DailyCost',
+            dimensionsMap: { ...tenantDimensions, Tier: tier },
+            statistic: 'Sum',
+            period: cdk.Duration.days(1),
+          }),
+        ],
+        width: 12,
+      }),
+    );
+
+    // Budget Alarm: Triggers if MonthlyCost exceeds monthlyBudgetUsd
+    const budgetAlarm = new cloudwatch.Alarm(this, 'TenantBudgetAlarm', {
+      alarmName: `platform-tenant-${tenantId}-budget-exceeded`,
+      alarmDescription: `Monthly budget exceeded for tenant ${tenantId} (Limit: $${monthlyBudgetUsd})`,
+      metric: new cloudwatch.Metric({
+        namespace: 'Platform/Billing',
+        metricName: 'MonthlyCost',
+        dimensionsMap: { ...tenantDimensions, Tier: tier },
+        statistic: 'Maximum',
+        period: cdk.Duration.hours(6), // Check every 6 hours
+      }),
+      threshold: monthlyBudgetUsd,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // 7. Outputs
     new cdk.CfnOutput(this, 'ExecutionRoleArn', { value: executionRole.roleArn });
     new cdk.CfnOutput(this, 'MemoryStoreArn', { value: memoryStore.getAtt('Arn').toString() });
     new cdk.CfnOutput(this, 'ApiKeyId', { value: apiKey.keyId });
+    new cdk.CfnOutput(this, 'DashboardName', { value: dashboard.dashboardName });
+    new cdk.CfnOutput(this, 'BudgetAlarmArn', { value: budgetAlarm.alarmArn });
   }
 }

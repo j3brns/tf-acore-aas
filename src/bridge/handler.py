@@ -89,6 +89,7 @@ VALID_WEBHOOK_EVENTS = {"job.completed", "job.failed"}
 _ssm_client = None
 _sts_client = None
 _dynamodb_resource = None
+_cloudwatch_client = None
 
 # Cache for SSM parameters (60s TTL as per ARCHITECTURE.md)
 _config_cache: dict[str, Any] = {}
@@ -118,6 +119,13 @@ def get_dynamodb():
     if _dynamodb_resource is None:
         _dynamodb_resource = boto3.resource("dynamodb", region_name=_aws_region())
     return _dynamodb_resource
+
+
+def get_cloudwatch():
+    global _cloudwatch_client
+    if _cloudwatch_client is None:
+        _cloudwatch_client = boto3.client("cloudwatch", region_name=_aws_region())
+    return _cloudwatch_client
 
 
 def get_runtime_client(region: str, credentials: dict[str, Any] | None = None) -> Any:
@@ -1373,6 +1381,11 @@ def invoke_real_runtime(
         _coerce_optional_string(runtime_response.get("runtimeSessionId")) or session_id
     )
 
+    # Extract usage if available
+    usage = runtime_response.get("usage", {})
+    input_tokens = int(usage.get("inputTokens", 0))
+    output_tokens = int(usage.get("outputTokens", 0))
+
     if agent.invocation_mode == InvocationMode.STREAMING:
         if not response_stream:
             _close_runtime_body(runtime_body)
@@ -1412,6 +1425,8 @@ def invoke_real_runtime(
             InvocationStatus.SUCCESS,
             latency_ms,
             InvocationMode.STREAMING,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             session_id=runtime_session_id,
             runtime_region=region,
         )
@@ -1483,6 +1498,8 @@ def invoke_real_runtime(
             InvocationStatus.SUCCESS,
             latency_ms,
             InvocationMode.ASYNC,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             job_id=job_id,
             session_id=runtime_session_id or session_id or "async-session",
             runtime_region=region,
@@ -1511,6 +1528,8 @@ def invoke_real_runtime(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.SYNC,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         session_id=runtime_session_id or "unknown-session",
         runtime_region=region,
     )
@@ -1527,7 +1546,11 @@ def invoke_real_runtime(
                 "output": output_text,
                 "sessionId": runtime_session_id,
                 "timestamp": datetime.now(UTC).isoformat(),
-                "usage": {"inputTokens": 0, "outputTokens": 0, "latencyMs": latency_ms},
+                "usage": {
+                    "inputTokens": input_tokens,
+                    "outputTokens": output_tokens,
+                    "latencyMs": latency_ms,
+                },
             }
         ),
     }
@@ -1643,6 +1666,8 @@ def handle_sync_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.SYNC,
+        input_tokens=0,
+        output_tokens=0,
         session_id=effective_session_id,
     )
 
@@ -1711,6 +1736,8 @@ def handle_streaming_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.STREAMING,
+        input_tokens=0,
+        output_tokens=0,
         session_id=effective_session_id,
     )
     return None
@@ -1776,6 +1803,8 @@ def handle_async_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.ASYNC,
+        input_tokens=0,
+        output_tokens=0,
         job_id=job_id,
         session_id=session_id or "async-session",
     )
@@ -1802,6 +1831,8 @@ def log_invocation(
     status: InvocationStatus,
     latency_ms: int,
     mode: InvocationMode,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
     job_id: str | None = None,
     session_id: str | None = None,
     error_code: str | None = None,
@@ -1823,8 +1854,8 @@ def log_invocation(
             agent_name=agent.agent_name,
             agent_version=agent.version,
             session_id=session_id or "unknown-session",
-            input_tokens=0,
-            output_tokens=0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             latency_ms=latency_ms,
             status=status,
             runtime_region=runtime_region or get_config()["runtime_region"],
@@ -1862,8 +1893,87 @@ def log_invocation(
             item["error_code"] = record.error_code
 
         db.put_item(INVOCATIONS_TABLE, item)
+
+        # Emit real-time metrics for observability (TASK-290)
+        emit_invocation_metrics(
+            tenant_context, agent, status, latency_ms, input_tokens, output_tokens
+        )
     except Exception:
         logger.exception("Failed to log invocation")
+
+
+def emit_invocation_metrics(
+    tenant_context: TenantContext,
+    agent: AgentRecord,
+    status: InvocationStatus,
+    latency_ms: int,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Emit real-time invocation metrics to CloudWatch."""
+    try:
+        cw = get_cloudwatch()
+
+        # We emit two sets of metrics:
+        # 1. Detailed: {TenantId, AgentName}
+        # 2. Aggregate: {TenantId} (for the tenant dashboard)
+
+        dimensions_sets = [
+            [
+                {"Name": "TenantId", "Value": tenant_context.tenant_id},
+                {"Name": "AgentName", "Value": agent.agent_name},
+            ],
+            [
+                {"Name": "TenantId", "Value": tenant_context.tenant_id},
+            ],
+        ]
+
+        metric_data = []
+        for dims in dimensions_sets:
+            metric_data.extend(
+                [
+                    {
+                        "MetricName": "Invocations",
+                        "Value": 1.0,
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    },
+                    {
+                        "MetricName": "Latency",
+                        "Value": float(latency_ms),
+                        "Unit": "Milliseconds",
+                        "Dimensions": dims,
+                    },
+                    {
+                        "MetricName": "InputTokens",
+                        "Value": float(input_tokens),
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    },
+                    {
+                        "MetricName": "OutputTokens",
+                        "Value": float(output_tokens),
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    },
+                ]
+            )
+
+            if status != InvocationStatus.SUCCESS:
+                metric_data.append(
+                    {
+                        "MetricName": "Errors",
+                        "Value": 1.0,
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    }
+                )
+
+        # CloudWatch PutMetricData has a limit of 1000 metrics per call
+        # but here we have at most 10 metrics (5 names * 2 sets), so it's fine.
+        cw.put_metric_data(Namespace="Platform/Bridge", MetricData=metric_data)
+    except Exception as e:
+        logger.warning(f"Failed to emit invocation metrics: {e}")
 
 
 def log_job(tenant_context: TenantContext, record: JobRecord) -> None:
