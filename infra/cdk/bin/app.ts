@@ -96,6 +96,7 @@ new ObservabilityStack(app, `platform-observability-${env}`, {
   sessionsTable: platformStack.sessionsTable,
   toolsTable: platformStack.toolsTable,
   opsLocksTable: platformStack.opsLocksTable,
+  billingFn: platformStack.billingFn,
   dlqs: platformStack.dlqs,
 });
 

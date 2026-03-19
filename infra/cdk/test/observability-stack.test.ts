@@ -62,6 +62,7 @@ describe('ObservabilityStack (TASK-026)', () => {
       sessionsTable: platformStack.sessionsTable,
       toolsTable: platformStack.toolsTable,
       opsLocksTable: platformStack.opsLocksTable,
+      billingFn: platformStack.billingFn,
       dlqs: platformStack.dlqs,
     });
 
@@ -93,11 +94,62 @@ describe('ObservabilityStack (TASK-026)', () => {
     });
   });
 
+  test('creates FM-3 Secrets Manager Throttling alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-3-SecretsManagerThrottling',
+      MetricName: 'SecretsManagerCacheMissCount',
+    });
+  });
+
   test('creates FM-4 DynamoDB Hot Partition alarm', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'ObservabilityStack-FM-4-DynamoDbHotPartition',
       MetricName: 'ThrottledRequests',
+    });
+  });
+
+  test('creates FM-5 Bridge Timeout alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-5-BridgeTimeout',
+    });
+  });
+
+  test('creates FM-6 Interceptor Retry Storm alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-6-InterceptorRetryStorm',
+    });
+  });
+
+  test('creates FM-7 AgentCore Memory Degraded alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-7-AgentCoreMemoryDegraded',
+      MetricName: 'DegradedMode',
+    });
+  });
+
+  test('creates FM-8 Usage Plan Quota Exhausted alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-8-UsagePlanQuotaExhausted',
+    });
+  });
+
+  test('creates FM-9 DLQ Arrival alarms for each DLQ', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: Match.stringLikeRegexp('ObservabilityStack-FM-9-DLQ-Arrival-'),
+    });
+  });
+
+  test('creates FM-10 Billing Lambda Failure alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-10-BillingLambdaFailure',
     });
   });
 
@@ -109,7 +161,7 @@ describe('ObservabilityStack (TASK-026)', () => {
     });
   });
 
-  test('creates WAF and CloudFront alarms', () => {
+  test('creates WAF and API 5xx alarms', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'ObservabilityStack-Platform-API-5xx-Errors',
@@ -117,5 +169,26 @@ describe('ObservabilityStack (TASK-026)', () => {
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'ObservabilityStack-Platform-WAF-Blocked-Requests',
     });
+  });
+
+  test('every documented FM (1-10) has a corresponding alarm', () => {
+    const template = synthStack();
+    const documentedFMs = [
+      'FM-1-RuntimeRegionUnavailable',
+      'FM-2-AuthoriserColdStartSpike',
+      'FM-3-SecretsManagerThrottling',
+      'FM-4-DynamoDbHotPartition',
+      'FM-5-BridgeTimeout',
+      'FM-6-InterceptorRetryStorm',
+      'FM-7-AgentCoreMemoryDegraded',
+      'FM-8-UsagePlanQuotaExhausted',
+      'FM-9-DLQ-Arrival-',
+      'FM-10-BillingLambdaFailure',
+    ];
+    for (const fm of documentedFMs) {
+      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        AlarmName: Match.stringLikeRegexp(`ObservabilityStack-${fm}`),
+      });
+    }
   });
 });
