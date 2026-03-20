@@ -782,9 +782,10 @@ def test_cmd_wt_batch_writes_manifest_and_launches_detached_agents(monkeypatch, 
             stream_label=None,
             mode="auto",
             count=2,
-            agents="gemini,codex",
+            agents="gemini",
             agent_mode="yolo",
             base_dir=None,
+            interactive=False,
             dry_run=False,
         )
     )
@@ -890,9 +891,10 @@ def test_cmd_wt_batch_reuses_existing_worktree_when_agent_not_running(
             stream_label=None,
             mode="auto",
             count=1,
-            agents="gemini,codex",
+            agents="gemini",
             agent_mode="yolo",
             base_dir=None,
+            interactive=False,
             dry_run=False,
         )
     )
@@ -1001,9 +1003,10 @@ def test_cmd_wt_batch_skips_existing_worktree_with_running_agent(monkeypatch, ca
             stream_label=None,
             mode="auto",
             count=2,
-            agents="gemini,codex",
+            agents="gemini",
             agent_mode="yolo",
             base_dir=None,
+            interactive=False,
             dry_run=False,
         )
     )
@@ -1030,7 +1033,7 @@ def test_launch_agent_detached_writes_runtime_state(monkeypatch, tmp_path):
         issue_number=41,
         path=worktree,
         branch="wt/infra/41-test",
-        agent="codex",
+        agent="gemini",
         command='python3 -c "import time; time.sleep(5)"',
     )
 
@@ -1047,8 +1050,9 @@ def test_launch_agent_detached_writes_runtime_state(monkeypatch, tmp_path):
         assert status["run_id"] == "run-20260320-000004"
         assert status["issue_number"] == 41
         assert status["branch"] == "wt/infra/41-test"
-        assert status["agent"] == "codex"
+        assert status["agent"] == "gemini"
         assert status["state"] == "running"
+        assert status["backend"] == "detached"
         assert status["pid"] == result.pid
         assert status["orchestrator_manifest"].endswith(
             ".build/worktree-runs/run-20260320-000004/manifest.json"
@@ -1058,6 +1062,221 @@ def test_launch_agent_detached_writes_runtime_state(monkeypatch, tmp_path):
         if result.pid is not None and worktree_issues.pid_is_running(result.pid):
             os.kill(result.pid, signal.SIGTERM)
             subprocess.run(["bash", "-lc", f"wait {result.pid}"], check=False)
+
+
+def test_launch_agent_detached_rejects_tty_only_agents(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    worktree = tmp_path / "wt41"
+    root.mkdir(parents=True, exist_ok=True)
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda path: None)
+
+    with pytest.raises(worktree_issues.CliError, match="does not support detached startup"):
+        worktree_issues.launch_agent_detached(
+            root=root,
+            run_id="run-20260320-tty-only",
+            issue_number=41,
+            path=worktree,
+            branch="wt/infra/41-test",
+            agent="codex",
+            command="codex --yolo test",
+        )
+
+
+def test_launch_agent_detached_marks_early_exit_failed(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    worktree = tmp_path / "wt41"
+    root.mkdir(parents=True, exist_ok=True)
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda path: None)
+    created: dict[str, object] = {}
+
+    class _FakeProc:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            return 1
+
+    def _popen(cmd, **kwargs):
+        created["cmd"] = cmd
+        created["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(worktree_issues.subprocess, "Popen", _popen)
+
+    result = worktree_issues.launch_agent_detached(
+        root=root,
+        run_id="run-20260320-fail-fast",
+        issue_number=41,
+        path=worktree,
+        branch="wt/infra/41-test",
+        agent="gemini",
+        command="false",
+    )
+
+    assert result.state == "failed"
+    assert "startup probe" in result.detail
+    assert result.local_status_path is not None
+    assert created["cmd"][:2] == ["bash", "-lc"]
+    status = json.loads(result.local_status_path.read_text(encoding="utf-8"))
+    assert status["state"] == "failed"
+    assert worktree_issues.worktree_agent_running(worktree) is False
+
+
+def test_cmd_wt_batch_rejects_tty_only_agent_pool_in_detached_mode(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+
+    with pytest.raises(worktree_issues.CliError, match="Detached wt-batch does not support"):
+        worktree_issues.cmd_wt_batch(
+            argparse.Namespace(
+                repo=None,
+                stream_label=None,
+                mode="auto",
+                count=1,
+                agents="codex",
+                agent_mode="yolo",
+                base_dir=None,
+                interactive=False,
+                dry_run=False,
+            )
+        )
+
+
+def test_cmd_wt_batch_interactive_launches_tmux_session(monkeypatch, capsys, tmp_path):
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    tmux_calls: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(worktree_issues, "fetch_repo_issues", lambda *_args, **_kwargs: [issue_33])
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[worktree_issues.QueueItem(issue=issue_33, runnable=True)],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: tmp_path / "worktrees" / f"wt{kwargs['issue'].number}",
+    )
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+    monkeypatch.setattr(worktree_issues, "batch_run_id", lambda: "run-20260320-000005")
+    monkeypatch.setattr(
+        worktree_issues,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "wt/task/test\n", ""),
+    )
+    monkeypatch.setattr(worktree_issues, "tmux_available", lambda: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "worktree_session_pair",
+        lambda label: worktree_issues.SessionPair(label=label, session_name="wt-batch-20260320"),
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "launch_tmux_batch_session",
+        lambda **kwargs: tmux_calls.update(kwargs),
+    )
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=1,
+            agents="codex",
+            agent_mode="yolo",
+            base_dir=None,
+            interactive=True,
+            dry_run=False,
+        )
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert tmux_calls["session_name"] == "wt-batch-20260320"
+    assert tmux_calls["attach"] is True
+    assert tmux_calls["announce_windows"] is True
+    assert tmux_calls["launches"] == [
+        (
+            "wt33",
+            tmp_path / "worktrees" / "wt33",
+            "codex:yolo:prompt",
+        )
+    ]
+    assert "interactive: tmux session wt-batch-20260320" in out
+    status_path = tmp_path / "worktrees" / "wt33" / ".build" / "agent-run" / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["backend"] == "tmux"
+    assert status["state"] == "interactive"
+    assert status["session_name"] == "wt-batch-20260320"
+
+
+def test_cleanup_finished_worktree_changes_out_of_target_before_remove(
+    monkeypatch, capsys, tmp_path
+):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    target = worktree_issues.WorktreeInfo(
+        path=tmp_path / "worktrees" / "wt153",
+        head="abc123",
+        branch="wt/task/153-sample",
+        is_primary=False,
+    )
+    target.path.mkdir(parents=True, exist_ok=True)
+    changed_to: list[Path] = []
+    branch_deleted = False
+
+    monkeypatch.setattr(worktree_issues.os, "getcwd", lambda: str(target.path))
+    monkeypatch.setattr(worktree_issues.os, "chdir", lambda path: changed_to.append(Path(path)))
+    monkeypatch.setattr(
+        worktree_issues,
+        "local_branch_exists",
+        lambda _root, _branch: not branch_deleted,
+    )
+
+    def _run(cmd, *, cwd=None, **_kwargs):
+        nonlocal branch_deleted
+        if cmd[:3] == ["git", "worktree", "remove"]:
+            target.path.rmdir()
+        if cmd[:3] == ["git", "branch", "-d"]:
+            branch_deleted = True
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(worktree_issues, "run", _run)
+
+    result = worktree_issues.cleanup_finished_worktree(root, target)
+    out = capsys.readouterr().out
+
+    assert changed_to == [root]
+    assert result == {
+        "worktree_removed": True,
+        "branch_deleted": True,
+        "worktree_pruned": True,
+    }
+    assert f"Removed worktree {target.path}" in out
 
 
 def test_launch_tmux_batch_session_starts_grid(monkeypatch, capsys):

@@ -65,7 +65,7 @@ help:
 		echo "  Worktrees / issues"; \
 		ex "worktree" "open the interactive issue queue"; \
 		ex "wt-go" "launch the next runnable issue in zellij"; \
-		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini,codex${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}]" "start several detached agent runs with per-worktree logs"; \
+		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}] [INTERACTIVE=1]" "start detached runs or use tmux for interactive agent sessions"; \
 		ex "worktree-next-issue" "create a worktree for the next queued issue"; \
 		ex "worktree-create-issue" "create a worktree for a specific issue"; \
 		ex "worktree-resume-issue [OPEN_SHELL=off] [CMD='make test-unit']" "resume a linked issue worktree"; \
@@ -844,15 +844,16 @@ worktree-next-issue:
 		$(if $(PRINT_ONLY),--print-only,)
 
 ## wt-batch: Create multiple runnable issue worktrees and start detached agent runs
-## Usage: make wt-batch [COUNT=3] [AGENTS=gemini,codex] [AGENT_MODE=yolo]
+## Usage: make wt-batch [COUNT=3] [AGENTS=gemini] [AGENT_MODE=yolo] [INTERACTIVE=1]
 wt-batch:
 	uv run python scripts/worktree_issues.py wt-batch \
 		--count $(if $(COUNT),$(COUNT),3) \
-		--agents "$(if $(AGENTS),$(AGENTS),gemini,codex)" \
+		--agents "$(if $(AGENTS),$(AGENTS),$(if $(INTERACTIVE),gemini,codex,gemini))" \
 		--agent-mode "$(if $(AGENT_MODE),$(AGENT_MODE),yolo)" \
 		$(if $(QUEUE_MODE),--mode "$(QUEUE_MODE)",--mode auto) \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(BASE_DIR),--base-dir "$(BASE_DIR)",) \
+		$(if $(INTERACTIVE),--interactive,) \
 		$(if $(DRY_RUN),--dry-run,)
 
 ## worktree-create-issue: Create a worktree for a specific issue number

@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,13 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 WORKTREE_CLOSEOUT_DIR = ".build/worktree-closeouts"
 WORKTREE_RUNS_DIR = ".build/worktree-runs"
 WORKTREE_AGENT_RUN_DIR = ".build/agent-run"
+DETACHED_STARTUP_PROBE_SECONDS = 0.5
+DETACHED_STARTUP_PROBE_INTERVAL_SECONDS = 0.1
+AGENT_CAPABILITIES: dict[str, dict[str, bool]] = {
+    "gemini": {"requires_tty": False, "supports_detached": True},
+    "claude": {"requires_tty": True, "supports_detached": False},
+    "codex": {"requires_tty": True, "supports_detached": False},
+}
 
 
 class CliError(RuntimeError):
@@ -125,6 +133,9 @@ class BatchLaunchResult:
     local_status_path: Path | None = None
     stdout_log_path: Path | None = None
     stderr_log_path: Path | None = None
+    backend: str = "detached"
+    session_name: str | None = None
+    window_name: str | None = None
     detail: str = ""
 
 
@@ -1174,6 +1185,15 @@ def worktree_agent_running(path: Path) -> bool:
     status = worktree_agent_status(path)
     if not status:
         return False
+    backend = status.get("backend")
+    if backend == "tmux":
+        session_name = status.get("session_name")
+        state = status.get("state")
+        return (
+            isinstance(session_name, str)
+            and state == "interactive"
+            and tmux_session_exists(session_name)
+        )
     pid = status.get("pid")
     if not isinstance(pid, int):
         return False
@@ -1208,6 +1228,9 @@ def write_batch_entry(root: Path, run_id: str, entry: BatchLaunchResult) -> Path
         "command": entry.command,
         "state": entry.state,
         "pid": entry.pid,
+        "backend": entry.backend,
+        "session_name": entry.session_name,
+        "window_name": entry.window_name,
         "local_status_path": str(entry.local_status_path) if entry.local_status_path else None,
         "stdout_log_path": str(entry.stdout_log_path) if entry.stdout_log_path else None,
         "stderr_log_path": str(entry.stderr_log_path) if entry.stderr_log_path else None,
@@ -1215,6 +1238,27 @@ def write_batch_entry(root: Path, run_id: str, entry: BatchLaunchResult) -> Path
         "generated_at": datetime.now(UTC).isoformat(),
     }
     return write_json_file(batch_entry_path(root, run_id, entry.issue_number, entry.agent), payload)
+
+
+def agent_requires_tty(agent: str) -> bool:
+    return AGENT_CAPABILITIES.get(agent, {}).get("requires_tty", False)
+
+
+def agent_supports_detached(agent: str) -> bool:
+    return AGENT_CAPABILITIES.get(agent, {}).get("supports_detached", False)
+
+
+def read_log_tail(path: Path, *, line_count: int = 5) -> str:
+    if not path.exists():
+        return ""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(lines[-line_count:]).strip()
+
+
+def write_worktree_runtime_status(path: Path, payload: dict[str, object]) -> Path:
+    runtime_dir = worktree_agent_run_dir(path)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return write_json_file(runtime_dir / "status.json", payload)
 
 
 def launch_agent_detached(
@@ -1227,6 +1271,8 @@ def launch_agent_detached(
     agent: str,
     command: str,
 ) -> BatchLaunchResult:
+    if not agent_supports_detached(agent):
+        raise CliError(f"Agent '{agent}' does not support detached startup")
     ensure_uv_venv(path)
     runtime_dir = worktree_agent_run_dir(path)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -1244,14 +1290,26 @@ def launch_agent_detached(
             stderr=stderr_fp,
             start_new_session=True,
         )
-    state = "running" if proc.poll() is None else "failed"
-    detail = "started detached agent process" if state == "running" else "agent exited immediately"
+    try:
+        proc.wait(timeout=DETACHED_STARTUP_PROBE_SECONDS)
+        exited_early = True
+    except subprocess.TimeoutExpired:
+        exited_early = False
+
+    if not exited_early:
+        state = "running"
+        detail = "started detached agent process"
+    else:
+        state = "failed"
+        stderr_tail = read_log_tail(stderr_log)
+        detail = stderr_tail or "agent exited during detached startup probe"
     status_payload: dict[str, object] = {
         "run_id": run_id,
         "issue_number": issue_number,
         "agent": agent,
         "branch": branch,
         "command": command,
+        "backend": "detached",
         "state": state,
         "pid": proc.pid,
         "started_at": started_at,
@@ -1273,7 +1331,59 @@ def launch_agent_detached(
         local_status_path=status_path,
         stdout_log_path=stdout_log,
         stderr_log_path=stderr_log,
+        backend="detached",
         detail=detail,
+    )
+
+
+def record_tmux_agent_launch(
+    *,
+    root: Path,
+    run_id: str,
+    issue_number: int,
+    path: Path,
+    branch: str,
+    agent: str,
+    command: str,
+    session_name: str,
+    window_name: str,
+) -> BatchLaunchResult:
+    runtime_dir = worktree_agent_run_dir(path)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    stdout_log = runtime_dir / "stdout.log"
+    stderr_log = runtime_dir / "stderr.log"
+    status_payload: dict[str, object] = {
+        "run_id": run_id,
+        "issue_number": issue_number,
+        "agent": agent,
+        "branch": branch,
+        "command": command,
+        "backend": "tmux",
+        "state": "interactive",
+        "pid": None,
+        "session_name": session_name,
+        "window_name": window_name,
+        "stdout_log_path": str(stdout_log),
+        "stderr_log_path": str(stderr_log),
+        "orchestrator_manifest": str(batch_manifest_path(root, run_id)),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    status_path = write_worktree_runtime_status(path, status_payload)
+    return BatchLaunchResult(
+        issue_number=issue_number,
+        agent=agent,
+        worktree_path=path,
+        branch=branch,
+        command=command,
+        state="interactive",
+        pid=None,
+        local_status_path=status_path,
+        stdout_log_path=stdout_log,
+        stderr_log_path=stderr_log,
+        backend="tmux",
+        session_name=session_name,
+        window_name=window_name,
+        detail="started tmux interactive agent session",
     )
 
 
@@ -1658,6 +1768,95 @@ def launch_tmux_batch_session(
         os.execvp("tmux", ["tmux", "attach-session", "-t", session_name])
 
 
+def _launch_tmux_viewer_window(
+    *,
+    session_name: str,
+    window_name: str,
+    path: Path,
+    stdout_log_path: Path,
+    create_session: bool,
+) -> None:
+    path_str = str(path)
+    target = f"{session_name}:{window_name}"
+    venv_preamble = "if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi"
+    log_cmd = (
+        f"touch {shell_quote(str(stdout_log_path))} && "
+        f"tail -n 50 -f {shell_quote(str(stdout_log_path))}"
+    )
+
+    if create_session:
+        subprocess.run(
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "-n",
+                window_name,
+                "-c",
+                path_str,
+                "-x",
+                "220",
+                "-y",
+                "55",
+            ],
+            check=True,
+        )
+    else:
+        subprocess.run(
+            [
+                "tmux",
+                "new-window",
+                "-t",
+                session_name,
+                "-n",
+                window_name,
+                "-c",
+                path_str,
+            ],
+            check=True,
+        )
+
+    subprocess.run(["tmux", "split-window", "-h", "-t", target, "-c", path_str], check=True)
+    subprocess.run(["tmux", "send-keys", "-t", f"{target}.0", log_cmd, "Enter"], check=True)
+    subprocess.run(["tmux", "send-keys", "-t", f"{target}.1", venv_preamble, "Enter"], check=True)
+    subprocess.run(["tmux", "select-pane", "-t", f"{target}.1"], check=True)
+
+
+def launch_tmux_batch_viewer(
+    *,
+    session_name: str,
+    views: list[tuple[str, Path, Path]],
+    attach: bool = True,
+) -> None:
+    if tmux_session_exists(session_name):
+        print(f"tmux session '{session_name}' already exists — replacing.")
+        subprocess.run(["tmux", "kill-session", "-t", session_name], check=False)
+
+    if not views:
+        raise CliError("No worktree views provided for tmux batch viewer.")
+
+    print(f"tmux session '{session_name}' launching with {len(views)} worktree viewer(s)")
+
+    for idx, (window_name, path, stdout_log_path) in enumerate(views):
+        _launch_tmux_viewer_window(
+            session_name=session_name,
+            window_name=window_name,
+            path=path,
+            stdout_log_path=stdout_log_path,
+            create_session=(idx == 0),
+        )
+
+    subprocess.run(["tmux", "select-window", "-t", f"{session_name}:0"], check=True)
+    print(f"  Reattach:   tmux a -t {session_name}")
+    print("  Left pane:  agent stdout log tail")
+    print("  Right pane: interactive shell")
+
+    if attach:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", session_name])
+
+
 def zellij_bin() -> str:
     return shutil.which("zellij") or os.path.expanduser("~/bin/zellij")
 
@@ -2016,6 +2215,12 @@ def cleanup_finished_worktree(root: Path, target: WorktreeInfo) -> dict[str, boo
     }
     branch = target.branch
     print("Cleaning up worktree...")
+    try:
+        cwd = Path(os.getcwd()).resolve()
+    except FileNotFoundError:
+        cwd = None
+    if cwd is None or cwd == target.path.resolve() or target.path.resolve() in cwd.parents:
+        os.chdir(root)
     if target.path.exists():
         run(["git", "worktree", "remove", str(target.path)], cwd=root)
         print(f"Removed worktree {target.path}")
@@ -2667,12 +2872,21 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
 
 
 def cmd_wt_batch(args: argparse.Namespace) -> int:
-    """Create N worktrees and start detached agent runs with orchestrator-owned state."""
+    """Create N worktrees and start detached or interactive agent runs."""
     import random
 
     count = args.count
-    agents = args.agents.split(",") if args.agents else ["gemini", "codex"]
+    raw_agents = args.agents.split(",") if args.agents else ["gemini"]
+    agents = [agent.strip() for agent in raw_agents if agent.strip()]
     mode = args.agent_mode or "yolo"
+    if not args.interactive:
+        unsupported = sorted(agent for agent in agents if not agent_supports_detached(agent))
+        if unsupported:
+            names = ", ".join(unsupported)
+            raise CliError(
+                f"Detached wt-batch does not support agent(s): {names}. "
+                "Use INTERACTIVE=1 or choose a detached-capable agent pool."
+            )
 
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
@@ -2704,6 +2918,7 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_entries: list[dict[str, object]] = []
     launch_results: list[BatchLaunchResult] = []
+    interactive_launches: list[tuple[str, Path, str]] = []
     total = len(picked)
 
     print(f"Batch run: {total} issue(s)")
@@ -2750,15 +2965,31 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
         prompt = build_agent_prompt_for_worktree(wt_path, root, repo)
         command = build_agent_command(agent, mode, prompt)
         branch = run(["git", "branch", "--show-current"], cwd=wt_path).stdout.strip()
-        result = launch_agent_detached(
-            root=root,
-            run_id=run_id,
-            issue_number=issue.number,
-            path=wt_path,
-            branch=branch,
-            agent=agent,
-            command=command,
-        )
+        if args.interactive:
+            session = "pending"
+            window_name = f"wt{issue.number}"
+            result = record_tmux_agent_launch(
+                root=root,
+                run_id=run_id,
+                issue_number=issue.number,
+                path=wt_path,
+                branch=branch,
+                agent=agent,
+                command=command,
+                session_name=session,
+                window_name=window_name,
+            )
+            interactive_launches.append((window_name, wt_path, command))
+        else:
+            result = launch_agent_detached(
+                root=root,
+                run_id=run_id,
+                issue_number=issue.number,
+                path=wt_path,
+                branch=branch,
+                agent=agent,
+                command=command,
+            )
         launch_results.append(result)
         write_batch_entry(root, run_id, result)
         manifest_entries.append(
@@ -2769,6 +3000,9 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
                 "branch": result.branch,
                 "state": result.state,
                 "pid": result.pid,
+                "backend": result.backend,
+                "session_name": result.session_name,
+                "window_name": result.window_name,
                 "local_status_path": (
                     str(result.local_status_path) if result.local_status_path else None
                 ),
@@ -2778,7 +3012,8 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
                 "generated_at": datetime.now(UTC).isoformat(),
             }
         )
-        print(f"[{idx}/{total}] #{issue.number} -> {result.state} pid={result.pid} {wt_path}")
+        pid_note = f" pid={result.pid}" if result.pid is not None else ""
+        print(f"[{idx}/{total}] #{issue.number} -> {result.state}{pid_note} {wt_path}")
 
     manifest_payload = {
         "run_id": run_id,
@@ -2794,13 +3029,32 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
     write_json_file(batch_manifest_path(root, run_id), manifest_payload)
 
     if not args.dry_run:
-        started = sum(1 for item in launch_results if item.state == "running")
-        failed = sum(1 for item in launch_results if item.state != "running")
+        started = sum(1 for item in launch_results if item.state in {"running", "interactive"})
+        failed = sum(1 for item in launch_results if item.state not in {"running", "interactive"})
         print()
         print("Run summary:")
         print(f"  started:  {started}")
         print(f"  failed:   {failed}")
         print(f"  manifest: {batch_manifest_path(root, run_id)}")
+        if args.interactive:
+            if not tmux_available():
+                raise CliError("wt-batch --interactive requires tmux")
+            session = worktree_session_pair("wt-batch")
+            print(f"  interactive: tmux session {session.session_name}")
+            for result in launch_results:
+                result.session_name = session.session_name
+                if result.local_status_path:
+                    payload = read_json_file(result.local_status_path) or {}
+                    payload["session_name"] = session.session_name
+                    payload["updated_at"] = datetime.now(UTC).isoformat()
+                    write_json_file(result.local_status_path, payload)
+                write_batch_entry(root, run_id, result)
+            launch_tmux_batch_session(
+                session_name=session.session_name,
+                launches=interactive_launches,
+                attach=True,
+                announce_windows=True,
+            )
 
     return 0
 
@@ -3154,11 +3408,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     batch.add_argument(
         "--agents",
-        default="gemini,codex",
-        help="Comma-separated agent pool to randomly pick from (default: gemini,codex)",
+        default="gemini",
+        help="Comma-separated agent pool to randomly pick from (default: gemini)",
     )
     batch.add_argument("--agent-mode", choices=["normal", "yolo"], default="yolo")
     batch.add_argument("--base-dir", help="Worktree base dir (default: ../worktrees)")
+    batch.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Open a tmux viewer with log and shell panes for each started worktree",
+    )
     batch.add_argument("--dry-run", action="store_true", help="Print plan without creating")
     batch.set_defaults(func=cmd_wt_batch)
 
