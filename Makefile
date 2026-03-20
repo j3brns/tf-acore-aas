@@ -65,7 +65,7 @@ help:
 		echo "  Worktrees / issues"; \
 		ex "worktree" "open the interactive issue queue"; \
 		ex "wt-go" "launch the next runnable issue in zellij"; \
-		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini,codex${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}]" "open several runnable issue worktrees"; \
+		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini,codex${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}]" "start several detached agent runs with per-worktree logs"; \
 		ex "worktree-next-issue" "create a worktree for the next queued issue"; \
 		ex "worktree-create-issue" "create a worktree for a specific issue"; \
 		ex "worktree-resume-issue [OPEN_SHELL=off] [CMD='make test-unit']" "resume a linked issue worktree"; \
@@ -843,7 +843,7 @@ worktree-next-issue:
 		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,)
 
-## wt-batch: Create multiple runnable issue worktrees and open them in one tmux session grid
+## wt-batch: Create multiple runnable issue worktrees and start detached agent runs
 ## Usage: make wt-batch [COUNT=3] [AGENTS=gemini,codex] [AGENT_MODE=yolo]
 wt-batch:
 	uv run python scripts/worktree_issues.py wt-batch \
