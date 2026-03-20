@@ -37,6 +37,8 @@ TITLE_TASK_RE = re.compile(r"^(TASK-\d+):\s")
 STATUS_LABELS = {"status:not-started", "status:in-progress", "status:blocked", "status:done"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 WORKTREE_CLOSEOUT_DIR = ".build/worktree-closeouts"
+WORKTREE_RUNS_DIR = ".build/worktree-runs"
+WORKTREE_AGENT_RUN_DIR = ".build/agent-run"
 
 
 class CliError(RuntimeError):
@@ -103,6 +105,27 @@ class AuditFinding:
     severity: Literal["error", "warning"]
     issue_number: int
     message: str
+
+
+@dataclass(slots=True)
+class SessionPair:
+    label: str
+    session_name: str
+
+
+@dataclass(slots=True)
+class BatchLaunchResult:
+    issue_number: int
+    agent: str
+    worktree_path: Path
+    branch: str
+    command: str
+    state: str
+    pid: int | None = None
+    local_status_path: Path | None = None
+    stdout_log_path: Path | None = None
+    stderr_log_path: Path | None = None
+    detail: str = ""
 
 
 def run(
@@ -1113,6 +1136,147 @@ def shell_quote(value: str) -> str:
     return shlex.quote(value)
 
 
+def worktree_runs_root(root: Path) -> Path:
+    return root / WORKTREE_RUNS_DIR
+
+
+def worktree_agent_run_dir(path: Path) -> Path:
+    return path / WORKTREE_AGENT_RUN_DIR
+
+
+def write_json_file(path: Path, payload: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def read_json_file(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def worktree_agent_status(path: Path) -> dict[str, object] | None:
+    return read_json_file(worktree_agent_run_dir(path) / "status.json")
+
+
+def worktree_agent_running(path: Path) -> bool:
+    status = worktree_agent_status(path)
+    if not status:
+        return False
+    pid = status.get("pid")
+    if not isinstance(pid, int):
+        return False
+    state = status.get("state")
+    return state in {"starting", "running"} and pid_is_running(pid)
+
+
+def batch_run_id() -> str:
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    suffix = f"{os.getpid():x}"
+    return f"run-{stamp}-{suffix}"
+
+
+def batch_run_dir(root: Path, run_id: str) -> Path:
+    return worktree_runs_root(root) / run_id
+
+
+def batch_manifest_path(root: Path, run_id: str) -> Path:
+    return batch_run_dir(root, run_id) / "manifest.json"
+
+
+def batch_entry_path(root: Path, run_id: str, issue_number: int, agent: str) -> Path:
+    return batch_run_dir(root, run_id) / f"issue-{issue_number}-{agent}.json"
+
+
+def write_batch_entry(root: Path, run_id: str, entry: BatchLaunchResult) -> Path:
+    payload = {
+        "issue_number": entry.issue_number,
+        "agent": entry.agent,
+        "worktree_path": str(entry.worktree_path),
+        "branch": entry.branch,
+        "command": entry.command,
+        "state": entry.state,
+        "pid": entry.pid,
+        "local_status_path": str(entry.local_status_path) if entry.local_status_path else None,
+        "stdout_log_path": str(entry.stdout_log_path) if entry.stdout_log_path else None,
+        "stderr_log_path": str(entry.stderr_log_path) if entry.stderr_log_path else None,
+        "detail": entry.detail,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    return write_json_file(batch_entry_path(root, run_id, entry.issue_number, entry.agent), payload)
+
+
+def launch_agent_detached(
+    *,
+    root: Path,
+    run_id: str,
+    issue_number: int,
+    path: Path,
+    branch: str,
+    agent: str,
+    command: str,
+) -> BatchLaunchResult:
+    ensure_uv_venv(path)
+    runtime_dir = worktree_agent_run_dir(path)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    stdout_log = runtime_dir / "stdout.log"
+    stderr_log = runtime_dir / "stderr.log"
+    status_path = runtime_dir / "status.json"
+    pid_path = runtime_dir / "pid"
+    shell_cmd = f"if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi; exec {command}"
+    started_at = datetime.now(UTC).isoformat()
+    with stdout_log.open("ab") as stdout_fp, stderr_log.open("ab") as stderr_fp:
+        proc = subprocess.Popen(
+            ["bash", "-lc", shell_cmd],
+            cwd=path,
+            stdout=stdout_fp,
+            stderr=stderr_fp,
+            start_new_session=True,
+        )
+    state = "running" if proc.poll() is None else "failed"
+    detail = "started detached agent process" if state == "running" else "agent exited immediately"
+    status_payload: dict[str, object] = {
+        "run_id": run_id,
+        "issue_number": issue_number,
+        "agent": agent,
+        "branch": branch,
+        "command": command,
+        "state": state,
+        "pid": proc.pid,
+        "started_at": started_at,
+        "stdout_log_path": str(stdout_log),
+        "stderr_log_path": str(stderr_log),
+        "orchestrator_manifest": str(batch_manifest_path(root, run_id)),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    write_json_file(status_path, status_payload)
+    pid_path.write_text(f"{proc.pid}\n", encoding="utf-8")
+    return BatchLaunchResult(
+        issue_number=issue_number,
+        agent=agent,
+        worktree_path=path,
+        branch=branch,
+        command=command,
+        state=state,
+        pid=proc.pid,
+        local_status_path=status_path,
+        stdout_log_path=stdout_log,
+        stderr_log_path=stderr_log,
+        detail=detail,
+    )
+
+
 def choose_agent_interactive(default: str = "codex") -> str:
     mapping = {
         "1": "gemini",
@@ -1332,6 +1496,12 @@ def tmux_session_name_for_worktree(path: Path) -> str:
     return path.name
 
 
+def worktree_session_pair(label: str) -> SessionPair:
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+    session_name = f"{label}-{stamp}-{os.getpid()}"
+    return SessionPair(label=label, session_name=session_name)
+
+
 def launch_tmux_session(
     *,
     path: Path,
@@ -1384,11 +1554,13 @@ def launch_tmux_session(
     )
     subprocess.run(["tmux", "select-pane", "-t", f"{name}:0.0"], check=True)
 
-    print(f"tmux session '{name}' created in {path}")
+    print(f"tmux session '{name}' launching in {path}")
+    print(f"  Session label: {name}")
+    print(f"  Session name:  {name}")
     print("  Left pane:  agent running")
     print("  Right pane: shell ready")
-    print(f"  Reattach:   tmux a -t {name}")
-    print("  List all:   tmux ls")
+    print(f"  Attach:    tmux a -t {name}")
+    print("  List:      tmux ls")
 
     if attach:
         os.execvp("tmux", ["tmux", "attach-session", "-t", name])
@@ -1526,17 +1698,21 @@ def launch_zellij_session(
     import tempfile
 
     zj = zellij_bin()
-    name = session_name or tmux_session_name_for_worktree(path)
+    pair = worktree_session_pair(path.name)
+    label = session_name or pair.label
+    name = session_name or pair.session_name
     path_str = str(path)
     disable_terminal_flow_control()
+
+    print(f"zellij session '{label}' launching in {path}")
+    print(f"  Session label: {label}")
+    print(f"  Session name:  {name}")
 
     if zellij_session_exists(name):
         print(f"zellij session '{name}' already exists — attaching.")
         if attach:
             os.execvp(zj, [zj, "attach", name])
         return
-
-    print(f"zellij session '{name}' launching in {path}")
 
     temp_dir = Path(tempfile.mkdtemp(prefix=f"wt-layout-{name}-"))
     layout_file = temp_dir / "layout.kdl"
@@ -1564,10 +1740,8 @@ layout {{
         encoding="utf-8",
     )
 
-    print("  Left pane:  agent running")
-    print("  Right pane: shell ready")
-    print(f"  Reattach:   zellij attach {name}")
-    print("  List all:   zellij ls")
+    print(f"  Attach:    zellij attach {name}")
+    print("  List:      zellij ls")
 
     if attach:
         _exec_zellij_with_layout_cleanup(
@@ -2274,6 +2448,9 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
             if args.open_shell and not args.dry_run:
                 if not args.no_preflight:
                     run_preflight(path=existing_wt.path, root=root, repo=repo)
+                if getattr(args, "shell_only", False):
+                    open_shell(existing_wt.path)
+                    return 0
                 handoff_to_agent_or_shell(
                     path=existing_wt.path,
                     root=root,
@@ -2312,6 +2489,9 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         preflight=(not args.no_preflight),
         dry_run=args.dry_run,
     )
+    if getattr(args, "shell_only", False) and args.open_shell and not args.dry_run:
+        open_shell(wt_path)
+        return 0
     if args.open_shell and not args.dry_run:
         handoff_to_agent_or_shell(
             path=wt_path,
@@ -2338,6 +2518,9 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
         if args.open_shell and not args.dry_run:
             if not args.no_preflight:
                 run_preflight(path=existing_wt.path, root=root, repo=repo)
+            if getattr(args, "shell_only", False):
+                open_shell(existing_wt.path)
+                return 0
             handoff_to_agent_or_shell(
                 path=existing_wt.path,
                 root=root,
@@ -2414,6 +2597,8 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
     prepare_gitnexus_for_worktree(target.path)
     if args.command:
         run_command_in_worktree(target.path, args.command)
+    elif getattr(args, "shell_only", False) and args.open_shell:
+        open_shell(target.path)
     elif args.open_shell:
         agent = getattr(args, "agent", None)
         agent_mode = getattr(args, "agent_mode", None)
@@ -2482,14 +2667,12 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
 
 
 def cmd_wt_batch(args: argparse.Namespace) -> int:
-    """Create N worktrees for the next runnable issues, randomly assign agents, launch tmux."""
+    """Create N worktrees and start detached agent runs with orchestrator-owned state."""
     import random
 
     count = args.count
     agents = args.agents.split(",") if args.agents else ["gemini", "codex"]
     mode = args.agent_mode or "yolo"
-    if not tmux_available():
-        raise CliError("wt-batch requires tmux for visible batch sessions")
 
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
@@ -2499,72 +2682,125 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
         Path(args.base_dir).expanduser().resolve() if args.base_dir else default_worktrees_dir(root)
     )
 
-    picked: list[QueueItem] = []
+    picked: list[tuple[QueueItem, Path | None]] = []
     for item in selection.items:
         if len(picked) >= count:
             break
         if not item.runnable:
             continue
         existing = find_linked_worktree_for_issue(root, item.issue.number)
-        if existing is not None:
-            print(f"Skipping #{item.issue.number}: worktree already exists at {existing.path}")
+        if existing is not None and worktree_agent_running(existing.path):
+            print(f"Skipping #{item.issue.number}: agent already running in {existing.path}")
             continue
-        picked.append(item)
+        picked.append((item, existing.path if existing is not None else None))
 
     if not picked:
         raise CliError("No runnable issues available for batch creation.")
     if len(picked) < count:
         print(f"WARNING: only {len(picked)} runnable issue(s) available (requested {count})")
 
-    batch_launches: list[tuple[str, Path, str]] = []
+    run_id = batch_run_id()
+    run_dir = batch_run_dir(root, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    manifest_entries: list[dict[str, object]] = []
+    launch_results: list[BatchLaunchResult] = []
     total = len(picked)
 
-    print(f"Batch session: {total} issue(s)")
-    for idx, item in enumerate(picked, start=1):
+    print(f"Batch run: {total} issue(s)")
+    print(f"Run id:   {run_id}")
+    print(f"Manifest: {batch_manifest_path(root, run_id)}")
+    for idx, (item, existing_path) in enumerate(picked, start=1):
         agent = random.choice(agents)
         issue = item.issue
 
         print(f"[{idx}/{total}] #{issue.number} -> starting ({agent})")
-        with contextlib.redirect_stdout(io.StringIO()):
-            wt_path = create_worktree_for_issue(
-                root=root,
-                repo=repo,
-                issue=issue,
-                base_dir=base_dir,
-                base_ref=None,
-                scope=None,
-                slug=None,
-                folder_name=None,
-                auto_claim=True,
-                preflight=False,
-                dry_run=args.dry_run,
-            )
+        if existing_path is not None:
+            wt_path = existing_path
+        else:
+            with contextlib.redirect_stdout(io.StringIO()):
+                wt_path = create_worktree_for_issue(
+                    root=root,
+                    repo=repo,
+                    issue=issue,
+                    base_dir=base_dir,
+                    base_ref=None,
+                    scope=None,
+                    slug=None,
+                    folder_name=None,
+                    auto_claim=True,
+                    preflight=False,
+                    dry_run=args.dry_run,
+                )
 
         if args.dry_run:
             print(f"[{idx}/{total}] #{issue.number} -> dry-run {wt_path}")
+            manifest_entries.append(
+                {
+                    "issue_number": issue.number,
+                    "agent": agent,
+                    "worktree_path": str(wt_path),
+                    "state": "dry-run",
+                    "generated_at": datetime.now(UTC).isoformat(),
+                }
+            )
             continue
 
         with contextlib.redirect_stdout(io.StringIO()):
             prepare_gitnexus_for_worktree(wt_path)
         prompt = build_agent_prompt_for_worktree(wt_path, root, repo)
         command = build_agent_command(agent, mode, prompt)
-        tab_name = f"wt{issue.number}"
-        batch_launches.append((tab_name, wt_path, command))
-        print(f"[{idx}/{total}] #{issue.number} -> ready {wt_path}")
+        branch = run(["git", "branch", "--show-current"], cwd=wt_path).stdout.strip()
+        result = launch_agent_detached(
+            root=root,
+            run_id=run_id,
+            issue_number=issue.number,
+            path=wt_path,
+            branch=branch,
+            agent=agent,
+            command=command,
+        )
+        launch_results.append(result)
+        write_batch_entry(root, run_id, result)
+        manifest_entries.append(
+            {
+                "issue_number": result.issue_number,
+                "agent": result.agent,
+                "worktree_path": str(result.worktree_path),
+                "branch": result.branch,
+                "state": result.state,
+                "pid": result.pid,
+                "local_status_path": (
+                    str(result.local_status_path) if result.local_status_path else None
+                ),
+                "stdout_log_path": str(result.stdout_log_path) if result.stdout_log_path else None,
+                "stderr_log_path": str(result.stderr_log_path) if result.stderr_log_path else None,
+                "detail": result.detail,
+                "generated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        print(f"[{idx}/{total}] #{issue.number} -> {result.state} pid={result.pid} {wt_path}")
+
+    manifest_payload = {
+        "run_id": run_id,
+        "repo": repo,
+        "count_requested": count,
+        "count_selected": total,
+        "agent_pool": agents,
+        "agent_mode": mode,
+        "state": "dry-run" if args.dry_run else "started",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "entries": manifest_entries,
+    }
+    write_json_file(batch_manifest_path(root, run_id), manifest_payload)
 
     if not args.dry_run:
+        started = sum(1 for item in launch_results if item.state == "running")
+        failed = sum(1 for item in launch_results if item.state != "running")
         print()
-        print("Attach:  tmux a -t worktrees")
-        print("List:    tmux ls")
-        print("Session summary:")
-        print(f"  created {len(batch_launches)} worktree window(s)")
-        print()
-        launch_tmux_batch_session(
-            session_name="worktrees",
-            launches=batch_launches,
-            attach=True,
-            announce_windows=False,
-        )
+        print("Run summary:")
+        print(f"  started:  {started}")
+        print(f"  failed:   {failed}")
+        print(f"  manifest: {batch_manifest_path(root, run_id)}")
 
     return 0
 
@@ -2620,6 +2856,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     no_preflight=False,
                     dry_run=False,
                     open_shell=(post_create == "shell"),
+                    shell_only=(post_create == "shell"),
                     agent=None,
                     agent_mode=None,
                     handoff=None,
@@ -2643,6 +2880,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     no_preflight=False,
                     dry_run=False,
                     open_shell=(post_create == "shell"),
+                    shell_only=(post_create == "shell"),
                     agent=None,
                     agent_mode=None,
                     handoff=None,
@@ -2654,6 +2892,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     path=None,
                     no_preflight=False,
                     open_shell=True,
+                    shell_only=True,
                     command=None,
                     agent=None,
                     agent_mode=None,
@@ -2908,7 +3147,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch = sub.add_parser(
         "wt-batch",
         parents=[common_repo, queue_common],
-        help="Create N worktrees with randomly assigned agents in a visible tmux session grid",
+        help="Create N worktrees with randomly assigned detached agent runs and a run manifest",
     )
     batch.add_argument(
         "--count", "-n", type=int, default=3, help="Number of worktrees to create (default: 3)"
