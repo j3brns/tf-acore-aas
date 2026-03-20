@@ -1040,7 +1040,11 @@ def gitnexus_cli_path() -> Path | None:
         candidate = Path(override).expanduser()
         if candidate.exists():
             return candidate
-
+    which = shutil_which("gitnexus")
+    if which:
+        candidate = Path(which).expanduser()
+        if candidate.exists():
+            return candidate
     return None
 
 
@@ -1049,23 +1053,36 @@ def run_gitnexus_command(
     args: list[str],
     *,
     check: bool,
+    timeout_seconds: float = 30.0,
 ) -> subprocess.CompletedProcess[str]:
     cli_path = gitnexus_cli_path()
     node = shutil_which("node")
     if cli_path is not None and node is not None:
-        cmd = [node, str(cli_path), *args]
+        if cli_path.suffix == ".js":
+            cmd = [node, str(cli_path), *args]
+        else:
+            cmd = [str(cli_path), *args]
     else:
-        cmd = ["npx", "gitnexus", *args]
+        cmd = ["npx", "--yes", "gitnexus", *args]
     attempts = 0
     while True:
         attempts += 1
-        proc = subprocess.run(
-            cmd,
-            cwd=path,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=path,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise subprocess.CalledProcessError(
+                124,
+                cmd,
+                output=exc.stdout,
+                stderr=exc.stderr,
+            ) from exc
         combined_output = "\n".join(
             part.strip() for part in (proc.stdout or "", proc.stderr or "") if part.strip()
         )
@@ -1091,8 +1108,8 @@ def prepare_gitnexus_for_worktree(path: Path) -> None:
     if not gitnexus_refresh_enabled():
         print("GitNexus: refresh disabled by WORKTREE_GITNEXUS_REFRESH=0")
         return
-    if shutil_which("npx") is None:
-        eprint("WARNING: npx not found; skipping GitNexus refresh")
+    if gitnexus_cli_path() is None and shutil_which("npx") is None:
+        eprint("WARNING: gitnexus CLI and npx not found; skipping GitNexus refresh")
         return
 
     print(f"GitNexus: checking local index in {path}")
