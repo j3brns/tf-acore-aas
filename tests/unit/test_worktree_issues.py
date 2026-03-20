@@ -624,7 +624,7 @@ def test_run_gitnexus_command_clears_corrupt_npx_cache_and_retries(monkeypatch, 
     proc = worktree_issues.run_gitnexus_command(Path("/tmp/repo"), ["status"], check=False)
 
     assert proc.returncode == 0
-    assert calls == [["npx", "gitnexus", "status"], ["npx", "gitnexus", "status"]]
+    assert calls == [["npx", "--yes", "gitnexus", "status"], ["npx", "--yes", "gitnexus", "status"]]
     assert removed == [Path("/home/julesb/.npm/_npx")]
     assert "clearing corrupt npx cache" in capsys.readouterr().out
 
@@ -675,7 +675,10 @@ def test_prepare_gitnexus_for_worktree_warns_when_npm_cache_path_unavailable(mon
     worktree_issues.prepare_gitnexus_for_worktree(Path("/tmp/repo"))
 
     captured = capsys.readouterr()
-    assert calls == [["npx", "gitnexus", "status"], ["npx", "gitnexus", "analyze"]]
+    assert calls == [
+        ["npx", "--yes", "gitnexus", "status"],
+        ["npx", "--yes", "gitnexus", "analyze"],
+    ]
     assert "npm cache path unavailable" in captured.err
     assert "rebuilding local index" in captured.out
 
