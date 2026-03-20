@@ -70,6 +70,12 @@ rule no_wildcard_iam_resource {
 
 rule check_resource_wildcard(res, act) {
     let exempted_actions = [
+        "cloudwatch:PutMetricData",
+        "bedrock-agentcore:CreateMemory",
+        "bedrock-agentcore:UpdateMemory",
+        "bedrock-agentcore:DeleteMemory",
+        "bedrock-agentcore:GetMemory",
+        "bedrock-agentcore:TagResource",
         "xray:PutTraceSegments",
         "xray:PutTelemetryRecords",
         "iam:CreateOpenIDConnectProvider",
