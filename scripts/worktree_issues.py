@@ -105,6 +105,12 @@ class AuditFinding:
     message: str
 
 
+@dataclass(slots=True)
+class SessionPair:
+    label: str
+    session_name: str
+
+
 def run(
     cmd: list[str],
     *,
@@ -1332,6 +1338,12 @@ def tmux_session_name_for_worktree(path: Path) -> str:
     return path.name
 
 
+def worktree_session_pair(label: str) -> SessionPair:
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+    session_name = f"{label}-{stamp}-{os.getpid()}"
+    return SessionPair(label=label, session_name=session_name)
+
+
 def launch_tmux_session(
     *,
     path: Path,
@@ -1384,11 +1396,13 @@ def launch_tmux_session(
     )
     subprocess.run(["tmux", "select-pane", "-t", f"{name}:0.0"], check=True)
 
-    print(f"tmux session '{name}' created in {path}")
+    print(f"tmux session '{name}' launching in {path}")
+    print(f"  Session label: {name}")
+    print(f"  Session name:  {name}")
     print("  Left pane:  agent running")
     print("  Right pane: shell ready")
-    print(f"  Reattach:   tmux a -t {name}")
-    print("  List all:   tmux ls")
+    print(f"  Attach:    tmux a -t {name}")
+    print("  List:      tmux ls")
 
     if attach:
         os.execvp("tmux", ["tmux", "attach-session", "-t", name])
@@ -1526,17 +1540,21 @@ def launch_zellij_session(
     import tempfile
 
     zj = zellij_bin()
-    name = session_name or tmux_session_name_for_worktree(path)
+    pair = worktree_session_pair(path.name)
+    label = session_name or pair.label
+    name = session_name or pair.session_name
     path_str = str(path)
     disable_terminal_flow_control()
+
+    print(f"zellij session '{label}' launching in {path}")
+    print(f"  Session label: {label}")
+    print(f"  Session name:  {name}")
 
     if zellij_session_exists(name):
         print(f"zellij session '{name}' already exists — attaching.")
         if attach:
             os.execvp(zj, [zj, "attach", name])
         return
-
-    print(f"zellij session '{name}' launching in {path}")
 
     temp_dir = Path(tempfile.mkdtemp(prefix=f"wt-layout-{name}-"))
     layout_file = temp_dir / "layout.kdl"
@@ -1564,10 +1582,8 @@ layout {{
         encoding="utf-8",
     )
 
-    print("  Left pane:  agent running")
-    print("  Right pane: shell ready")
-    print(f"  Reattach:   zellij attach {name}")
-    print("  List all:   zellij ls")
+    print(f"  Attach:    zellij attach {name}")
+    print("  List:      zellij ls")
 
     if attach:
         _exec_zellij_with_layout_cleanup(
@@ -2312,6 +2328,9 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         preflight=(not args.no_preflight),
         dry_run=args.dry_run,
     )
+    if getattr(args, "shell_only", False) and args.open_shell and not args.dry_run:
+        open_shell(wt_path)
+        return 0
     if args.open_shell and not args.dry_run:
         handoff_to_agent_or_shell(
             path=wt_path,
@@ -2414,6 +2433,8 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
     prepare_gitnexus_for_worktree(target.path)
     if args.command:
         run_command_in_worktree(target.path, args.command)
+    elif getattr(args, "shell_only", False) and args.open_shell:
+        open_shell(target.path)
     elif args.open_shell:
         agent = getattr(args, "agent", None)
         agent_mode = getattr(args, "agent_mode", None)
@@ -2553,14 +2574,21 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
         print(f"[{idx}/{total}] #{issue.number} -> ready {wt_path}")
 
     if not args.dry_run:
+        session = worktree_session_pair("worktrees")
+        print(
+            f"tmux session '{session.session_name}' launching with "
+            f"{len(batch_launches)} worktree window(s)"
+        )
+        print(f"Session label: {session.label}")
+        print(f"Session name:  {session.session_name}")
         print()
-        print("Attach:  tmux a -t worktrees")
+        print(f"Attach:  tmux a -t {session.session_name}")
         print("List:    tmux ls")
         print("Session summary:")
         print(f"  created {len(batch_launches)} worktree window(s)")
         print()
         launch_tmux_batch_session(
-            session_name="worktrees",
+            session_name=session.session_name,
             launches=batch_launches,
             attach=True,
             announce_windows=False,
@@ -2620,6 +2648,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     no_preflight=False,
                     dry_run=False,
                     open_shell=(post_create == "shell"),
+                    shell_only=(post_create == "shell"),
                     agent=None,
                     agent_mode=None,
                     handoff=None,
@@ -2643,6 +2672,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     no_preflight=False,
                     dry_run=False,
                     open_shell=(post_create == "shell"),
+                    shell_only=(post_create == "shell"),
                     agent=None,
                     agent_mode=None,
                     handoff=None,
@@ -2654,6 +2684,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                     path=None,
                     no_preflight=False,
                     open_shell=True,
+                    shell_only=True,
                     command=None,
                     agent=None,
                     agent_mode=None,
