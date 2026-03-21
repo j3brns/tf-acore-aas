@@ -32,6 +32,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _semver_sort_key(version: str) -> tuple[int, ...]:
+    parts = version.split(".")
+    key: list[int] = []
+    for part in parts:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        key.append(int(digits) if digits else 0)
+    return tuple(key)
+
+
 def require_aws_region() -> str:
     region = os.environ.get("AWS_REGION", "").strip()
     if not region:
@@ -53,10 +62,7 @@ def get_agent_versions(table, agent_name: str) -> list[dict]:
             KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"),
             ScanIndexForward=False,  # Highest version SK first
         )
-        items = response.get("Items", [])
-        return sorted(
-            items, key=lambda x: (x.get("deployed_at", ""), x.get("version", "")), reverse=True
-        )
+        return response.get("Items", [])
     except ClientError as e:
         logger.error(f"Failed to query DynamoDB: {e}")
         return []
@@ -68,17 +74,36 @@ def rollback_agent(agent_name: str, env: str) -> bool:
     table = dynamodb.Table("platform-agents")
 
     versions = get_agent_versions(table, agent_name)
-    if len(versions) < 2:
-        logger.error(f"Rollback failed: No previous version found for agent '{agent_name}'.")
+    if not versions:
+        logger.error(f"No versions found for agent '{agent_name}'.")
         return False
 
-    current_version = versions[0]
-    previous_version = versions[1]
+    # 1. Identify current version (latest RELEASED one)
+    released_versions = [v for v in versions if v.get("status", "released") == "released"]
+    if not released_versions:
+        logger.error(f"No RELEASED versions found for agent '{agent_name}'.")
+        return False
+
+    released_versions.sort(
+        key=lambda item: _semver_sort_key(str(item.get("version", ""))),
+        reverse=True,
+    )
+    current_version = released_versions[0]
+
+    # 2. Identify previous RELEASED version
+    if len(released_versions) < 2:
+        logger.error(
+            f"Rollback failed: No previous RELEASED version found for agent '{agent_name}'. "
+            f"Current version is {current_version['version']}."
+        )
+        return False
+
+    previous_version = released_versions[1]
 
     logger.info(
         f"Rolling back agent '{agent_name}' from v{current_version['version']} "
-        f"(deployed {current_version.get('deployed_at')}) to v{previous_version['version']} "
-        f"(deployed {previous_version.get('deployed_at')})"
+        f"to v{previous_version['version']} "
+        f"(previously released at {previous_version.get('deployed_at')})"
     )
 
     bucket = resolve_layer_bucket(env, aws_region)
@@ -89,10 +114,10 @@ def rollback_agent(agent_name: str, env: str) -> bool:
 
     ssm = boto3.client("ssm", region_name=aws_region)
 
-    # 1. Update AgentCore Runtime
+    # 3. Update AgentCore Runtime (Point back to old artifacts)
     try:
         acore = boto3.client("bedrock-agentcore", region_name=aws_region)
-        logger.info(f"Updating AgentCore Runtime for '{agent_name}' to previous artifacts")
+        logger.info(f"Updating AgentCore Runtime for '{agent_name}' to artifacts from v{version}")
         response = acore.update_agent_code(
             agentName=agent_name,
             code={
@@ -114,8 +139,8 @@ def rollback_agent(agent_name: str, env: str) -> bool:
         if os.environ.get("CI"):
             logger.info("Continuing anyway because CI is set")
 
-    # 2. Update SSM Registry
-    logger.info("Updating SSM registry to previous version artifacts")
+    # 4. Update SSM Registry
+    logger.info("Updating SSM registry parameters")
     ssm_updates = {
         f"/platform/agents/{env}/{agent_name}/latest-version": version,
         f"/platform/agents/{env}/{agent_name}/script-s3-key": script_key,
@@ -130,12 +155,21 @@ def rollback_agent(agent_name: str, env: str) -> bool:
             logger.error(f"Failed to update SSM parameter {name}: {e}")
             return False
 
-    # 3. Delete the rolled-back version from DynamoDB
-    logger.info(f"Deleting rolled-back version v{current_version['version']} from DynamoDB")
+    # 5. Mark the bad version as ROLLBACK in DynamoDB
+    logger.info(f"Marking v{current_version['version']} as ROLLBACK in DynamoDB")
     try:
-        table.delete_item(Key={"PK": current_version["PK"], "SK": current_version["SK"]})
+        table.update_item(
+            Key={"PK": current_version["PK"], "SK": current_version["SK"]},
+            UpdateExpression="SET #s = :s, #ua = :ua, #rb = :rb",
+            ExpressionAttributeNames={"#s": "status", "#ua": "updated_at", "#rb": "rolled_back_by"},
+            ExpressionAttributeValues={
+                ":s": "rollback",
+                ":ua": datetime.now(UTC).isoformat(),
+                ":rb": "cli-operator",  # In a script, we don't always have the sub
+            },
+        )
     except ClientError as e:
-        logger.error(f"Failed to delete bad version from DynamoDB: {e}")
+        logger.error(f"Failed to update version status in DynamoDB: {e}")
         return False
 
     logger.info(f"Agent '{agent_name}' successfully rolled back to v{version}")

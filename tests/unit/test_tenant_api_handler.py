@@ -26,9 +26,24 @@ class FakeScopedDb:
             return None
         return dict(item)
 
-    def put_item(self, _table_name: str, item: dict[str, Any]) -> dict[str, Any]:
+    def put_item(
+        self,
+        _table_name: str,
+        item: dict[str, Any],
+        *,
+        condition_expression: str | None = None,
+    ) -> dict[str, Any]:
         pk = str(item["PK"])
         sk = str(item["SK"])
+        if (
+            condition_expression
+            and "attribute_not_exists" in condition_expression
+            and (pk, sk) in self.items
+        ):
+            raise tenant_api_handler.ClientError(
+                {"Error": {"Code": "ConditionalCheckFailedException", "Message": "exists"}},
+                "PutItem",
+            )
         self.items[(pk, sk)] = dict(item)
         return {"Attributes": dict(item)}
 
@@ -498,6 +513,30 @@ def _seed_failover_lock(
         "lockId": lock_id,
         "acquiredBy": acquired_by,
         "ttl": expires_at,
+    }
+
+
+def _seed_agent_version(
+    fake_state: dict[str, Any],
+    *,
+    agent_name: str,
+    version: str,
+    status: str = "pending",
+) -> None:
+    fake_state["db"].items[(f"AGENT#{agent_name}", f"VERSION#{version}")] = {
+        "PK": f"AGENT#{agent_name}",
+        "SK": f"VERSION#{version}",
+        "agent_name": agent_name,
+        "version": version,
+        "owner_team": "platform",
+        "tier_minimum": "basic",
+        "layer_hash": f"hash-{version}",
+        "layer_s3_key": f"layers/{version}.zip",
+        "script_s3_key": f"scripts/{version}.zip",
+        "deployed_at": "2026-02-25T12:00:00Z",
+        "invocation_mode": "sync",
+        "streaming_enabled": False,
+        "status": status,
     }
 
 
@@ -1998,3 +2037,138 @@ def test_lambda_rollback_returns_404_on_missing_function(fake_state: dict[str, A
 
     response = _invoke(event)
     assert response["statusCode"] == 404
+
+
+def test_platform_register_agent_defaults_dev_to_released(fake_state: dict[str, Any]) -> None:
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.0",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "hash-120",
+            "layerS3Key": "layers/1.2.0.zip",
+            "scriptS3Key": "scripts/1.2.0.zip",
+            "invocationMode": "sync",
+        },
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 201
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
+    assert item["status"] == "released"
+    assert item["approved_by"] == "user-123"
+
+
+def test_platform_register_agent_defaults_prod_to_pending(
+    fake_state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-prod")
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.1",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "hash-121",
+            "layerS3Key": "layers/1.2.1.zip",
+            "scriptS3Key": "scripts/1.2.1.zip",
+            "invocationMode": "sync",
+        },
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 201
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.1")]
+    assert item["status"] == "pending"
+    assert "approved_by" not in item
+
+
+def test_platform_register_agent_rejects_invalid_initial_status(
+    fake_state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-prod")
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.0",
+            "status": "released",
+        },
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    assert ("AGENT#echo-agent", "VERSION#1.2.0") not in fake_state["db"].items
+
+
+def test_platform_promote_agent_updates_metadata_and_emits_event(
+    fake_state: dict[str, Any],
+) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="pending")
+    event = _event(
+        method="PATCH",
+        body={"status": "released", "releaseNotes": "integration verified"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
+    assert item["status"] == "released"
+    assert item["approved_by"] == "user-123"
+    assert item["approved_at"] == "2026-02-25T12:00:00Z"
+    assert item["release_notes"] == "integration verified"
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "platform.agent_version.promoted"
+    assert detail["previousStatus"] == "pending"
+    assert detail["status"] == "released"
+
+
+def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="released")
+    event = _event(
+        method="PATCH",
+        body={"status": "pending"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    assert _body(response)["error"]["message"].startswith("Invalid agent status transition")
+    assert fake_state["deps"].events.calls == []
+
+
+def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="released")
+    event = _event(
+        method="PATCH",
+        body={"status": "rollback", "releaseNotes": "error rate spike"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
+    assert item["status"] == "rollback"
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "platform.agent_version.rolled_back"
+    assert detail["previousStatus"] == "released"
+    assert detail["status"] == "rollback"

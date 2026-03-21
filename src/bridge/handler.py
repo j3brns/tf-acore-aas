@@ -33,6 +33,7 @@ from botocore.exceptions import (
 from data_access import TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AgentRecord,
+    AgentStatus,
     InvocationMode,
     InvocationRecord,
     InvocationStatus,
@@ -309,19 +310,30 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
         table = ddb.Table(AGENTS_TABLE)
 
         if not version:
-            # Query for latest version
+            # Query for latest versions and find the highest semver that is RELEASED
             response = table.query(
                 KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"),
-                ScanIndexForward=False,
-                Limit=1,
+                ScanIndexForward=False,  # Highest version SK first
             )
             items = response.get("Items", [])
             if not items:
                 return None
-            item = items[0]
+
+            released_items = [i for i in items if i.get("status", "released") == "released"]
+            item = max(released_items, key=_agent_record_sort_key, default=None)
         else:
             response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": f"VERSION#{version}"})
             item = response.get("Item")
+            if item and item.get("status", "released") != "released":
+                logger.warning(
+                    "Requested agent version is not RELEASED",
+                    extra={
+                        "agent_name": agent_name,
+                        "version": version,
+                        "status": item.get("status"),
+                    },
+                )
+                return None
 
         if not item:
             return None
@@ -337,6 +349,10 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             deployed_at=str(item["deployed_at"]),
             invocation_mode=InvocationMode(str(item["invocation_mode"])),
             streaming_enabled=bool(item.get("streaming_enabled", False)),
+            status=AgentStatus(str(item.get("status", "released"))),
+            approved_by=_coerce_optional_string(item.get("approved_by")),
+            approved_at=_coerce_optional_string(item.get("approved_at")),
+            release_notes=_coerce_optional_string(item.get("release_notes")),
             runtime_arn=str(item["runtime_arn"]) if item.get("runtime_arn") else None,
             estimated_duration_seconds=int(item["estimated_duration_seconds"])  # type: ignore
             if item.get("estimated_duration_seconds")
@@ -930,11 +946,23 @@ def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_newer_agent_record(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
-    candidate_deployed_at = str(candidate.get("deployed_at", ""))
-    current_deployed_at = str(current.get("deployed_at", ""))
-    if candidate_deployed_at != current_deployed_at:
-        return candidate_deployed_at > current_deployed_at
-    return str(candidate.get("version", "")) > str(current.get("version", ""))
+    return _agent_record_sort_key(candidate) > _agent_record_sort_key(current)
+
+
+def _semver_sort_key(version: str) -> tuple[int, ...]:
+    parts = version.split(".")
+    key: list[int] = []
+    for part in parts:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        key.append(int(digits) if digits else 0)
+    return tuple(key)
+
+
+def _agent_record_sort_key(item: dict[str, Any]) -> tuple[tuple[int, ...], str]:
+    return (
+        _semver_sort_key(str(item.get("version", ""))),
+        str(item.get("deployed_at", "")),
+    )
 
 
 def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
@@ -943,6 +971,10 @@ def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
 
     latest_by_name: dict[str, dict[str, Any]] = {}
     for item in items:
+        # Filter: only RELEASED agents are visible/invokable
+        if item.get("status", "released") != "released":
+            continue
+
         agent_name = _coerce_optional_string(item.get("agent_name"))
         if agent_name is None:
             continue
@@ -981,14 +1013,13 @@ def get_agent_detail(path_params: dict[str, Any], request_id: str) -> dict[str, 
     table = ddb.Table(AGENTS_TABLE)
     response = table.query(KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"))
     items = response.get("Items", [])
-    if not items:
+
+    # Filter: only RELEASED versions are visible to tenants
+    released_items = [i for i in items if i.get("status", "released") == "released"]
+    if not released_items:
         return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
 
-    sorted_items = sorted(
-        items,
-        key=lambda item: (str(item.get("deployed_at", "")), str(item.get("version", ""))),
-        reverse=True,
-    )
+    sorted_items = sorted(released_items, key=_agent_record_sort_key, reverse=True)
     latest = sorted_items[0]
     detail = _agent_summary_from_item(latest)
     detail["versions"] = [

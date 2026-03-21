@@ -1,5 +1,5 @@
 """
-register_agent.py — Register or update agent in the platform registry.
+register_agent.py — Register an immutable agent version in the platform registry.
 
 Writes agent metadata to DynamoDB platform-agents table and SSM.
 Reads [tool.agentcore] manifest from agent's pyproject.toml.
@@ -76,6 +76,9 @@ def register_agent(agent_name: str, env: str) -> bool:
 
     deployed_at = datetime.datetime.now(datetime.UTC).isoformat()
 
+    # Default status: PENDING for prod (requires approval), RELEASED for others
+    default_status = "pending" if env == "prod" else "released"
+
     # Get Runtime ARN from SSM if it exists (set by infra or previous deployment)
     runtime_arn = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/runtime-arn")
 
@@ -92,6 +95,7 @@ def register_agent(agent_name: str, env: str) -> bool:
         "deployed_at": deployed_at,
         "invocation_mode": manifest.get("invocation_mode", "sync"),
         "streaming_enabled": manifest.get("streaming_enabled", False),
+        "status": default_status,
         "runtime_arn": runtime_arn,
         "estimated_duration_seconds": manifest.get("estimated_duration_seconds", 5),
     }
@@ -102,14 +106,17 @@ def register_agent(agent_name: str, env: str) -> bool:
 
     logger.info(f"Registering agent '{agent_name}' v{version} in DynamoDB table '{table_name}'")
     try:
-        table.put_item(Item=item)
-        # Update latest-version in SSM
-        ssm.put_parameter(
-            Name=f"/platform/agents/{env}/{agent_name}/latest-version",
-            Value=version,
-            Type="String",
-            Overwrite=True,
+        table.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
         )
+        if default_status == "released":
+            ssm.put_parameter(
+                Name=f"/platform/agents/{env}/{agent_name}/latest-version",
+                Value=version,
+                Type="String",
+                Overwrite=True,
+            )
     except ClientError as e:
         logger.error(f"Failed to write to DynamoDB or SSM: {e}")
         return False

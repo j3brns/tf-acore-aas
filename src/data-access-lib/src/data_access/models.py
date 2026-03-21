@@ -84,6 +84,13 @@ class WebhookStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class AgentStatus(StrEnum):
+    PENDING = "pending"
+    RELEASED = "released"
+    ROLLBACK = "rollback"
+    DEPRECATED = "deprecated"
+
+
 class InviteStatus(StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
@@ -284,6 +291,7 @@ class AgentRecord:
 
     tier_minimum: the lowest tenant tier that may invoke this agent.
     invocation_mode: declared in pyproject.toml, never inferred at runtime.
+    status: release state (ADR-015).
     """
 
     agent_name: str
@@ -296,6 +304,10 @@ class AgentRecord:
     deployed_at: str  # ISO 8601 UTC
     invocation_mode: InvocationMode
     streaming_enabled: bool
+    status: AgentStatus = AgentStatus.RELEASED
+    approved_by: str | None = None
+    approved_at: str | None = None
+    release_notes: str | None = None
     runtime_arn: str | None = None
     estimated_duration_seconds: int | None = None
 
