@@ -1,4 +1,4 @@
-"""Tests for scripts/validate_agent_manifest.py — tier and invocation mode validation."""
+"""Tests for scripts/validate_agent_manifest.py and the shared manifest contract."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.agent_manifest import load_agent_manifest
 from scripts.validate_agent_manifest import VALID_INVOCATION_MODES, VALID_TIERS, validate_manifest
 
 
@@ -19,11 +20,6 @@ def _write_manifest(tmp_path: Path, agent_name: str, toml_content: str) -> None:
     agent_dir = tmp_path / "agents" / agent_name
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "pyproject.toml").write_text(textwrap.dedent(toml_content))
-
-
-# ---------------------------------------------------------------------------
-# Tier enum: canonical set is {basic, standard, premium}
-# ---------------------------------------------------------------------------
 
 
 class TestTierEnum:
@@ -41,10 +37,15 @@ class TestTierEnum:
             tmp_path,
             "test-agent",
             f"""\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
             [tool.agentcore]
             name = "test-agent"
             owner_team = "team-test"
             tier_minimum = "{tier}"
+            handler = "handler:invoke"
             invocation_mode = "sync"
         """,
         )
@@ -57,20 +58,20 @@ class TestTierEnum:
             tmp_path,
             "test-agent",
             f"""\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
             [tool.agentcore]
             name = "test-agent"
             owner_team = "team-test"
             tier_minimum = "{tier}"
+            handler = "handler:invoke"
             invocation_mode = "sync"
         """,
         )
         with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
             assert validate_manifest("test-agent") is False
-
-
-# ---------------------------------------------------------------------------
-# Invocation mode enum
-# ---------------------------------------------------------------------------
 
 
 class TestInvocationModeEnum:
@@ -85,10 +86,15 @@ class TestInvocationModeEnum:
             tmp_path,
             "test-agent",
             f"""\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
             [tool.agentcore]
             name = "test-agent"
             owner_team = "team-test"
             tier_minimum = "basic"
+            handler = "handler:invoke"
             invocation_mode = "{mode}"
         """,
         )
@@ -100,20 +106,20 @@ class TestInvocationModeEnum:
             tmp_path,
             "test-agent",
             """\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
             [tool.agentcore]
             name = "test-agent"
             owner_team = "team-test"
             tier_minimum = "basic"
+            handler = "handler:invoke"
             invocation_mode = "batch"
         """,
         )
         with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
             assert validate_manifest("test-agent") is False
-
-
-# ---------------------------------------------------------------------------
-# Required fields
-# ---------------------------------------------------------------------------
 
 
 class TestRequiredFields:
@@ -124,6 +130,7 @@ class TestRequiredFields:
             """\
             [project]
             name = "test-agent"
+            version = "1.0.0"
         """,
         )
         with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
@@ -134,6 +141,10 @@ class TestRequiredFields:
             tmp_path,
             "test-agent",
             """\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
             [tool.agentcore]
             name = "test-agent"
             owner_team = "team-test"
@@ -148,10 +159,15 @@ class TestRequiredFields:
             tmp_path,
             "test-agent",
             """\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
             [tool.agentcore]
             name = "different-agent"
             owner_team = "team-test"
             tier_minimum = "basic"
+            handler = "handler:invoke"
             invocation_mode = "sync"
         """,
         )
@@ -161,3 +177,87 @@ class TestRequiredFields:
     def test_nonexistent_agent(self, tmp_path: Path) -> None:
         with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
             assert validate_manifest("no-such-agent") is False
+
+    def test_project_name_mismatch(self, tmp_path: Path) -> None:
+        _write_manifest(
+            tmp_path,
+            "test-agent",
+            """\
+            [project]
+            name = "different-agent"
+            version = "1.0.0"
+
+            [tool.agentcore]
+            name = "test-agent"
+            owner_team = "team-test"
+            tier_minimum = "basic"
+            handler = "handler:invoke"
+            invocation_mode = "sync"
+        """,
+        )
+        with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
+            assert validate_manifest("test-agent") is False
+
+    def test_unknown_manifest_key_rejected(self, tmp_path: Path) -> None:
+        _write_manifest(
+            tmp_path,
+            "test-agent",
+            """\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+
+            [tool.agentcore]
+            name = "test-agent"
+            owner_team = "team-test"
+            tier_minimum = "basic"
+            handler = "handler:invoke"
+            invocation_mode = "sync"
+            release_channel = "beta"
+        """,
+        )
+        with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
+            assert validate_manifest("test-agent") is False
+
+    def test_loader_reads_optional_sections(self, tmp_path: Path) -> None:
+        _write_manifest(
+            tmp_path,
+            "test-agent",
+            """\
+            [project]
+            name = "test-agent"
+            version = "1.2.3"
+
+            [tool.agentcore]
+            name = "test-agent"
+            owner_team = "team-test"
+            tier_minimum = "premium"
+            handler = "handler:invoke"
+            invocation_mode = "async"
+            streaming_enabled = true
+            estimated_duration_seconds = 42
+
+            [tool.agentcore.llm]
+            model_id = "anthropic.claude-sonnet-4-6"
+            max_tokens = 2048
+
+            [tool.agentcore.deployment]
+            type = "container"
+
+            [tool.agentcore.evaluations]
+            threshold = 0.9
+            evaluation_region = "eu-west-1"
+        """,
+        )
+
+        manifest = load_agent_manifest("test-agent", tmp_path)
+        assert manifest.version == "1.2.3"
+        assert manifest.tier_minimum.value == "premium"
+        assert manifest.invocation_mode.value == "async"
+        assert manifest.streaming_enabled is True
+        assert manifest.estimated_duration_seconds == 42
+        assert manifest.deployment.type == "container"
+        assert manifest.llm.model_id == "anthropic.claude-sonnet-4-6"
+        assert manifest.llm.max_tokens == 2048
+        assert manifest.evaluations.threshold == pytest.approx(0.9)
+        assert manifest.evaluations.evaluation_region == "eu-west-1"

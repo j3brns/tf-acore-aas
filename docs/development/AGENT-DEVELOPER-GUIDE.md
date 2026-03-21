@@ -53,6 +53,12 @@ agents/my-agent/
 
 ## The Agent Manifest (pyproject.toml)
 
+The manifest contract is explicit:
+- `[project]` owns packaging identity and versioning.
+- `[tool.agentcore]` owns platform metadata used by validation, deployment, registration, and evaluation.
+- Unknown keys under platform-owned manifest tables are rejected by `make validate-agent-manifest`.
+- Agent push automation validates this contract before any AWS API call.
+
 ```toml
 [project]
 name = "my-agent"
@@ -86,6 +92,25 @@ max_tokens = 4096
 [tool.agentcore.deployment]
 type = "zip"                   # zip (default) | container
 ```
+
+### Canonical Schema Boundary
+
+| Table | Fields | Required |
+|-------|--------|----------|
+| `[project]` | `name`, `version` | yes |
+| `[tool.agentcore]` | `name`, `owner_team`, `tier_minimum`, `handler`, `invocation_mode` | yes |
+| `[tool.agentcore]` | `streaming_enabled`, `estimated_duration_seconds` | no |
+| `[tool.agentcore.llm]` | `model_id`, `max_tokens` | no |
+| `[tool.agentcore.deployment]` | `type` (`zip` or `container`) | no |
+| `[tool.agentcore.evaluations]` | `threshold`, `evaluation_region` | no |
+
+Validation rules:
+- `project.name`, `tool.agentcore.name`, and the agent directory name must match.
+- `handler` must use `module:function` form.
+- `tier_minimum` must be `basic`, `standard`, or `premium`.
+- `invocation_mode` must be `sync`, `streaming`, or `async`.
+- `estimated_duration_seconds` and `max_tokens` must be positive integers.
+- `threshold` must be between `0.0` and `1.0`.
 
 ## Invocation Modes
 
