@@ -32,6 +32,7 @@ package_agent = _load_module("package_agent")
 build_layer = _load_module("build_layer")
 deploy_agent = _load_module("deploy_agent")
 register_agent = _load_module("register_agent")
+evaluate_agent = _load_module("evaluate_agent")
 
 _REGION = "eu-west-2"
 
@@ -163,6 +164,13 @@ def _prepare_deploy_agent_fixture(tmp_path, monkeypatch) -> tuple[str, str, str]
 name = "echo-agent"
 version = "1.2.3"
 
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+
 [tool.agentcore.deployment]
 type = "zip"
 """)
@@ -238,8 +246,10 @@ name = "echo-agent"
 version = "1.2.3"
 
 [tool.agentcore]
+name = "echo-agent"
 owner_team = "platform"
 tier_minimum = "basic"
+handler = "handler:invoke"
 invocation_mode = "sync"
 """)
     stored_items: list[dict[str, object]] = []
@@ -308,8 +318,10 @@ name = "echo-agent"
 version = "1.2.3"
 
 [tool.agentcore]
+name = "echo-agent"
 owner_team = "platform"
 tier_minimum = "basic"
+handler = "handler:invoke"
 invocation_mode = "sync"
 """)
 
@@ -360,8 +372,10 @@ name = "echo-agent"
 version = "1.2.3"
 
 [tool.agentcore]
+name = "echo-agent"
 owner_team = "platform"
 tier_minimum = "basic"
+handler = "handler:invoke"
 invocation_mode = "sync"
 """)
     put_item_calls: list[dict[str, object]] = []
@@ -399,3 +413,78 @@ invocation_mode = "sync"
 
     assert register_agent.register_agent(agent_name, env) is False
     assert len(put_item_calls) == 1
+
+
+def test_register_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setattr(register_agent, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(register_agent, "boto3", types.SimpleNamespace(client=None, resource=None))
+
+    agent_dir = tmp_path / "agents" / "echo-agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+
+    assert register_agent.register_agent("echo-agent", "dev") is False
+
+
+def test_deploy_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setattr(deploy_agent, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(deploy_agent, "BUILD_DIR", tmp_path / ".build")
+
+    agent_dir = tmp_path / "agents" / "echo-agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+
+    def _unexpected_client(*_args, **_kwargs):
+        raise AssertionError("AWS client should not be created for invalid manifests")
+
+    monkeypatch.setattr(deploy_agent, "boto3", types.SimpleNamespace(client=_unexpected_client))
+
+    assert deploy_agent.deploy_agent("echo-agent", "dev") is False
+
+
+def test_evaluate_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate_agent, "REPO_ROOT", tmp_path)
+
+    agent_dir = tmp_path / "agents" / "echo-agent"
+    (agent_dir / "tests" / "golden").mkdir(parents=True)
+    (agent_dir / "tests" / "golden" / "invoke_cases.json").write_text('{"sync": []}')
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+
+    def _unexpected_client(*_args, **_kwargs):
+        raise AssertionError("AWS client should not be created for invalid manifests")
+
+    monkeypatch.setattr(evaluate_agent, "boto3", types.SimpleNamespace(client=_unexpected_client))
+
+    assert evaluate_agent.evaluate_agent("echo-agent", "dev") is False

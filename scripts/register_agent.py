@@ -14,11 +14,15 @@ import argparse
 import datetime
 import logging
 import os
-import tomllib
 from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
+
+try:
+    from agent_manifest import ManifestValidationError, load_agent_manifest
+except ImportError:
+    from scripts.agent_manifest import ManifestValidationError, load_agent_manifest
 
 logger = logging.getLogger("register_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -53,14 +57,14 @@ def get_ssm_param(ssm, name: str) -> str | None:
 
 
 def register_agent(agent_name: str, env: str) -> bool:
-    aws_region = require_aws_region()
-    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
-    with open(toml_path, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        manifest = load_agent_manifest(agent_name, REPO_ROOT)
+    except ManifestValidationError as exc:
+        for error in exc.errors:
+            logger.error(error)
+        return False
 
-    project = data.get("project", {})
-    version = project.get("version", "1.0.0")
-    manifest = data.get("tool", {}).get("agentcore", {})
+    aws_region = require_aws_region()
 
     ssm = boto3.client("ssm", region_name=aws_region)
     layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
@@ -84,27 +88,32 @@ def register_agent(agent_name: str, env: str) -> bool:
 
     item = {
         "PK": f"AGENT#{agent_name}",
-        "SK": f"VERSION#{version}",
+        "SK": f"VERSION#{manifest.version}",
         "agent_name": agent_name,
-        "version": version,
-        "owner_team": manifest.get("owner_team", "unknown"),
-        "tier_minimum": manifest.get("tier_minimum", "basic"),
+        "version": manifest.version,
+        "owner_team": manifest.owner_team,
+        "tier_minimum": manifest.tier_minimum.value,
         "layer_hash": layer_hash,
         "layer_s3_key": layer_s3_key,
         "script_s3_key": script_s3_key,
         "deployed_at": deployed_at,
-        "invocation_mode": manifest.get("invocation_mode", "sync"),
-        "streaming_enabled": manifest.get("streaming_enabled", False),
+        "invocation_mode": manifest.invocation_mode.value,
+        "streaming_enabled": manifest.streaming_enabled,
         "status": default_status,
         "runtime_arn": runtime_arn,
-        "estimated_duration_seconds": manifest.get("estimated_duration_seconds", 5),
+        "estimated_duration_seconds": manifest.estimated_duration_seconds,
     }
 
     table_name = "platform-agents"
     dynamodb = boto3.resource("dynamodb", region_name=aws_region)
     table = dynamodb.Table(table_name)
 
-    logger.info(f"Registering agent '{agent_name}' v{version} in DynamoDB table '{table_name}'")
+    logger.info(
+        "Registering agent '%s' v%s in DynamoDB table '%s'",
+        agent_name,
+        manifest.version,
+        table_name,
+    )
     try:
         table.put_item(
             Item=item,
@@ -113,7 +122,7 @@ def register_agent(agent_name: str, env: str) -> bool:
         if default_status == "released":
             ssm.put_parameter(
                 Name=f"/platform/agents/{env}/{agent_name}/latest-version",
-                Value=version,
+                Value=manifest.version,
                 Type="String",
                 Overwrite=True,
             )

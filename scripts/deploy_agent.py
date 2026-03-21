@@ -15,6 +15,11 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
+try:
+    from agent_manifest import ManifestValidationError, load_agent_manifest
+except ImportError:
+    from scripts.agent_manifest import ManifestValidationError, load_agent_manifest
+
 logger = logging.getLogger("deploy_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -65,20 +70,19 @@ def update_agentcore_runtime(
 
 
 def deploy_agent(agent_name: str, env: str) -> bool:
+    try:
+        manifest = load_agent_manifest(agent_name, REPO_ROOT)
+    except ManifestValidationError as exc:
+        for error in exc.errors:
+            logger.error(error)
+        return False
+
     aws_region = require_aws_region()
 
     # Resolve bucket (same as build_layer)
     from build_layer import resolve_layer_bucket
 
     bucket = resolve_layer_bucket(env, aws_region)
-
-    # Read version from pyproject.toml
-    import tomllib
-
-    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
-    with open(toml_path, "rb") as f:
-        data = tomllib.load(f)
-    version = data.get("project", {}).get("version", "1.0.0")
 
     ssm = boto3.client("ssm", region_name=aws_region)
     deps_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
@@ -93,7 +97,7 @@ def deploy_agent(agent_name: str, env: str) -> bool:
         logger.error(f"Agent code zip not found: {code_zip}. Run package_agent first.")
         return False
 
-    script_key = f"scripts/{agent_name}/{version}.zip"
+    script_key = f"scripts/{agent_name}/{manifest.version}.zip"
     s3 = boto3.client("s3", region_name=aws_region)
     logger.info(f"Uploading agent code to s3://{bucket}/{script_key}")
     s3.upload_file(str(code_zip), bucket, script_key)

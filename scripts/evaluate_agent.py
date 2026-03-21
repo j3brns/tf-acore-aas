@@ -17,20 +17,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
 import boto3
-from botocore.exceptions import ClientError
+
+try:
+    from agent_manifest import ManifestValidationError, load_agent_manifest
+except ImportError:
+    from scripts.agent_manifest import ManifestValidationError, load_agent_manifest
 
 logger = logging.getLogger("evaluate_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_EVALUATION_REGION = "eu-central-1"
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,30 +60,34 @@ def load_golden_cases(agent_dir: Path) -> list[dict[str, Any]]:
 
 
 def evaluate_agent(agent_name: str, env: str) -> bool:
+    del env
     agent_dir = REPO_ROOT / "agents" / agent_name
-    toml_path = agent_dir / "pyproject.toml"
-    if not toml_path.exists():
-        logger.error(f"pyproject.toml not found for agent '{agent_name}'")
+    try:
+        manifest = load_agent_manifest(agent_name, REPO_ROOT)
+    except ManifestValidationError as exc:
+        for error in exc.errors:
+            logger.error(error)
         return False
-
-    with open(toml_path, "rb") as f:
-        data = tomllib.load(f)
-
-    eval_config = data.get("tool", {}).get("agentcore", {}).get("evaluations", {})
-    threshold = float(eval_config.get("threshold", 0.8))
-    eval_region = eval_config.get("evaluation_region", DEFAULT_EVALUATION_REGION)
 
     golden_cases = load_golden_cases(agent_dir)
     if not golden_cases:
         logger.error(f"No golden cases found for agent '{agent_name}'")
         return False
 
-    logger.info(f"Evaluating agent '{agent_name}' in {eval_region} with {len(golden_cases)} cases")
-    logger.info(f"Threshold: {threshold}")
+    logger.info(
+        "Evaluating agent '%s' in %s with %s cases",
+        agent_name,
+        manifest.evaluations.evaluation_region,
+        len(golden_cases),
+    )
+    logger.info("Threshold: %s", manifest.evaluations.threshold)
 
     try:
         # AgentCore Evaluations service is always in eu-central-1 (Frankfurt)
-        acore = boto3.client("bedrock-agentcore", region_name=eval_region)
+        acore = boto3.client(
+            "bedrock-agentcore",
+            region_name=manifest.evaluations.evaluation_region,
+        )
 
         # Call the evaluation service
         # ADR-009: AgentCore Evaluations is the source of truth for promotion quality
@@ -92,12 +97,20 @@ def evaluate_agent(agent_name: str, env: str) -> bool:
         )
 
         score = float(response.get("score", 0.0))
-        passed = score >= threshold
+        passed = score >= manifest.evaluations.threshold
 
         if passed:
-            logger.info(f"Evaluation PASSED: score={score:.2f} (threshold={threshold:.2f})")
+            logger.info(
+                "Evaluation PASSED: score=%.2f (threshold=%.2f)",
+                score,
+                manifest.evaluations.threshold,
+            )
         else:
-            logger.error(f"Evaluation FAILED: score={score:.2f} (threshold={threshold:.2f})")
+            logger.error(
+                "Evaluation FAILED: score=%.2f (threshold=%.2f)",
+                score,
+                manifest.evaluations.threshold,
+            )
             return False
 
         return True
