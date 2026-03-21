@@ -19,8 +19,9 @@ Implemented in TASK-011.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from hashlib import sha256
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,144 @@ class InviteStatus(StrEnum):
     ACCEPTED = "accepted"
     EXPIRED = "expired"
     REVOKED = "revoked"
+
+
+class ConfigurationStore(StrEnum):
+    APPCONFIG = "appconfig"
+    SSM = "ssm"
+    DYNAMODB = "dynamodb"
+
+
+APPCONFIG_DYNAMIC_CAPABILITY_AREAS = frozenset(
+    {
+        "tier_feature_enablement",
+        "capability_flags",
+        "kill_switches",
+        "model_availability",
+        "tool_availability",
+        "rollout_controls",
+    }
+)
+SSM_PLATFORM_PARAMETER_AREAS = frozenset(
+    {
+        "runtime_region_parameters",
+        "operational_failover_parameters",
+        "service_endpoints",
+        "appconfig_bootstrap",
+    }
+)
+DYNAMODB_TENANT_METADATA_AREAS = frozenset(
+    {
+        "tenant_state",
+        "tenant_resource_inventory",
+        "tenant_identity_metadata",
+        "tenant_budget_contracts",
+        "invocation_audit",
+        "job_tracking",
+        "session_tracking",
+    }
+)
+
+
+def configuration_store_for(area: str) -> ConfigurationStore:
+    """Return the owning config store for a platform configuration concern.
+
+    The mapping is intentionally coarse-grained. It documents the architectural
+    ownership split for issue #303 instead of binding callers to individual
+    attribute names, which may evolve independently of the store boundary.
+    """
+
+    normalized = area.strip().lower()
+    if normalized in APPCONFIG_DYNAMIC_CAPABILITY_AREAS:
+        return ConfigurationStore.APPCONFIG
+    if normalized in SSM_PLATFORM_PARAMETER_AREAS:
+        return ConfigurationStore.SSM
+    if normalized in DYNAMODB_TENANT_METADATA_AREAS:
+        return ConfigurationStore.DYNAMODB
+    raise ValueError(f"Unknown configuration area: {area!r}")
+
+
+@dataclass(frozen=True)
+class CapabilityRollout:
+    """Dynamic capability policy with deterministic tenant targeting.
+
+    The control plane loads these rules from AppConfig. Missing or malformed
+    policy must degrade safely to disabled capability state.
+    """
+
+    enabled: bool = False
+    rollout_percentage: int = 100
+    tier_allow_list: frozenset[TenantTier] = field(default_factory=frozenset)
+    tenant_allow_list: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.rollout_percentage <= 100:
+            raise ValueError("rollout_percentage must be between 0 and 100")
+
+    def is_enabled_for(self, *, tenant_id: str, tenant_tier: TenantTier) -> bool:
+        """Evaluate the rollout using tenant-safe defaults.
+
+        Rules:
+        - disabled rollout returns False immediately
+        - explicit tenant allow-list overrides all other targeting
+        - tier allow-list gates eligibility before percentage rollout
+        - percentage targeting is deterministic per tenant ID for stable rollout
+        """
+
+        if not self.enabled:
+            return False
+
+        normalized_tenant_id = tenant_id.strip().lower()
+        if normalized_tenant_id in self.tenant_allow_list:
+            return True
+        if self.tier_allow_list and tenant_tier not in self.tier_allow_list:
+            return False
+        if self.rollout_percentage == 0:
+            return False
+        if self.rollout_percentage == 100:
+            return True
+
+        bucket = (
+            int.from_bytes(
+                sha256(normalized_tenant_id.encode("utf-8")).digest()[:4],
+                byteorder="big",
+            )
+            % 100
+        )
+        return bucket < self.rollout_percentage
+
+
+@dataclass(frozen=True)
+class TenantCapabilityPolicy:
+    """AppConfig-backed dynamic capability policy.
+
+    This model is intentionally separate from TenantRecord. TenantRecord remains
+    the source of truth for resource inventory, contractual tenant metadata, and
+    transactional state. Dynamic capability policy uses deny-by-default fallback
+    semantics so a failed AppConfig read does not accidentally enable access.
+    """
+
+    schema_version: str = "2026-03-21"
+    capabilities: dict[str, CapabilityRollout] = field(default_factory=dict)
+    killed_capabilities: frozenset[str] = field(default_factory=frozenset)
+
+    @classmethod
+    def safe_fallback(cls) -> TenantCapabilityPolicy:
+        """Return the deny-by-default fallback policy used on read failure."""
+
+        return cls()
+
+    def is_enabled(self, capability: str, *, tenant_id: str, tenant_tier: TenantTier) -> bool:
+        normalized_capability = capability.strip().lower()
+        if not normalized_capability:
+            return False
+        if normalized_capability in self.killed_capabilities:
+            return False
+
+        rollout = self.capabilities.get(normalized_capability)
+        if rollout is None:
+            return False
+        return rollout.is_enabled_for(tenant_id=tenant_id, tenant_tier=tenant_tier)
 
 
 # ---------------------------------------------------------------------------
