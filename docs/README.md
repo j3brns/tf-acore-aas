@@ -46,6 +46,7 @@ Every significant design choice is documented with context, decision, and reject
 | [ADR-013](decisions/ADR-013-entra-rbac-roles-claim.md) | Entra group membership as JWT roles claim for RBAC |
 | [ADR-014](decisions/ADR-014-minimise-vpc-bound-services.md) | Default non-VPC control plane; VPC attachment only for genuine private dependencies |
 | [ADR-016](decisions/ADR-016-platform-internal-tenant.md) | Reserved `platform` tenant for operator-controlled agents without super-tenant bypass |
+| [ADR-017](decisions/ADR-017-tenant-capability-configuration-model.md) | AppConfig for dynamic capability policy; SSM and DynamoDB retain operational parameters and tenant metadata |
 
 ## Operator Runbooks
 

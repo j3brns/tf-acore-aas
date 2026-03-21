@@ -380,7 +380,7 @@ Platform Lambda source directories use `snake_case`. The shared `src/data-access
 | CDK testing | Jest and cdk-assertions |
 | Python testing | pytest and LocalStack |
 | Secrets | AWS Secrets Manager |
-| Configuration | AWS SSM Parameter Store |
+| Configuration | AWS AppConfig for dynamic capability policy; AWS SSM Parameter Store for runtime/platform parameters |
 | Async agents | AgentCore `add_async_task` and `complete_async_task` SDK |
 | Observability | AgentCore Observability and Amazon CloudWatch |
 
