@@ -770,6 +770,96 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /v1/platform/agents:
+    get:
+      tags: [Platform]
+      operationId: platformListAgents
+      summary: List all agents for operators
+      description: Returns all versions of all agents, including PENDING and ROLLBACK.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      responses:
+        "200":
+          description: All agent versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Platform]
+      operationId: registerAgentVersion
+      summary: Register a new agent version
+      description: Registers a new version of an agent. Defaults to PENDING status.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentRecord"
+      responses:
+        "201":
+          description: Version registered
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /v1/platform/agents/{agentName}/versions/{version}:
+    patch:
+      tags: [Platform]
+      operationId: updateAgentVersion
+      summary: Update agent version status
+      description: Promotes a version to RELEASED or marks it as ROLLBACK.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      parameters:
+        - $ref: "#/components/parameters/AgentName"
+        - in: path
+          name: version
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: "#/components/schemas/AgentStatus"
+                releaseNotes:
+                  type: string
+      responses:
+        "200":
+          description: Status updated
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/platform/quota:
     get:
       tags: [Platform]
@@ -1108,6 +1198,9 @@ components:
     JobStatus:
       type: string
       enum: [pending, running, completed, failed]
+    AgentStatus:
+      type: string
+      enum: [pending, released, rollback, deprecated]
     SessionState:
       type: string
       enum: [active, completed, expired]
@@ -1218,6 +1311,53 @@ components:
                     $ref: "#/components/schemas/InvocationMode"
                   streamingEnabled:
                     type: boolean
+
+    AgentRecord:
+      type: object
+      required:
+        - agentName
+        - version
+        - ownerTeam
+        - tierMinimum
+        - layerHash
+        - layerS3Key
+        - scriptS3Key
+        - deployedAt
+        - invocationMode
+        - streamingEnabled
+      properties:
+        agentName:
+          type: string
+        version:
+          type: string
+        ownerTeam:
+          type: string
+        tierMinimum:
+          $ref: "#/components/schemas/TenantTier"
+        layerHash:
+          type: string
+        layerS3Key:
+          type: string
+        scriptS3Key:
+          type: string
+        deployedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        invocationMode:
+          $ref: "#/components/schemas/InvocationMode"
+        streamingEnabled:
+          type: boolean
+        status:
+          $ref: "#/components/schemas/AgentStatus"
+        approvedBy:
+          type: string
+        approvedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        releaseNotes:
+          type: string
+        runtimeArn:
+          type: string
+        estimatedDurationSeconds:
+          type: integer
 
     AgentInvokeRequest:
       type: object

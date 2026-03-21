@@ -26,11 +26,12 @@ from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import ConditionBase, Key
 from botocore.exceptions import ClientError
 from data_access import TenantContext, TenantScopedDynamoDB, TenantScopedS3
-from data_access.models import TenantStatus, TenantTier
+from data_access.models import AgentStatus, TenantStatus, TenantTier
 
 logger = Logger(service="tenant-api")
 
 _TENANTS_TABLE_ENV = "TENANTS_TABLE_NAME"
+_AGENTS_TABLE_ENV = "AGENTS_TABLE_NAME"
 _INVOCATIONS_TABLE_ENV = "INVOCATIONS_TABLE_NAME"
 _EVENT_BUS_ENV = "EVENT_BUS_NAME"
 _AUDIT_EXPORT_BUCKET_ENV = "AUDIT_EXPORT_BUCKET"
@@ -42,6 +43,13 @@ _FAILOVER_LOCK_NAME_ENV = "FAILOVER_LOCK_NAME"
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 _SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator", "SelfService.Admin"}
+_REGISTERABLE_AGENT_STATUSES = {AgentStatus.PENDING, AgentStatus.RELEASED}
+_ALLOWED_AGENT_STATUS_TRANSITIONS: dict[AgentStatus, set[AgentStatus]] = {
+    AgentStatus.PENDING: {AgentStatus.RELEASED, AgentStatus.ROLLBACK},
+    AgentStatus.RELEASED: {AgentStatus.ROLLBACK, AgentStatus.DEPRECATED},
+    AgentStatus.DEPRECATED: {AgentStatus.RELEASED, AgentStatus.ROLLBACK},
+    AgentStatus.ROLLBACK: set(),
+}
 _ALLOWED_TENANT_INVITE_ROLES = {"Agent.Invoke"}
 _INVITE_EXPIRY_DAYS = 7
 _AUDIT_EXPORT_PREFIX = "audit-exports"
@@ -310,6 +318,10 @@ def _invocations_table_name() -> str:
     return os.environ.get(_INVOCATIONS_TABLE_ENV, "platform-invocations")
 
 
+def _agents_table_name() -> str:
+    return os.environ.get(_AGENTS_TABLE_ENV, "platform-agents")
+
+
 def _event_bus_name() -> str:
     return os.environ.get(_EVENT_BUS_ENV, "default")
 
@@ -514,6 +526,40 @@ def _normalize_status(value: Any) -> str:
         raise ValueError("status must be one of: active, suspended, deleted") from exc
 
 
+def _normalize_agent_status(value: Any) -> AgentStatus:
+    status_text = _str_or_none(value)
+    if status_text is None:
+        raise ValueError("status is required")
+    try:
+        return AgentStatus(status_text.lower())
+    except ValueError as exc:
+        allowed = ", ".join(status.value for status in AgentStatus)
+        raise ValueError(f"status must be one of: {allowed}") from exc
+
+
+def _agent_event_detail_type(status: AgentStatus) -> str | None:
+    if status is AgentStatus.RELEASED:
+        return "platform.agent_version.promoted"
+    if status is AgentStatus.ROLLBACK:
+        return "platform.agent_version.rolled_back"
+    return None
+
+
+def _validate_agent_status_transition(
+    current_status: AgentStatus,
+    new_status: AgentStatus,
+) -> None:
+    if new_status == current_status:
+        return
+    allowed = _ALLOWED_AGENT_STATUS_TRANSITIONS.get(current_status, set())
+    if new_status not in allowed:
+        allowed_text = ", ".join(status.value for status in sorted(allowed, key=lambda s: s.value))
+        raise ValueError(
+            f"Invalid agent status transition: {current_status.value} -> {new_status.value}. "
+            f"Allowed transitions: {allowed_text or 'none'}"
+        )
+
+
 def _as_float(value: Any, *, field: str) -> float:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be a number")
@@ -564,7 +610,10 @@ def _read_tenant_record(
     return db.get_item(_tenants_table_name(), _tenant_key(tenant_id))
 
 
-def _read_failover_lock_record(caller: CallerIdentity) -> dict[str, Any] | None:
+def _read_failover_lock_record(
+    caller: CallerIdentity, deps: TenantApiDependencies
+) -> dict[str, Any] | None:
+    _ = deps
     db = _control_plane_db(caller)
     return db.get_item(
         _ops_locks_table_name(),
@@ -1461,7 +1510,7 @@ def _handle_platform_failover(
     if not target_region or not lock_id:
         raise ValueError("targetRegion and lockId are required")
 
-    lock_record = _read_failover_lock_record(caller)
+    lock_record = _read_failover_lock_record(caller, deps)
     if lock_record is None:
         logger.warning(
             "Platform failover rejected: lock missing",
@@ -1701,6 +1750,7 @@ def _handle_platform_billing_status(
     year_month = datetime.now(UTC).strftime("%Y-%m")
 
     # Use data-access-lib for admin scan
+    _ = deps
     db = _control_plane_db(caller)
     summaries = db.scan_all(
         _tenants_table_name(),
@@ -1986,6 +2036,168 @@ def _handle_ops_lambda_rollback(
         return _error(500, "INTERNAL_ERROR", f"AWS Error: {code}")
 
 
+def _handle_platform_list_agents(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _ = event
+    _ = deps
+    _require_admin(caller)
+    db = _control_plane_db(caller)
+    items = db.scan_all(_agents_table_name())
+    # Return all versions of all agents for operator review
+    return _response(200, {"items": items})
+
+
+def _handle_platform_register_agent(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    body = _require_json_body(event)
+
+    agent_name = _str_or_none(body.get("agentName"))
+    version = _str_or_none(body.get("version"))
+
+    if not agent_name or not version:
+        raise ValueError("agentName and version are required")
+
+    # In prod, new versions must be PENDING. In dev, they may default to RELEASED.
+    current_fn = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-dev")
+    env = current_fn.split("-")[-1]
+
+    default_status = AgentStatus.PENDING if env == "prod" else AgentStatus.RELEASED
+    status = (
+        default_status
+        if body.get("status") is None
+        else _normalize_agent_status(body.get("status"))
+    )
+    if status not in _REGISTERABLE_AGENT_STATUSES:
+        raise ValueError("New agent versions may only be registered as pending or released")
+    if env == "prod" and status is not AgentStatus.PENDING:
+        raise ValueError("Production agent registration must start as pending")
+
+    approved_at = _iso(_now_utc())
+
+    item = {
+        "PK": f"AGENT#{agent_name}",
+        "SK": f"VERSION#{version}",
+        "agent_name": agent_name,
+        "version": version,
+        "owner_team": str(body.get("ownerTeam", "unknown")),
+        "tier_minimum": str(body.get("tierMinimum", "basic")),
+        "layer_hash": str(body.get("layerHash", "")),
+        "layer_s3_key": str(body.get("layerS3Key", "")),
+        "script_s3_key": str(body.get("scriptS3Key", "")),
+        "deployed_at": str(body.get("deployedAt", _iso(_now_utc()))),
+        "invocation_mode": str(body.get("invocationMode", "sync")),
+        "streaming_enabled": bool(body.get("streamingEnabled", False)),
+        "status": status.value,
+        "runtime_arn": _str_or_none(body.get("runtimeArn")),
+        "estimated_duration_seconds": _coerce_positive_int(
+            body.get("estimatedDurationSeconds"), default=0
+        ),
+    }
+    if status is AgentStatus.RELEASED:
+        item["approved_by"] = caller.sub
+        item["approved_at"] = approved_at
+    if body.get("releaseNotes"):
+        item["release_notes"] = str(body["releaseNotes"])
+
+    _ = deps
+    db = _control_plane_db(caller)
+    try:
+        db.put_item(
+            _agents_table_name(),
+            item,
+            condition_expression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return _error(
+                409,
+                "CONFLICT",
+                f"Agent version {agent_name}:{version} already registered",
+            )
+        raise
+
+    return _response(201, {"status": "registered", "agentName": agent_name, "version": version})
+
+
+def _handle_platform_update_agent_version(
+    event: dict[str, Any],
+    caller: CallerIdentity,
+    deps: TenantApiDependencies,
+    agent_name: str,
+    version: str,
+) -> dict[str, Any]:
+    _require_admin(caller)
+    body = _require_json_body(event)
+
+    new_status = _str_or_none(body.get("status"))
+    if not new_status:
+        raise ValueError("status is required")
+
+    new_agent_status = _normalize_agent_status(new_status)
+    db = _control_plane_db(caller)
+    key = {"PK": f"AGENT#{agent_name}", "SK": f"VERSION#{version}"}
+
+    existing = db.get_item(_agents_table_name(), key)
+    if not existing:
+        return _error(404, "NOT_FOUND", f"Agent version {agent_name}:{version} not found")
+
+    current_status = AgentStatus(str(existing.get("status", AgentStatus.RELEASED.value)))
+    _validate_agent_status_transition(current_status, new_agent_status)
+
+    attrs: dict[str, Any] = {
+        "status": new_agent_status.value,
+        "updated_at": _iso(_now_utc()),
+    }
+    if new_agent_status is AgentStatus.RELEASED:
+        attrs["approved_by"] = caller.sub
+        attrs["approved_at"] = _iso(_now_utc())
+    if body.get("releaseNotes") is not None:
+        attrs["release_notes"] = str(body["releaseNotes"])
+
+    update_expression, expr_names, expr_values = _build_update_expression(attrs)
+    db.update_item(
+        _agents_table_name(),
+        key=key,
+        update_expression=update_expression,
+        expression_attribute_values=expr_values,
+        expression_attribute_names=expr_names,
+        condition_expression="attribute_exists(PK) AND attribute_exists(SK)",
+    )
+
+    detail_type = _agent_event_detail_type(new_agent_status)
+    if detail_type is not None and new_agent_status != current_status:
+        _put_event(
+            deps,
+            detail_type=detail_type,
+            detail={
+                "agentName": agent_name,
+                "version": version,
+                "previousStatus": current_status.value,
+                "status": new_agent_status.value,
+                "approvedBy": caller.sub,
+                "approvedAt": attrs.get("approved_at"),
+                "releaseNotes": attrs.get("release_notes"),
+            },
+        )
+
+    return _response(
+        200,
+        {
+            "status": "updated",
+            "agentName": agent_name,
+            "version": version,
+            "newStatus": new_agent_status.value,
+        },
+    )
+
+
 def _handle_ops_page_security(
     event: dict[str, Any],
     caller: CallerIdentity,
@@ -2019,6 +2231,22 @@ def _dispatch_platform_routes(
         return _handle_platform_service_health(caller, deps)
     if path == "/v1/platform/billing/status" and method == "GET":
         return _handle_platform_billing_status(caller, deps)
+
+    if path == "/v1/platform/agents" and method == "GET":
+        return _handle_platform_list_agents(event, caller, deps)
+    if path == "/v1/platform/agents" and method == "POST":
+        return _handle_platform_register_agent(event, caller, deps)
+
+    if path.startswith("/v1/platform/agents/") and method == "PATCH":
+        # Expected: /v1/platform/agents/{agentName}/versions/{version} (len 7)
+        parts = path.split("/")
+        if len(parts) == 7 and parts[5].lower() == "versions":
+            agent_name = parts[4]
+            version = parts[6]
+            return _handle_platform_update_agent_version(
+                event, caller, deps, agent_name=agent_name, version=version
+            )
+
     return None
 
 

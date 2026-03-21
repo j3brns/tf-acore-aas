@@ -110,13 +110,15 @@ def test_rollback_agent_success(tmp_path, monkeypatch):
     success = rollback_agent.rollback_agent(agent_name, env)
     assert success is True
 
-    # Verify v1.1.0 is deleted
+    # Verify v1.1.0 is marked as rollback
     response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": "VERSION#1.1.0"})
-    assert "Item" not in response
+    assert "Item" in response
+    assert response["Item"]["status"] == "rollback"
 
     # Verify v1.0.0 still exists
     response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": "VERSION#1.0.0"})
     assert "Item" in response
+    # It should still be 'released' (default in test if not set)
 
     # Verify SSM points back to v1.0.0
     latest_version_param = ssm.get_parameter(

@@ -155,11 +155,20 @@ class TenantScopedDynamoDB:
         response = table.get_item(Key=key)
         return response.get("Item")
 
-    def put_item(self, table_name: str, item: dict[str, Any]) -> None:
+    def put_item(
+        self,
+        table_name: str,
+        item: dict[str, Any],
+        *,
+        condition_expression: str | None = None,
+    ) -> None:
         """Write an item, enforcing tenant partition on PK."""
         self._validate_pk(item)
         table = self._dynamodb.Table(table_name)
-        table.put_item(Item=item)
+        kwargs: dict[str, Any] = {"Item": item}
+        if condition_expression:
+            kwargs["ConditionExpression"] = condition_expression
+        table.put_item(**kwargs)
 
     def update_item(
         self,

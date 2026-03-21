@@ -300,6 +300,86 @@ def test_get_agent_detail_returns_latest_version_and_versions(setup_data):
     assert body["versions"][0]["version"] == "1.1.0"
 
 
+def test_list_agents_ignores_pending_version_when_newer_semver_exists(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.2.0",
+            "agent_name": "echo-agent",
+            "version": "1.2.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "3333",
+            "layer_s3_key": "k4",
+            "script_s3_key": "s4",
+            "deployed_at": "2026-01-04T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+            "status": "pending",
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/agents",
+        "pathParameters": {},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    body = json.loads(response["body"])
+    assert body["items"][0]["latestVersion"] == "1.0.0"
+
+
+def test_get_agent_detail_prefers_highest_released_semver(setup_data):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.10.0",
+            "agent_name": "echo-agent",
+            "version": "1.10.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "1010",
+            "layer_s3_key": "k10",
+            "script_s3_key": "s10",
+            "deployed_at": "2026-01-02T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+            "status": "released",
+        }
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/agents/echo-agent",
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    body = json.loads(response["body"])
+    assert body["latestVersion"] == "1.10.0"
+
+
 def test_handler_rejects_legacy_invoke_route(setup_data):
     event = {
         "path": "/v1/invoke",
