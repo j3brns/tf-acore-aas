@@ -2087,6 +2087,9 @@ def _handle_platform_register_agent(
         "estimated_duration_seconds": _coerce_positive_int(
             body.get("estimatedDurationSeconds"), default=0
         ),
+        "commit_sha": _str_or_none(body.get("commitSha")),
+        "pipeline_url": _str_or_none(body.get("pipelineUrl")),
+        "job_id": _str_or_none(body.get("jobId")),
     }
     if status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         item["approved_by"] = caller.sub
@@ -2146,8 +2149,15 @@ def _handle_platform_update_agent_version(
     if new_agent_status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         attrs["approved_by"] = caller.sub
         attrs["approved_at"] = _iso(_now_utc())
+    if new_agent_status is AgentStatus.ROLLED_BACK:
+        attrs["rolled_back_by"] = caller.sub
+        attrs["rolled_back_at"] = _iso(_now_utc())
     if body.get("releaseNotes") is not None:
         attrs["release_notes"] = str(body["releaseNotes"])
+    if body.get("evaluationScore") is not None:
+        attrs["evaluation_score"] = float(body["evaluationScore"])
+    if body.get("evaluationReportUrl") is not None:
+        attrs["evaluation_report_url"] = str(body["evaluationReportUrl"])
 
     update_expression, expr_names, expr_values = _build_update_expression(attrs)
     db.update_item(
@@ -2172,6 +2182,10 @@ def _handle_platform_update_agent_version(
                 "approvedBy": caller.sub,
                 "approvedAt": attrs.get("approved_at"),
                 "releaseNotes": attrs.get("release_notes"),
+                "evaluationScore": attrs.get("evaluation_score"),
+                "evaluationReportUrl": attrs.get("evaluation_report_url"),
+                "rolledBackBy": attrs.get("rolled_back_by"),
+                "rolledBackAt": attrs.get("rolled_back_at"),
             },
         )
 

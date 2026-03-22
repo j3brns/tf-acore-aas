@@ -368,6 +368,13 @@ class AgentRecord:
     release_notes: str | None = None
     runtime_arn: str | None = None
     estimated_duration_seconds: int | None = None
+    commit_sha: str | None = None
+    pipeline_url: str | None = None
+    job_id: str | None = None
+    evaluation_score: float | None = None
+    evaluation_report_url: str | None = None
+    rolled_back_by: str | None = None
+    rolled_back_at: str | None = None
 
     @property
     def pk(self) -> str:

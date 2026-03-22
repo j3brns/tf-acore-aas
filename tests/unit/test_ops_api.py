@@ -14,6 +14,7 @@ from src.tenant_api import handler as tenant_api_handler
 from tests.unit.test_tenant_api_handler import (
     FakeDynamoDbResource,
     FakeEvents,
+    FakeLambdaClient,
     FakeMemoryProvisioner,
     FakePlatformQuotaClient,
     FakeScopedDb,
@@ -38,6 +39,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
         events=FakeEvents(),
         dynamodb=FakeDynamoDbResource(),
         ssm=FakeSsm(),
+        awslambda=FakeLambdaClient(),
         usage_client=FakeUsageClient(),
         memory_provisioner=FakeMemoryProvisioner(),
         platform_quota_client=FakePlatformQuotaClient(),

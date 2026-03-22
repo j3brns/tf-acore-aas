@@ -261,18 +261,22 @@ invocation_mode = "sync"
     def put_parameter(**kwargs):
         latest_version_writes.append(kwargs)
 
-    fake_table = types.SimpleNamespace(put_item=put_item)
-    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
     fake_ssm = types.SimpleNamespace(put_parameter=put_parameter)
+
+    def fake_request_api(url, method, token, body=None):
+        stored_items.append(body)
+        return {"status": "registered"}
 
     monkeypatch.setattr(
         register_agent,
         "boto3",
         types.SimpleNamespace(
             client=lambda service_name, **kwargs: fake_ssm,
-            resource=lambda service_name, **kwargs: fake_resource,
         ),
     )
+    monkeypatch.setattr(register_agent, "_request_api", fake_request_api)
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
     monkeypatch.setattr(
         register_agent,
         "get_ssm_param",
@@ -284,14 +288,14 @@ invocation_mode = "sync"
         }[name],
     )
 
-    assert register_agent.register_agent(agent_name, env) is True
+    assert register_agent.register_agent(agent_name, env, None, None) is True
 
     assert len(stored_items) == 1
     item = stored_items[0]
-    assert item["agent_name"] == agent_name
+    assert item["agentName"] == agent_name
     assert item["version"] == "1.2.3"
-    assert item["layer_hash"] == "hash123"
-    assert item["script_s3_key"] == "scripts/custom-key.zip"
+    assert item["layerHash"] == "hash123"
+    assert item["scriptS3Key"] == "scripts/custom-key.zip"
 
     assert latest_version_writes == [
         {
@@ -325,14 +329,9 @@ handler = "handler:invoke"
 invocation_mode = "sync"
 """)
 
-    def failing_put_item(*args, **kwargs):
-        raise ClientError(
-            {"Error": {"Code": "InternalServerError", "Message": "ddb write failed"}},
-            "PutItem",
-        )
+    def failing_request_api(*args, **kwargs):
+        raise RuntimeError("api write failed")
 
-    fake_table = types.SimpleNamespace(put_item=failing_put_item)
-    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
     fake_ssm = types.SimpleNamespace(put_parameter=lambda **kwargs: None)
 
     monkeypatch.setattr(
@@ -340,9 +339,11 @@ invocation_mode = "sync"
         "boto3",
         types.SimpleNamespace(
             client=lambda service_name, **kwargs: fake_ssm,
-            resource=lambda service_name, **kwargs: fake_resource,
         ),
     )
+    monkeypatch.setattr(register_agent, "_request_api", failing_request_api)
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
     monkeypatch.setattr(
         register_agent,
         "get_ssm_param",
@@ -354,7 +355,7 @@ invocation_mode = "sync"
         }[name],
     )
 
-    assert register_agent.register_agent(agent_name, env) is False
+    assert register_agent.register_agent(agent_name, env, None, None) is False
 
 
 def test_register_agent_returns_false_when_latest_version_write_fails(tmp_path, monkeypatch):
@@ -411,8 +412,13 @@ invocation_mode = "sync"
         }[name],
     )
 
-    assert register_agent.register_agent(agent_name, env) is False
-    assert len(put_item_calls) == 1
+    monkeypatch.setattr(
+        register_agent, "_request_api", lambda *args, **kwargs: {"status": "registered"}
+    )
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
+
+    assert register_agent.register_agent(agent_name, env, None, None) is False
 
 
 def test_register_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
@@ -434,7 +440,7 @@ tier_minimum = "basic"
 invocation_mode = "sync"
 """)
 
-    assert register_agent.register_agent("echo-agent", "dev") is False
+    assert register_agent.register_agent("echo-agent", "dev", None, None) is False
 
 
 def test_deploy_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
