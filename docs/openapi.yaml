@@ -775,7 +775,7 @@ paths:
       tags: [Platform]
       operationId: platformListAgents
       summary: List all agents for operators
-      description: Returns all versions of all agents, including PENDING and ROLLBACK.
+      description: Returns all registered agent versions with canonical release state and governance metadata.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -799,7 +799,7 @@ paths:
       tags: [Platform]
       operationId: registerAgentVersion
       summary: Register a new agent version
-      description: Registers a new version of an agent. Defaults to PENDING status.
+      description: Registers an immutable built version. New versions enter the release lifecycle in `built` state.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -826,7 +826,7 @@ paths:
       tags: [Platform]
       operationId: updateAgentVersion
       summary: Update agent version status
-      description: Promotes a version to RELEASED or marks it as ROLLBACK.
+      description: Advances a version through the canonical release lifecycle or marks the currently promoted version as `rolled_back`.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -1200,7 +1200,8 @@ components:
       enum: [pending, running, completed, failed]
     AgentStatus:
       type: string
-      enum: [pending, released, rollback, deprecated]
+      description: Canonical release state stored in `platform-agents`. Valid transitions are `built -> deployed_staging -> integration_verified -> evaluation_passed -> approved -> promoted`, with `failed` reachable from any pre-promoted gate and `rolled_back` reachable only from `promoted`.
+      enum: [built, deployed_staging, integration_verified, evaluation_passed, approved, promoted, rolled_back, failed]
     SessionState:
       type: string
       enum: [active, completed, expired]
@@ -1350,10 +1351,12 @@ components:
           $ref: "#/components/schemas/AgentStatus"
         approvedBy:
           type: string
+          description: Identity that recorded approval or promotion evidence for this version.
         approvedAt:
           $ref: "#/components/schemas/UtcTimestamp"
         releaseNotes:
           type: string
+          description: Operator-supplied release or rollback evidence.
         runtimeArn:
           type: string
         estimatedDurationSeconds:

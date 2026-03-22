@@ -253,8 +253,25 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 - PK: `AGENT#{agentName}`, SK: `VERSION#{semver}`
 - Attributes: agentName, version, ownerTeam, tierMinimum, layerHash,
   layerS3Key, scriptS3Key, runtimeArn, deployedAt, invocationMode,
-  streamingEnabled, estimatedDurationSeconds
+  streamingEnabled, estimatedDurationSeconds, status, approvedBy,
+  approvedAt, releaseNotes
 - Capacity: provisioned, auto-scaling
+
+### Agent Release State Source Of Truth
+
+The release state of an immutable built agent version is owned by
+`platform-agents.status` in DynamoDB. The canonical lifecycle is:
+
+`built -> deployed_staging -> integration_verified -> evaluation_passed -> approved -> promoted`
+
+Terminal branches:
+- `failed` from any pre-promoted gate
+- `rolled_back` from `promoted`
+
+Only `promoted` versions are tenant-invokable. The Bridge resolves the active
+version as the highest semver record for an agent where `status=promoted`.
+Rollback is a forward metadata transition on the bad version; the Bridge then
+falls back to the next-highest promoted version without rebuilding artifacts.
 
 **platform-invocations** — invocation audit log
 - PK: `TENANT#{tenantId}`, SK: `INV#{timestamp}#{invocationId}`

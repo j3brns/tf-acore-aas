@@ -25,6 +25,7 @@ from botocore.exceptions import ClientError
 
 # Reuse bucket resolution from build_layer
 from build_layer import resolve_layer_bucket
+from data_access.models import AgentStatus, is_invokable_agent_status, normalize_agent_status
 
 logger = logging.getLogger("rollback_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -78,32 +79,32 @@ def rollback_agent(agent_name: str, env: str) -> bool:
         logger.error(f"No versions found for agent '{agent_name}'.")
         return False
 
-    # 1. Identify current version (latest RELEASED one)
-    released_versions = [v for v in versions if v.get("status", "released") == "released"]
-    if not released_versions:
-        logger.error(f"No RELEASED versions found for agent '{agent_name}'.")
+    # 1. Identify current promoted version.
+    promoted_versions = [v for v in versions if is_invokable_agent_status(v.get("status"))]
+    if not promoted_versions:
+        logger.error(f"No PROMOTED versions found for agent '{agent_name}'.")
         return False
 
-    released_versions.sort(
+    promoted_versions.sort(
         key=lambda item: _semver_sort_key(str(item.get("version", ""))),
         reverse=True,
     )
-    current_version = released_versions[0]
+    current_version = promoted_versions[0]
 
-    # 2. Identify previous RELEASED version
-    if len(released_versions) < 2:
+    # 2. Identify previous promoted version
+    if len(promoted_versions) < 2:
         logger.error(
-            f"Rollback failed: No previous RELEASED version found for agent '{agent_name}'. "
+            f"Rollback failed: No previous PROMOTED version found for agent '{agent_name}'. "
             f"Current version is {current_version['version']}."
         )
         return False
 
-    previous_version = released_versions[1]
+    previous_version = promoted_versions[1]
 
     logger.info(
         f"Rolling back agent '{agent_name}' from v{current_version['version']} "
         f"to v{previous_version['version']} "
-        f"(previously released at {previous_version.get('deployed_at')})"
+        f"(previously promoted at {previous_version.get('deployed_at')})"
     )
 
     bucket = resolve_layer_bucket(env, aws_region)
@@ -155,18 +156,25 @@ def rollback_agent(agent_name: str, env: str) -> bool:
             logger.error(f"Failed to update SSM parameter {name}: {e}")
             return False
 
-    # 5. Mark the bad version as ROLLBACK in DynamoDB
-    logger.info(f"Marking v{current_version['version']} as ROLLBACK in DynamoDB")
+    # 5. Mark the bad version as rolled_back in DynamoDB
+    current_status = normalize_agent_status(
+        current_version.get("status"), default=AgentStatus.PROMOTED
+    )
+    logger.info(
+        f"Marking v{current_version['version']} as {AgentStatus.ROLLED_BACK.value} in DynamoDB"
+    )
     try:
         table.update_item(
             Key={"PK": current_version["PK"], "SK": current_version["SK"]},
             UpdateExpression="SET #s = :s, #ua = :ua, #rb = :rb",
             ExpressionAttributeNames={"#s": "status", "#ua": "updated_at", "#rb": "rolled_back_by"},
             ExpressionAttributeValues={
-                ":s": "rollback",
+                ":s": AgentStatus.ROLLED_BACK.value,
                 ":ua": datetime.now(UTC).isoformat(),
                 ":rb": "cli-operator",  # In a script, we don't always have the sub
+                ":current_status": current_status.value,
             },
+            ConditionExpression="#s = :current_status OR attribute_not_exists(#s)",
         )
     except ClientError as e:
         logger.error(f"Failed to update version status in DynamoDB: {e}")

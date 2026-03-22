@@ -15,15 +15,19 @@ import time
 
 import pytest
 from data_access.models import (
+    AGENT_STATUS_TRANSITIONS,
     APPCONFIG_DYNAMIC_CAPABILITY_AREAS,
     DYNAMODB_TENANT_METADATA_AREAS,
     INVOCATION_TTL_SECONDS,
+    INVOKABLE_AGENT_STATUSES,
     JITTER_LENGTH,
     JOB_TTL_SECONDS,
     OPS_LOCK_TTL_SECONDS,
+    REGISTERABLE_AGENT_STATUSES,
     SESSION_TTL_SECONDS,
     SSM_PLATFORM_PARAMETER_AREAS,
     AgentRecord,
+    AgentStatus,
     CapabilityRollout,
     ConfigurationStore,
     InvocationMode,
@@ -40,6 +44,8 @@ from data_access.models import (
     TenantTier,
     ToolRecord,
     configuration_store_for,
+    is_invokable_agent_status,
+    normalize_agent_status,
 )
 
 # ---------------------------------------------------------------------------
@@ -287,6 +293,41 @@ class TestAgentRecord:
         agent = _make_agent()
         with pytest.raises((dataclasses.FrozenInstanceError, TypeError)):
             agent.version = "9.9.9"  # type: ignore[misc]
+
+    def test_default_status_is_built(self):
+        assert _make_agent().status is AgentStatus.BUILT
+
+    def test_all_agent_statuses_accepted(self):
+        for status in AgentStatus:
+            agent = _make_agent(status=status)
+            assert agent.status == status
+
+
+class TestAgentReleaseStatusHelpers:
+    def test_registerable_status_is_built_only(self):
+        assert REGISTERABLE_AGENT_STATUSES == frozenset({AgentStatus.BUILT})
+
+    def test_promoted_is_only_invokable_status(self):
+        assert INVOKABLE_AGENT_STATUSES == frozenset({AgentStatus.PROMOTED})
+        assert is_invokable_agent_status(AgentStatus.PROMOTED) is True
+        assert is_invokable_agent_status(AgentStatus.APPROVED) is False
+
+    def test_legacy_status_aliases_normalize_to_canonical_states(self):
+        assert normalize_agent_status("pending") is AgentStatus.BUILT
+        assert normalize_agent_status("released") is AgentStatus.PROMOTED
+        assert normalize_agent_status("rollback") is AgentStatus.ROLLED_BACK
+
+    def test_agent_status_transition_map_matches_release_flow(self):
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.BUILT] == frozenset(
+            {AgentStatus.DEPLOYED_STAGING, AgentStatus.FAILED}
+        )
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.APPROVED] == frozenset(
+            {AgentStatus.PROMOTED, AgentStatus.FAILED}
+        )
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.PROMOTED] == frozenset(
+            {AgentStatus.ROLLED_BACK}
+        )
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.ROLLED_BACK] == frozenset()
 
 
 # ---------------------------------------------------------------------------
