@@ -4,14 +4,15 @@
 Agent promotion is a control-plane metadata change against an already registered
 version. Do not rebuild or repackage the agent as part of promotion.
 
-1. Register the candidate version. In `prod` it must remain `pending`.
-2. Verify staging/integration evidence and evaluation results for that exact version.
-3. Promote the version to `released`.
+1. Register the candidate version. New versions enter the registry in `built` state.
+2. Advance the exact version through `deployed_staging`, `integration_verified`,
+   `evaluation_passed`, and `approved`.
+3. Promote the version to `promoted`.
 4. Record release notes or ticket evidence with the promotion action.
 
 Operational rule:
 - Promotion changes agent status metadata only. The active default version is the
-  highest `released` semver in the agent registry.
+  highest `promoted` semver in the agent registry.
 
 ## Auto-Rollback (handled by pipeline)
 The canary deployment monitors error_rate_high alarm. If it fires within 30 minutes
@@ -46,8 +47,8 @@ npx cdk deploy --all --context env=prod --rollback
 ## Agent Rollback
 ```bash
 make agent-rollback AGENT={agentName} ENV=prod
-# Marks the current released version as rollback and re-points runtime metadata
-# to the next-highest released version in the agent registry
+# Marks the current promoted version as rolled_back and re-points runtime metadata
+# to the next-highest promoted version in the agent registry
 # Does not require a rebuild or pipeline run
 ```
 

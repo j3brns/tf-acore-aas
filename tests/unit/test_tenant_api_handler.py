@@ -521,7 +521,7 @@ def _seed_agent_version(
     *,
     agent_name: str,
     version: str,
-    status: str = "pending",
+    status: str = "built",
 ) -> None:
     fake_state["db"].items[(f"AGENT#{agent_name}", f"VERSION#{version}")] = {
         "PK": f"AGENT#{agent_name}",
@@ -2039,7 +2039,7 @@ def test_lambda_rollback_returns_404_on_missing_function(fake_state: dict[str, A
     assert response["statusCode"] == 404
 
 
-def test_platform_register_agent_defaults_dev_to_released(fake_state: dict[str, Any]) -> None:
+def test_platform_register_agent_defaults_to_built(fake_state: dict[str, Any]) -> None:
     event = _event(
         method="POST",
         body={
@@ -2060,19 +2060,19 @@ def test_platform_register_agent_defaults_dev_to_released(fake_state: dict[str, 
 
     assert response["statusCode"] == 201
     item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
-    assert item["status"] == "released"
-    assert item["approved_by"] == "user-123"
+    assert item["status"] == "built"
+    assert "approved_by" not in item
 
 
-def test_platform_register_agent_defaults_prod_to_pending(
-    fake_state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+def test_platform_register_agent_rejects_non_built_initial_status(
+    fake_state: dict[str, Any],
 ) -> None:
-    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-prod")
     event = _event(
         method="POST",
         body={
             "agentName": "echo-agent",
             "version": "1.2.1",
+            "status": "promoted",
             "ownerTeam": "platform",
             "tierMinimum": "basic",
             "layerHash": "hash-121",
@@ -2086,40 +2086,17 @@ def test_platform_register_agent_defaults_prod_to_pending(
 
     response = _invoke(event)
 
-    assert response["statusCode"] == 201
-    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.1")]
-    assert item["status"] == "pending"
-    assert "approved_by" not in item
-
-
-def test_platform_register_agent_rejects_invalid_initial_status(
-    fake_state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-prod")
-    event = _event(
-        method="POST",
-        body={
-            "agentName": "echo-agent",
-            "version": "1.2.0",
-            "status": "released",
-        },
-        roles=["Platform.Admin"],
-    )
-    event["path"] = "/v1/platform/agents"
-
-    response = _invoke(event)
-
     assert response["statusCode"] == 400
-    assert ("AGENT#echo-agent", "VERSION#1.2.0") not in fake_state["db"].items
+    assert ("AGENT#echo-agent", "VERSION#1.2.1") not in fake_state["db"].items
 
 
 def test_platform_promote_agent_updates_metadata_and_emits_event(
     fake_state: dict[str, Any],
 ) -> None:
-    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="pending")
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="approved")
     event = _event(
         method="PATCH",
-        body={"status": "released", "releaseNotes": "integration verified"},
+        body={"status": "promoted", "releaseNotes": "approved release evidence recorded"},
         roles=["Platform.Admin"],
     )
     event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
@@ -2128,21 +2105,21 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
 
     assert response["statusCode"] == 200
     item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
-    assert item["status"] == "released"
+    assert item["status"] == "promoted"
     assert item["approved_by"] == "user-123"
     assert item["approved_at"] == "2026-02-25T12:00:00Z"
-    assert item["release_notes"] == "integration verified"
+    assert item["release_notes"] == "approved release evidence recorded"
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.promoted"
-    assert detail["previousStatus"] == "pending"
-    assert detail["status"] == "released"
+    assert detail["previousStatus"] == "approved"
+    assert detail["status"] == "promoted"
 
 
 def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, Any]) -> None:
-    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="released")
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="promoted")
     event = _event(
         method="PATCH",
-        body={"status": "pending"},
+        body={"status": "built"},
         roles=["Platform.Admin"],
     )
     event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
@@ -2155,10 +2132,10 @@ def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, 
 
 
 def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None:
-    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="released")
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="promoted")
     event = _event(
         method="PATCH",
-        body={"status": "rollback", "releaseNotes": "error rate spike"},
+        body={"status": "rolled_back", "releaseNotes": "error rate spike"},
         roles=["Platform.Admin"],
     )
     event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
@@ -2167,8 +2144,8 @@ def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None
 
     assert response["statusCode"] == 200
     item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
-    assert item["status"] == "rollback"
+    assert item["status"] == "rolled_back"
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.rolled_back"
-    assert detail["previousStatus"] == "released"
-    assert detail["status"] == "rollback"
+    assert detail["previousStatus"] == "promoted"
+    assert detail["status"] == "rolled_back"

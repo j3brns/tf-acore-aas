@@ -9,32 +9,50 @@ Currently, agent registration and rollback are performed by scripts that directl
 This model has several weaknesses:
 1.  **Auditability:** Deleting records destroys the audit trail of what was actually running at any given time.
 2.  **Governance:** Direct database access bypasses the Platform API's RBAC and audit logging.
-3.  **Safety:** There is no formal "Pending" state for new versions; registration immediately makes a version "live" if it has the highest semver.
+3.  **Safety:** There is no explicit gated lifecycle between artifact registration and tenant-visible promotion.
 4.  **Compliance:** Production systems with compliance obligations must maintain immutable records of all software versions deployed.
 
 ## Decision
 The platform will adopt a "Status-Based" release governance and rollback model.
 
-### 1. Agent Status Lifecycle
-Every `AgentRecord` in DynamoDB will include a `status` field:
--   `PENDING`: Version is registered and artifacts are uploaded, but it is not yet invokable by tenants.
--   `RELEASED`: Version is approved and invokable. The Bridge picks the highest semver version with this status.
--   `ROLLBACK`: Version has been deactivated due to a reported issue. It is preserved for audit but never invoked.
--   `DEPRECATED`: Version is old but still invokable if explicitly requested by version (future capability), but not the default.
+### 1. Agent Release Status Lifecycle
+`platform-agents` is the source of truth for the release state of an immutable built version.
+Every `AgentRecord` in DynamoDB includes a `status` field with the canonical lifecycle:
+
+-   `BUILT`: Artifacts are registered and immutable, but not yet deployed to staging.
+-   `DEPLOYED_STAGING`: The built version is deployed to staging for verification.
+-   `INTEGRATION_VERIFIED`: Staging integration checks passed.
+-   `EVALUATION_PASSED`: Required evaluation gates passed.
+-   `APPROVED`: An authorized operator recorded approval evidence for promotion.
+-   `PROMOTED`: The version is tenant-invokable. The Bridge picks the highest semver version with this status.
+-   `ROLLED_BACK`: A previously promoted version was withdrawn by operator action. It is preserved for audit and never invoked again.
+-   `FAILED`: A pre-promotion gate failed. The version remains immutable and is not revived; a replacement must register as a new version.
+
+Valid transitions are:
+
+-   `BUILT -> DEPLOYED_STAGING | FAILED`
+-   `DEPLOYED_STAGING -> INTEGRATION_VERIFIED | FAILED`
+-   `INTEGRATION_VERIFIED -> EVALUATION_PASSED | FAILED`
+-   `EVALUATION_PASSED -> APPROVED | FAILED`
+-   `APPROVED -> PROMOTED | FAILED`
+-   `PROMOTED -> ROLLED_BACK`
+
+All other transitions are invalid.
 
 ### 2. Immutability
 Agent versions are immutable. Once a version (e.g., `v1.2.3`) is registered, its associated S3 keys, hashes, and configuration cannot be modified. Only the `status` and governance metadata (`approved_by`, etc.) may change.
 
 ### 3. Promotion Workflow
--   **Registration:** New versions are registered via a Platform API endpoint. In `dev` environments, they may default to `RELEASED`. In `prod`, they must start as `PENDING`.
--   **Approval:** An authorized operator (`Platform.Admin`) promotes a `PENDING` version to `RELEASED` via a PATCH operation.
--   **Bridge Resolution:** The Bridge Lambda finds the "active" version by querying the `platform-agents` table for the highest semver where `status = RELEASED`.
+-   **Registration:** New versions are registered via a Platform API endpoint in `BUILT` state after artifact upload/manifest validation.
+-   **Verification Gates:** Platform operations advance the version through staging deploy, integration verification, evaluation, and approval states.
+-   **Promotion:** An authorized operator (`Platform.Admin`) promotes an `APPROVED` version to `PROMOTED` via a PATCH operation. Promotion is a control-plane status change against the already-built version; it is never an implicit rebuild.
+-   **Bridge Resolution:** The Bridge Lambda finds the active version by querying the `platform-agents` table for the highest semver where `status = PROMOTED`.
 
 ### 4. Rollback Mechanism
 Rollback is a "forward" metadata transition:
 1.  The operator identifies the bad version.
-2.  The operator updates the bad version's status to `ROLLBACK`.
-3.  The Bridge immediately stops using that version and falls back to the next-highest `RELEASED` version.
+2.  The operator updates the bad version's status from `PROMOTED` to `ROLLED_BACK`.
+3.  The Bridge immediately stops using that version and falls back to the next-highest `PROMOTED` version.
 4.  No records are deleted.
 
 ### 5. Platform API Ownership
@@ -64,7 +82,7 @@ New routes in `openapi.yaml`:
 -   **Full Audit Trail:** Every version ever deployed remains in the database.
 -   **Compliance:** Meets requirements for controlled releases and non-destructive rollbacks.
 -   **RBAC:** Leverages existing platform roles for release control.
--   **Safety:** `PENDING` state allows smoke testing before broad release (if the Bridge supports it).
+-   **Safety:** Explicit pre-promotion states allow staging, integration, evaluation, and approval evidence before tenant exposure.
 
 ### Negative
 -   **Storage:** Slightly higher DynamoDB storage (negligible for agent metadata).
@@ -73,7 +91,7 @@ New routes in `openapi.yaml`:
 
 ## Implementation Notes
 1.  Update `data-access-lib` models.
-2.  Update `tenant_api` with new routes.
-3.  Update `bridge` to filter for `status=RELEASED`.
+2.  Update `tenant_api` with new routes and transition validation.
+3.  Update `bridge` to filter for `status=PROMOTED`.
 4.  Update `scripts/register_agent.py` and `scripts/rollback_agent.py`.
-5.  Perform a one-time backfill of `status=RELEASED` for existing agent records.
+5.  Perform a one-time backfill of legacy `released/pending/rollback` statuses into the canonical model.

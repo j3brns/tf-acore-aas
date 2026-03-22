@@ -300,7 +300,7 @@ def test_get_agent_detail_returns_latest_version_and_versions(setup_data):
     assert body["versions"][0]["version"] == "1.1.0"
 
 
-def test_list_agents_ignores_pending_version_when_newer_semver_exists(setup_data):
+def test_list_agents_ignores_built_version_when_newer_semver_exists(setup_data):
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
     table = ddb.Table("platform-agents")
     table.put_item(
@@ -317,7 +317,7 @@ def test_list_agents_ignores_pending_version_when_newer_semver_exists(setup_data
             "deployed_at": "2026-01-04T00:00:00Z",
             "invocation_mode": "sync",
             "streaming_enabled": False,
-            "status": "pending",
+            "status": "built",
         }
     )
 
@@ -340,7 +340,7 @@ def test_list_agents_ignores_pending_version_when_newer_semver_exists(setup_data
     assert body["items"][0]["latestVersion"] == "1.0.0"
 
 
-def test_get_agent_detail_prefers_highest_released_semver(setup_data):
+def test_get_agent_detail_prefers_highest_promoted_semver(setup_data):
     ddb = boto3.resource("dynamodb", region_name="eu-west-2")
     table = ddb.Table("platform-agents")
     table.put_item(
@@ -357,7 +357,7 @@ def test_get_agent_detail_prefers_highest_released_semver(setup_data):
             "deployed_at": "2026-01-02T00:00:00Z",
             "invocation_mode": "sync",
             "streaming_enabled": False,
-            "status": "released",
+            "status": "promoted",
         }
     )
 
