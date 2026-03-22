@@ -370,6 +370,17 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             estimated_duration_seconds=int(item["estimated_duration_seconds"])  # type: ignore
             if item.get("estimated_duration_seconds")
             else None,
+            commit_sha=_coerce_optional_string(item.get("commit_sha")),
+            pipeline_url=_coerce_optional_string(item.get("pipeline_url")),
+            job_id=_coerce_optional_string(item.get("job_id")),
+            evaluation_score=(
+                float(item["evaluation_score"])  # type: ignore
+                if item.get("evaluation_score") is not None
+                else None
+            ),
+            evaluation_report_url=_coerce_optional_string(item.get("evaluation_report_url")),
+            rolled_back_by=_coerce_optional_string(item.get("rolled_back_by")),
+            rolled_back_at=_coerce_optional_string(item.get("rolled_back_at")),
         )
     except Exception:
         logger.exception("Failed to fetch agent record", extra={"agent_name": agent_name})

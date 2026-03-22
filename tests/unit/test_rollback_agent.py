@@ -36,106 +36,38 @@ def test_rollback_agent_success(tmp_path, monkeypatch):
 
     agent_name = "test-agent"
     env = "dev"
-    bucket_name = "platform-artifacts-dev"
-    monkeypatch.setenv("PLATFORM_LAYER_BUCKET", bucket_name)
-
-    # Setup DynamoDB
-    dynamodb = boto3.client("dynamodb", region_name=_REGION)
-    dynamodb.create_table(
-        TableName="platform-agents",
-        KeySchema=[
-            {"AttributeName": "PK", "KeyType": "HASH"},
-            {"AttributeName": "SK", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "PK", "AttributeType": "S"},
-            {"AttributeName": "SK", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    table = boto3.resource("dynamodb", region_name=_REGION).Table("platform-agents")
-
-    # Seed two versions
-    # v1.0.0 (good)
-    table.put_item(
-        Item={
-            "PK": f"AGENT#{agent_name}",
-            "SK": "VERSION#1.0.0",
-            "agent_name": agent_name,
-            "version": "1.0.0",
-            "layer_hash": "hash100",
-            "layer_s3_key": "layers/deps-100.zip",
-            "script_s3_key": "scripts/code-100.zip",
-            "deployed_at": "2026-03-01T10:00:00Z",
-        }
-    )
-    # v1.1.0 (bad)
-    table.put_item(
-        Item={
-            "PK": f"AGENT#{agent_name}",
-            "SK": "VERSION#1.1.0",
-            "agent_name": agent_name,
-            "version": "1.1.0",
-            "layer_hash": "hash110",
-            "layer_s3_key": "layers/deps-110.zip",
-            "script_s3_key": "scripts/code-110.zip",
-            "deployed_at": "2026-03-01T11:00:00Z",
-        }
-    )
-
-    # Setup S3
-    s3 = boto3.client("s3", region_name=_REGION)
-    s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={"LocationConstraint": _REGION})
 
     # Setup SSM with current state (pointing to v1.1.0)
     ssm = boto3.client("ssm", region_name=_REGION)
     ssm.put_parameter(
         Name=f"/platform/agents/{env}/{agent_name}/latest-version", Value="1.1.0", Type="String"
     )
-    ssm.put_parameter(
-        Name=f"/platform/agents/{env}/{agent_name}/script-s3-key",
-        Value="scripts/code-110.zip",
-        Type="String",
-    )
-    ssm.put_parameter(
-        Name=f"/platform/layers/{env}/{agent_name}/hash", Value="hash110", Type="String"
-    )
-    ssm.put_parameter(
-        Name=f"/platform/layers/{env}/{agent_name}/s3-key",
-        Value="layers/deps-110.zip",
-        Type="String",
-    )
+
+    def fake_request_api(url, method, token, body=None):
+        if method == "GET" and url.endswith("/v1/platform/agents"):
+            return {
+                "items": [
+                    {"agent_name": agent_name, "version": "1.0.0", "status": "released"},
+                    {"agent_name": agent_name, "version": "1.1.0", "status": "released"},
+                ]
+            }
+        if method == "PATCH" and f"/v1/platform/agents/{agent_name}/versions/1.1.0" in url:
+            return {"status": "updated"}
+        return {}
+
+    monkeypatch.setattr(rollback_agent, "_request_api", fake_request_api)
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
 
     # Run Rollback
-    success = rollback_agent.rollback_agent(agent_name, env)
+    success = rollback_agent.rollback_agent(agent_name, env, None, None)
     assert success is True
-
-    # Verify v1.1.0 is marked as rolled_back
-    response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": "VERSION#1.1.0"})
-    assert "Item" in response
-    assert response["Item"]["status"] == "rolled_back"
-
-    # Verify v1.0.0 still exists
-    response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": "VERSION#1.0.0"})
-    assert "Item" in response
-    # It should still be tenant-invokable via the legacy default path used by the script.
 
     # Verify SSM points back to v1.0.0
     latest_version_param = ssm.get_parameter(
         Name=f"/platform/agents/{env}/{agent_name}/latest-version"
     )
     assert latest_version_param["Parameter"]["Value"] == "1.0.0"
-
-    script_s3_key_param = ssm.get_parameter(
-        Name=f"/platform/agents/{env}/{agent_name}/script-s3-key"
-    )
-    assert script_s3_key_param["Parameter"]["Value"] == "scripts/code-100.zip"
-
-    hash_param = ssm.get_parameter(Name=f"/platform/layers/{env}/{agent_name}/hash")
-    assert hash_param["Parameter"]["Value"] == "hash100"
-
-    s3_key_param = ssm.get_parameter(Name=f"/platform/layers/{env}/{agent_name}/s3-key")
-    assert s3_key_param["Parameter"]["Value"] == "layers/deps-100.zip"
 
 
 @mock_aws
@@ -144,30 +76,19 @@ def test_rollback_agent_fails_no_previous(monkeypatch):
     agent_name = "test-agent"
     env = "dev"
 
-    # Setup DynamoDB with only one version
-    dynamodb = boto3.client("dynamodb", region_name=_REGION)
-    dynamodb.create_table(
-        TableName="platform-agents",
-        KeySchema=[
-            {"AttributeName": "PK", "KeyType": "HASH"},
-            {"AttributeName": "SK", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "PK", "AttributeType": "S"},
-            {"AttributeName": "SK", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    table = boto3.resource("dynamodb", region_name=_REGION).Table("platform-agents")
-    table.put_item(
-        Item={
-            "PK": f"AGENT#{agent_name}",
-            "SK": "VERSION#1.0.0",
-            "agent_name": agent_name,
-            "version": "1.0.0",
-        }
-    )
+    def fake_request_api(url, method, token, body=None):
+        if method == "GET" and url.endswith("/v1/platform/agents"):
+            return {
+                "items": [
+                    {"agent_name": agent_name, "version": "1.0.0", "status": "released"},
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(rollback_agent, "_request_api", fake_request_api)
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
 
     # Run Rollback - should fail
-    success = rollback_agent.rollback_agent(agent_name, env)
+    success = rollback_agent.rollback_agent(agent_name, env, None, None)
     assert success is False

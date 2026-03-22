@@ -197,6 +197,7 @@ def test_platform_billing_status_pagination(mock_aws_clients: Any) -> None:
         events=MagicMock(),
         dynamodb=boto3.resource("dynamodb", region_name="eu-west-2"),
         ssm=MagicMock(),
+        awslambda=MagicMock(),
         usage_client=MagicMock(),
         memory_provisioner=MagicMock(),
         platform_quota_client=MagicMock(),
