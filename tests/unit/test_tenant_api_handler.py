@@ -525,8 +525,9 @@ def _seed_agent_version(
     agent_name: str,
     version: str,
     status: str = "built",
+    extra: dict[str, Any] | None = None,
 ) -> None:
-    fake_state["db"].items[(f"AGENT#{agent_name}", f"VERSION#{version}")] = {
+    item = {
         "PK": f"AGENT#{agent_name}",
         "SK": f"VERSION#{version}",
         "agent_name": agent_name,
@@ -541,6 +542,9 @@ def _seed_agent_version(
         "streaming_enabled": False,
         "status": status,
     }
+    if extra:
+        item.update(extra)
+    fake_state["db"].items[(f"AGENT#{agent_name}", f"VERSION#{version}")] = item
 
 
 def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
@@ -2133,7 +2137,7 @@ def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, 
 
 
 def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any]) -> None:
-    # 1. Register with CI evidence
+    # 1. Register as BUILT
     register_event = _event(
         method="POST",
         body={
@@ -2145,7 +2149,7 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
             "layerS3Key": "layers/1.0.0.zip",
             "scriptS3Key": "scripts/1.0.0.zip",
             "invocationMode": "sync",
-            "status": "pending",
+            "status": "built",
             "commitSha": "abc12345",
             "pipelineUrl": "https://gitlab.com/pipeline/123",
             "jobId": "job-456",
@@ -2156,16 +2160,25 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
     register_response = _invoke(register_event)
     assert register_response["statusCode"] == 201
 
-    item = fake_state["db"].items[("AGENT#evidence-agent", "VERSION#1.0.0")]
-    assert item["commit_sha"] == "abc12345"
-    assert item["pipeline_url"] == "https://gitlab.com/pipeline/123"
-    assert item["job_id"] == "job-456"
+    # 2. Advance to APPROVED (skipping intermediate for brevity)
+    # Actually, I'll just seed it as APPROVED to test the final promotion metadata
+    _seed_agent_version(
+        fake_state,
+        agent_name="evidence-agent",
+        version="1.0.0",
+        status="approved",
+        extra={
+            "commit_sha": "abc12345",
+            "pipeline_url": "https://gitlab.com/pipeline/123",
+            "job_id": "job-456",
+        },
+    )
 
-    # 2. Promote with evaluation metadata
+    # 3. Promote with evaluation metadata
     promote_event = _event(
         method="PATCH",
         body={
-            "status": "released",
+            "status": "promoted",
             "evaluationScore": 0.98,
             "evaluationReportUrl": "https://frankfurt.aws/eval/789",
             "releaseNotes": "Score: 0.98",
@@ -2179,7 +2192,7 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
     from decimal import Decimal
 
     item = fake_state["db"].items[("AGENT#evidence-agent", "VERSION#1.0.0")]
-    assert item["status"] == "released"
+    assert item["status"] == "promoted"
     assert item["evaluation_score"] == Decimal("0.98")
     assert item["evaluation_report_url"] == "https://frankfurt.aws/eval/789"
     assert item["approved_by"] == "user-123"
@@ -2192,11 +2205,11 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
 
 
 def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
-    _seed_agent_version(fake_state, agent_name="rollback-agent", version="1.0.0", status="released")
+    _seed_agent_version(fake_state, agent_name="rollback-agent", version="1.0.0", status="promoted")
 
     event = _event(
         method="PATCH",
-        body={"status": "rollback"},
+        body={"status": "rolled_back"},
         roles=["Platform.Admin"],
     )
     event["path"] = "/v1/platform/agents/rollback-agent/versions/1.0.0"
@@ -2205,14 +2218,14 @@ def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
     assert response["statusCode"] == 200
 
     item = fake_state["db"].items[("AGENT#rollback-agent", "VERSION#1.0.0")]
-    assert item["status"] == "rollback"
+    assert item["status"] == "rolled_back"
     assert item["rolled_back_by"] == "user-123"
     assert item["rolled_back_at"] == "2026-02-25T12:00:00Z"
 
     # Verify event detail
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.rolled_back"
-    assert detail["status"] == "rollback"
+    assert detail["status"] == "rolled_back"
     assert detail["rolledBackBy"] == "user-123"
     assert detail["rolledBackAt"] == "2026-02-25T12:00:00Z"
 

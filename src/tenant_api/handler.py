@@ -2149,7 +2149,7 @@ def _handle_platform_update_agent_version(
     if new_agent_status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         attrs["approved_by"] = caller.sub
         attrs["approved_at"] = _iso(_now_utc())
-    if new_agent_status is AgentStatus.ROLLBACK:
+    if new_agent_status is AgentStatus.ROLLED_BACK:
         attrs["rolled_back_by"] = caller.sub
         attrs["rolled_back_at"] = _iso(_now_utc())
     if body.get("releaseNotes") is not None:
