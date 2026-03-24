@@ -50,3 +50,13 @@ make validate-local
 - The suspension update goes through `TenantScopedDynamoDB`.
 - Tests pass.
 - `make validate-local` passes.
+
+## Resolution
+
+**Status: Fixed** — commit `c523d4a` (2026-03-22).
+
+Raw `_dynamodb.Table(TENANTS_TABLE).update_item(...)` call replaced with
+`TenantScopedDynamoDB.update_item()` using the existing `db` instance in
+`_process_tenant()`. Global `_dynamodb` resource and associated module-level
+initialisation removed from `src/billing/handler.py`.
+All 492 unit tests pass; `make validate-local` clean.

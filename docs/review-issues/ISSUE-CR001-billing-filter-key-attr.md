@@ -46,3 +46,12 @@ make validate-local
 - Unit tests verify `Attr` is used and not `Key`.
 - `make validate-local` passes.
 - No unrelated files changed.
+
+## Resolution
+
+**Status: Fixed** — commit `c523d4a` (2026-03-22).
+
+All three `Key(...)` calls in `_get_active_tenants()` replaced with `Attr(...)`.
+Import updated from `Key` to `Attr` in `src/billing/handler.py`.
+Unit tests in `tests/unit/test_billing_pagination.py` updated to verify `Attr` usage.
+All 492 unit tests pass; `make validate-local` clean.

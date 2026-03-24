@@ -64,3 +64,18 @@ make validate-local
 - In-memory cache with TTL reduces repeated lookups.
 - Unit tests mock the GSI query path.
 - `make validate-local` passes.
+
+## Resolution
+
+**Status: Partially fixed** — commit `c523d4a` (2026-03-22).
+
+**Immediate mitigation applied:** An in-memory TTL cache (default 60 s, configurable
+via `SIGV4_BINDING_CACHE_TTL_SECONDS` env var) added to `resolve_sigv4_tenant_binding()`
+in `src/authoriser/handler.py`. Repeated ARN lookups from warm Lambda invocations now
+skip DynamoDB entirely within the TTL window.
+
+**Full fix (GSI) is pending operator sign-off** per the stop-and-ask gate in the
+Scope section above. The DynamoDB schema change (adding `gsi-execution-role-arn`)
+has not yet been merged. A follow-up issue should be raised once sign-off is granted.
+
+All 492 unit tests pass; `make validate-local` clean.

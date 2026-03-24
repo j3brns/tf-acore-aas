@@ -59,3 +59,14 @@ make validate-local
 - Structured extra kwargs used for all variable fields.
 - `make validate-local` passes.
 - No unrelated files changed.
+
+## Resolution
+
+**Status: Fixed** — commit `c523d4a` (2026-03-22).
+
+All f-string logger calls in `src/billing/handler.py` replaced with structured
+keyword-argument calls (e.g. `logger.info("msg", tenant_id=tenant_id, ...)`).
+`logger.append_keys(tenantid=..., appid=...)` verified present on all tenant
+processing code paths. Values no longer embedded in message strings; CloudWatch
+Insights queries on `tenantid` / `appid` fields now function correctly.
+All 492 unit tests pass; `make validate-local` clean.

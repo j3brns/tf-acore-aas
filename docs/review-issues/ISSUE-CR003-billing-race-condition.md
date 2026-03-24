@@ -72,3 +72,15 @@ make validate-local
 - Billing accumulation uses DynamoDB atomic ADD expressions, no pre-read.
 - Concurrent invocations produce correct totals.
 - Tests pass and `make validate-local` passes.
+
+## Resolution
+
+**Status: Fixed** — commit `c523d4a` (2026-03-22).
+
+Read-modify-write pattern (`get_item` + `put_item`) replaced with a single atomic
+`update_item` using DynamoDB `ADD` expressions for `total_input_tokens`,
+`total_output_tokens`, and `total_cost_usd`. `ReturnValues=ALL_NEW` used to
+retrieve post-update totals for metric emission and budget enforcement.
+`tests/unit/test_billing_pagination.py` updated to assert `update_item` (ADD
+semantics) rather than `put_item`.
+All 492 unit tests pass; `make validate-local` clean.

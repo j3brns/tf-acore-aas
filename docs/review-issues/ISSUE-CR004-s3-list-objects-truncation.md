@@ -49,3 +49,13 @@ make validate-local
 - Unit test verifies multi-page scenario.
 - `make validate-local` passes.
 - No unrelated files changed.
+
+## Resolution
+
+**Status: Fixed** — commit `c523d4a` (2026-03-22).
+
+`TenantScopedS3.list_objects()` in `src/data-access-lib/src/data_access/client.py`
+updated to follow a `ContinuationToken` / `IsTruncated` pagination loop, accumulating
+all pages before returning. The single-call implementation is replaced; no rename was
+required as the corrected method now fulfils the contract callers expected.
+All 492 unit tests pass; `make validate-local` clean.
