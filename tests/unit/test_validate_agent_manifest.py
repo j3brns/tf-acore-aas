@@ -261,3 +261,223 @@ class TestRequiredFields:
         assert manifest.llm.max_tokens == 2048
         assert manifest.evaluations.threshold == pytest.approx(0.9)
         assert manifest.evaluations.evaluation_region == "eu-west-1"
+
+
+_MINIMAL_TOML = """\
+[project]
+name = "{name}"
+version = "1.0.0"
+
+[tool.agentcore]
+name = "{name}"
+owner_team = "team-test"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+"""
+
+
+class TestHandlerFormat:
+    def test_handler_without_colon_is_rejected(self, tmp_path: Path) -> None:
+        _write_manifest(
+            tmp_path,
+            "my-agent",
+            _MINIMAL_TOML.replace('handler = "handler:invoke"', 'handler = "handler_invoke"').format(
+                name="my-agent"
+            ),
+        )
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("handler" in e.lower() for e in exc_info.value.errors)
+
+    def test_handler_with_colon_is_accepted(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path, "my-agent", _MINIMAL_TOML.format(name="my-agent"))
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.handler == "handler:invoke"
+
+
+class TestEstimatedDurationValidation:
+    def test_zero_duration_is_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + "\nestimated_duration_seconds = 0\n"
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("estimated_duration_seconds" in e for e in exc_info.value.errors)
+
+    def test_negative_duration_is_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + "\nestimated_duration_seconds = -5\n"
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("estimated_duration_seconds" in e for e in exc_info.value.errors)
+
+    def test_positive_duration_is_accepted(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + "\nestimated_duration_seconds = 30\n"
+        _write_manifest(tmp_path, "my-agent", toml)
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.estimated_duration_seconds == 30
+
+
+class TestLlmSectionValidation:
+    def test_max_tokens_zero_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            "\n[tool.agentcore.llm]\nmodel_id = \"claude-3\"\nmax_tokens = 0\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("max_tokens" in e for e in exc_info.value.errors)
+
+    def test_max_tokens_positive_accepted(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            "\n[tool.agentcore.llm]\nmodel_id = \"claude-3\"\nmax_tokens = 1024\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.llm.max_tokens == 1024
+
+    def test_unknown_llm_key_is_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            "\n[tool.agentcore.llm]\nmodel_id = \"claude-3\"\ntemperature = 0.7\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("temperature" in e for e in exc_info.value.errors)
+
+
+class TestDeploymentSectionValidation:
+    def test_invalid_deployment_type_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "docker"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("deployment type" in e.lower() for e in exc_info.value.errors)
+
+    def test_zip_deployment_type_accepted(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "zip"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.deployment.type == "zip"
+
+    def test_container_deployment_type_accepted(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "container"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.deployment.type == "container"
+
+
+class TestEvaluationsSectionValidation:
+    def test_threshold_above_one_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            "\n[tool.agentcore.evaluations]\nthreshold = 1.5\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("threshold" in e for e in exc_info.value.errors)
+
+    def test_threshold_below_zero_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            "\n[tool.agentcore.evaluations]\nthreshold = -0.1\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("threshold" in e for e in exc_info.value.errors)
+
+    def test_threshold_boundaries_accepted(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            "\n[tool.agentcore.evaluations]\nthreshold = 0.0\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.evaluations.threshold == pytest.approx(0.0)
+
+    def test_default_evaluation_region_is_eu_central(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path, "my-agent", _MINIMAL_TOML.format(name="my-agent"))
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.evaluations.evaluation_region == "eu-central-1"
+
+
+class TestTomlParseError:
+    def test_malformed_toml_raises_manifest_validation_error(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / "agents" / "bad-agent"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "pyproject.toml").write_text("[[invalid toml\nkey = oops")
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("bad-agent", tmp_path)
+        assert any("parse" in e.lower() or "Failed" in e for e in exc_info.value.errors)
+
+
+class TestMissingProjectSection:
+    def test_missing_project_section_accumulates_error(self, tmp_path: Path) -> None:
+        toml = """\
+[tool.agentcore]
+name = "no-project"
+owner_team = "team-a"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+"""
+        agent_dir = tmp_path / "agents" / "no-project"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "pyproject.toml").write_text(toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("no-project", tmp_path)
+        assert any("[project]" in e for e in exc_info.value.errors)
+
+
+class TestManifestValidationErrorStructure:
+    def test_errors_attribute_contains_all_issues(self, tmp_path: Path) -> None:
+        """Multiple validation failures must all be reported together, not fail-fast."""
+        toml = """\
+[project]
+name = "multi-err"
+version = "1.0.0"
+
+[tool.agentcore]
+name = "multi-err"
+owner_team = "team-test"
+tier_minimum = "invalid-tier"
+handler = "no_colon_here"
+invocation_mode = "invalid-mode"
+estimated_duration_seconds = -1
+"""
+        _write_manifest(tmp_path, "multi-err", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("multi-err", tmp_path)
+
+        errors = exc_info.value.errors
+        assert len(errors) >= 3, f"Expected multiple errors, got: {errors}"
+        joined = " ".join(errors)
+        assert "tier_minimum" in joined
+        assert "invocation_mode" in joined
