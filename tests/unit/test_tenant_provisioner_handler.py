@@ -123,7 +123,6 @@ class TestTenantProvisioner(unittest.TestCase):
         self.assertEqual(result["status"], "SUCCESS")
         mock_cfn.update_stack.assert_called_once()
 
-
     @patch("boto3.client")
     @patch("boto3.resource")
     @patch("time.sleep", return_value=None)
@@ -153,9 +152,7 @@ class TestTenantProvisioner(unittest.TestCase):
                 {"Error": {"Code": "ValidationError", "Message": "Stack does not exist"}},
                 "DescribeStacks",
             ),
-            {
-                "Stacks": [{"StackStatus": "CREATE_FAILED", "Outputs": []}]
-            },
+            {"Stacks": [{"StackStatus": "CREATE_FAILED", "Outputs": []}]},
         ]
 
         event = {"detail": {"tenantId": "t-fail-001", "tier": "basic"}}
@@ -170,9 +167,7 @@ class TestTenantProvisioner(unittest.TestCase):
     @patch("boto3.client")
     @patch("boto3.resource")
     @patch("time.sleep", return_value=None)
-    def test_lambda_handler_rollback_complete_raises(
-        self, mock_sleep, mock_resource, mock_client
-    ):
+    def test_lambda_handler_rollback_complete_raises(self, mock_sleep, mock_resource, mock_client):
         mock_cfn = MagicMock()
         mock_client.return_value = mock_cfn
 
@@ -181,9 +176,7 @@ class TestTenantProvisioner(unittest.TestCase):
                 {"Error": {"Code": "ValidationError", "Message": "Stack does not exist"}},
                 "DescribeStacks",
             ),
-            {
-                "Stacks": [{"StackStatus": "ROLLBACK_COMPLETE", "Outputs": []}]
-            },
+            {"Stacks": [{"StackStatus": "ROLLBACK_COMPLETE", "Outputs": []}]},
         ]
 
         event = {"detail": {"tenantId": "t-rollback-001", "tier": "basic"}}
@@ -198,17 +191,13 @@ class TestTenantProvisioner(unittest.TestCase):
     @patch("boto3.client")
     @patch("boto3.resource")
     @patch("time.sleep", return_value=None)
-    def test_lambda_handler_update_rollback_raises(
-        self, mock_sleep, mock_resource, mock_client
-    ):
+    def test_lambda_handler_update_rollback_raises(self, mock_sleep, mock_resource, mock_client):
         mock_cfn = MagicMock()
         mock_client.return_value = mock_cfn
 
         mock_cfn.describe_stacks.side_effect = [
             {"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]},  # stack exists
-            {
-                "Stacks": [{"StackStatus": "UPDATE_ROLLBACK_COMPLETE", "Outputs": []}]
-            },
+            {"Stacks": [{"StackStatus": "UPDATE_ROLLBACK_COMPLETE", "Outputs": []}]},
         ]
 
         event = {"detail": {"tenantId": "t-urollback-001", "tier": "premium"}}
@@ -226,7 +215,10 @@ class TestTenantProvisioner(unittest.TestCase):
     def test_lambda_handler_completes_with_no_outputs_raises(
         self, mock_sleep, mock_resource, mock_client
     ):
-        """Stack reaches CREATE_COMPLETE but has no outputs → RuntimeError (same 'no outputs' path)."""
+        """Stack reaches CREATE_COMPLETE but has no outputs.
+
+        This should raise the same RuntimeError "no outputs" path.
+        """
         mock_cfn = MagicMock()
         mock_client.return_value = mock_cfn
 
@@ -369,7 +361,7 @@ class TestTenantProvisioner(unittest.TestCase):
     def test_lambda_handler_non_validation_cfn_error_on_describe_propagates(
         self, mock_sleep, mock_resource, mock_client
     ):
-        """ClientError with a code other than ValidationError during initial describe is re-raised."""
+        """Re-raise non-ValidationError ClientError during initial describe."""
         mock_cfn = MagicMock()
         mock_client.return_value = mock_cfn
 
