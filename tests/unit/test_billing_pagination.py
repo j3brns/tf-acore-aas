@@ -142,7 +142,16 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
     with patch("src.billing.handler._dynamodb") as mock_ddb_resource:
         mock_table = MagicMock()
         mock_ddb_resource.Table.return_value = mock_table
-        mock_table.get_item.return_value = {}
+
+        # CR003: billing now uses atomic update_item ADD; return Attributes so the
+        # handler can extract totals for metric emission and budget enforcement.
+        mock_table.update_item.return_value = {
+            "Attributes": {
+                "total_input_tokens": 2000,
+                "total_output_tokens": 0,
+                "total_cost_usd": 0.2,
+            }
+        }
 
         # mock_table.query (for invocations)
         mock_table.query.side_effect = [
@@ -172,11 +181,13 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
         tenant = {"tenant_id": tenant_id, "tier": "basic", "app_id": app_id, "status": "active"}
         _process_tenant(tenant, yesterday)
 
-        # Verify that total_input_tokens is 2000 (both pages)
-        args, kwargs = mock_table.put_item.call_args
-        item = kwargs["Item"]
-        assert item["total_input_tokens"] == 2000
+        # CR003: billing now uses atomic ADD update_item instead of put_item.
+        # Verify the day token total (2000) is passed as the ADD operand :di.
         assert mock_table.query.call_count == 2
+        assert mock_table.update_item.called
+        call_kwargs = mock_table.update_item.call_args[1]
+        expr_vals = call_kwargs["ExpressionAttributeValues"]
+        assert expr_vals[":di"] == 2000, f"Expected :di=2000, got {expr_vals.get(':di')}"
 
 
 def test_platform_billing_status_pagination(mock_aws_clients: Any) -> None:
