@@ -501,6 +501,30 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('configures CloudFront access logging for the SPA distribution', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: 'platform-spa-logs-dev',
+      AccessControl: 'LogDeliveryWrite',
+      OwnershipControls: {
+        Rules: [
+          {
+            ObjectOwnership: 'BucketOwnerPreferred',
+          },
+        ],
+      },
+    });
+
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Logging: Match.objectLike({
+          Bucket: Match.anyValue(),
+          IncludeCookies: false,
+          Prefix: 'spa-cloudfront/',
+        }),
+      }),
+    });
+  });
+
   test('wires Entra config from CDK context instead of hardcoded common endpoints', () => {
     const customTemplate = synthTemplate('dev', {
       entraTenantId: '00000000-0000-0000-0000-000000000000',
@@ -543,6 +567,62 @@ describe('PlatformStack (TASK-023)', () => {
           ENTRA_TOKEN_ENDPOINT:
             'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/oauth2/v2.0/token',
         }),
+      },
+    });
+  });
+
+  test('configures API Gateway access logs with numeric status and latency for metric filters', () => {
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      AccessLogSetting: {
+        Format: Match.stringLikeRegexp('.*status":\\$context.status.*latency":\\$context.responseLatency.*'),
+      },
+    });
+
+    template.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '{ $.tenantId = "*" }',
+      MetricTransformations: [
+        Match.objectLike({
+          MetricName: 'RequestCount',
+          MetricNamespace: 'Platform/API',
+          MetricValue: '1',
+          Dimensions: Match.arrayWith([
+            Match.objectLike({ Key: 'TenantId', Value: '$.tenantId' }),
+          ]),
+        }),
+      ],
+    });
+
+    template.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '{ $.status >= 400 }',
+      MetricTransformations: [
+        Match.objectLike({
+          MetricName: 'ErrorCount',
+          MetricNamespace: 'Platform/API',
+          MetricValue: '1',
+        }),
+      ],
+    });
+
+    template.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '{ $.latency = "*" }',
+      MetricTransformations: [
+        Match.objectLike({
+          MetricName: 'Latency',
+          MetricValue: '$.latency',
+        }),
+      ],
+    });
+  });
+
+  test('grants billing lambda put-metric-data permissions', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'cloudwatch:PutMetricData',
+            Resource: '*',
+          }),
+        ]),
       },
     });
   });

@@ -32,6 +32,7 @@ package_agent = _load_module("package_agent")
 build_layer = _load_module("build_layer")
 deploy_agent = _load_module("deploy_agent")
 register_agent = _load_module("register_agent")
+evaluate_agent = _load_module("evaluate_agent")
 
 _REGION = "eu-west-2"
 
@@ -56,6 +57,26 @@ def _patch_deploy_agentcore(monkeypatch, fake_client: _FakeAgentCoreClient) -> N
         return real_client(service_name, *args, **kwargs)
 
     monkeypatch.setattr(deploy_agent, "boto3", types.SimpleNamespace(client=_client))
+
+
+def _makefile_recipe_lines(target: str) -> list[str]:
+    makefile_lines = (REPO_ROOT / "Makefile").read_text().splitlines()
+    recipe_lines: list[str] = []
+    in_target = False
+
+    for line in makefile_lines:
+        if in_target:
+            if line.startswith("\t"):
+                recipe_lines.append(line.strip())
+                continue
+            break
+        if line == f"{target}:":
+            in_target = True
+
+    if not recipe_lines:
+        raise AssertionError(f"Target {target} not found in Makefile")
+
+    return recipe_lines
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +108,18 @@ def test_package_agent_creates_zip(tmp_path, monkeypatch):
         assert "handler.py" in names
         assert "pyproject.toml" in names
         assert "__pycache__/test.pyc" not in names
+
+
+def test_agent_push_runs_tests_before_deploy_and_register():
+    recipe_lines = _makefile_recipe_lines("agent-push")
+
+    test_index = recipe_lines.index("$(MAKE) test-agent AGENT=$(AGENT)")
+    deploy_index = recipe_lines.index("uv run python scripts/deploy_agent.py $(AGENT) --env $(ENV)")
+    register_index = recipe_lines.index(
+        "uv run python scripts/register_agent.py $(AGENT) --env $(ENV)"
+    )
+
+    assert test_index < deploy_index < register_index
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +163,13 @@ def _prepare_deploy_agent_fixture(tmp_path, monkeypatch) -> tuple[str, str, str]
 [project]
 name = "echo-agent"
 version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
 
 [tool.agentcore.deployment]
 type = "zip"
@@ -206,8 +246,10 @@ name = "echo-agent"
 version = "1.2.3"
 
 [tool.agentcore]
+name = "echo-agent"
 owner_team = "platform"
 tier_minimum = "basic"
+handler = "handler:invoke"
 invocation_mode = "sync"
 """)
     stored_items: list[dict[str, object]] = []
@@ -219,18 +261,22 @@ invocation_mode = "sync"
     def put_parameter(**kwargs):
         latest_version_writes.append(kwargs)
 
-    fake_table = types.SimpleNamespace(put_item=put_item)
-    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
     fake_ssm = types.SimpleNamespace(put_parameter=put_parameter)
+
+    def fake_request_api(url, method, token, body=None):
+        stored_items.append(body)
+        return {"status": "registered"}
 
     monkeypatch.setattr(
         register_agent,
         "boto3",
         types.SimpleNamespace(
             client=lambda service_name, **kwargs: fake_ssm,
-            resource=lambda service_name, **kwargs: fake_resource,
         ),
     )
+    monkeypatch.setattr(register_agent, "_request_api", fake_request_api)
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
     monkeypatch.setattr(
         register_agent,
         "get_ssm_param",
@@ -242,14 +288,14 @@ invocation_mode = "sync"
         }[name],
     )
 
-    assert register_agent.register_agent(agent_name, env) is True
+    assert register_agent.register_agent(agent_name, env, None, None) is True
 
     assert len(stored_items) == 1
     item = stored_items[0]
-    assert item["agent_name"] == agent_name
+    assert item["agentName"] == agent_name
     assert item["version"] == "1.2.3"
-    assert item["layer_hash"] == "hash123"
-    assert item["script_s3_key"] == "scripts/custom-key.zip"
+    assert item["layerHash"] == "hash123"
+    assert item["scriptS3Key"] == "scripts/custom-key.zip"
 
     assert latest_version_writes == [
         {
@@ -276,19 +322,16 @@ name = "echo-agent"
 version = "1.2.3"
 
 [tool.agentcore]
+name = "echo-agent"
 owner_team = "platform"
 tier_minimum = "basic"
+handler = "handler:invoke"
 invocation_mode = "sync"
 """)
 
-    def failing_put_item(*args, **kwargs):
-        raise ClientError(
-            {"Error": {"Code": "InternalServerError", "Message": "ddb write failed"}},
-            "PutItem",
-        )
+    def failing_request_api(*args, **kwargs):
+        raise RuntimeError("api write failed")
 
-    fake_table = types.SimpleNamespace(put_item=failing_put_item)
-    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
     fake_ssm = types.SimpleNamespace(put_parameter=lambda **kwargs: None)
 
     monkeypatch.setattr(
@@ -296,9 +339,11 @@ invocation_mode = "sync"
         "boto3",
         types.SimpleNamespace(
             client=lambda service_name, **kwargs: fake_ssm,
-            resource=lambda service_name, **kwargs: fake_resource,
         ),
     )
+    monkeypatch.setattr(register_agent, "_request_api", failing_request_api)
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
     monkeypatch.setattr(
         register_agent,
         "get_ssm_param",
@@ -310,7 +355,7 @@ invocation_mode = "sync"
         }[name],
     )
 
-    assert register_agent.register_agent(agent_name, env) is False
+    assert register_agent.register_agent(agent_name, env, None, None) is False
 
 
 def test_register_agent_returns_false_when_latest_version_write_fails(tmp_path, monkeypatch):
@@ -328,8 +373,10 @@ name = "echo-agent"
 version = "1.2.3"
 
 [tool.agentcore]
+name = "echo-agent"
 owner_team = "platform"
 tier_minimum = "basic"
+handler = "handler:invoke"
 invocation_mode = "sync"
 """)
     put_item_calls: list[dict[str, object]] = []
@@ -365,5 +412,85 @@ invocation_mode = "sync"
         }[name],
     )
 
-    assert register_agent.register_agent(agent_name, env) is False
-    assert len(put_item_calls) == 1
+    monkeypatch.setattr(
+        register_agent, "_request_api", lambda *args, **kwargs: {"status": "registered"}
+    )
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
+
+    assert register_agent.register_agent(agent_name, env, None, None) is False
+
+
+def test_register_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setattr(register_agent, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(register_agent, "boto3", types.SimpleNamespace(client=None, resource=None))
+
+    agent_dir = tmp_path / "agents" / "echo-agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+
+    assert register_agent.register_agent("echo-agent", "dev", None, None) is False
+
+
+def test_deploy_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setattr(deploy_agent, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(deploy_agent, "BUILD_DIR", tmp_path / ".build")
+
+    agent_dir = tmp_path / "agents" / "echo-agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+
+    def _unexpected_client(*_args, **_kwargs):
+        raise AssertionError("AWS client should not be created for invalid manifests")
+
+    monkeypatch.setattr(deploy_agent, "boto3", types.SimpleNamespace(client=_unexpected_client))
+
+    assert deploy_agent.deploy_agent("echo-agent", "dev") is False
+
+
+def test_evaluate_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate_agent, "REPO_ROOT", tmp_path)
+
+    agent_dir = tmp_path / "agents" / "echo-agent"
+    (agent_dir / "tests" / "golden").mkdir(parents=True)
+    (agent_dir / "tests" / "golden" / "invoke_cases.json").write_text('{"sync": []}')
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+invocation_mode = "sync"
+""")
+
+    def _unexpected_client(*_args, **_kwargs):
+        raise AssertionError("AWS client should not be created for invalid manifests")
+
+    monkeypatch.setattr(evaluate_agent, "boto3", types.SimpleNamespace(client=_unexpected_client))
+
+    assert evaluate_agent.evaluate_agent("echo-agent", "dev") is False

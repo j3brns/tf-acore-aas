@@ -21,7 +21,7 @@ from typing import Any
 import boto3
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from data_access.client import TenantScopedDynamoDB
 from data_access.models import (
     TenantContext,
@@ -40,6 +40,7 @@ EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 _ssm = boto3.client("ssm", region_name=os.environ["AWS_REGION"])
 _events = boto3.client("events", region_name=os.environ["AWS_REGION"])
 _dynamodb = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION"])
+_cloudwatch = boto3.client("cloudwatch", region_name=os.environ["AWS_REGION"])
 
 
 class PricingResolutionError(RuntimeError):
@@ -104,10 +105,12 @@ def _get_active_tenants() -> list[dict[str, Any]]:
         sub="billing-pipeline",
     )
     db = TenantScopedDynamoDB(ctx, dynamodb_resource=_dynamodb)
+    # CR001: FilterExpression requires Attr() conditions, not Key() conditions.
+    # Key() is only valid in KeyConditionExpression.
     return db.scan_all(
         TENANTS_TABLE,
-        filter_expression=Key("SK").eq("METADATA")
-        & (Key("status").eq(TenantStatus.ACTIVE) | Key("status").eq(TenantStatus.SUSPENDED)),
+        filter_expression=Attr("SK").eq("METADATA")
+        & (Attr("status").eq(TenantStatus.ACTIVE) | Attr("status").eq(TenantStatus.SUSPENDED)),
     )
 
 
@@ -126,7 +129,8 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
     year_month = date_to_process.strftime("%Y-%m")
 
     logger.append_keys(tenantid=tenant_id, appid=app_id)
-    logger.info(f"Processing billing for {tenant_id} on {date_to_process.date()}")
+    # CR006: Use structured kwargs instead of f-string interpolation.
+    logger.info("Processing billing for tenant", date=str(date_to_process.date()))
 
     # Context for data-access-lib
     ctx = TenantContext(
@@ -158,54 +162,90 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
         raise PricingResolutionError(f"Unable to price tenant {tenant_id}") from exc
     day_cost = _calculate_cost(day_input, day_output, pricing)
 
-    # 3. Update monthly summary
-    # SK: BILLING#{yearMonth}
+    # 3. Update monthly summary atomically.
+    # CR003: Use a single atomic ADD + SET expression instead of read-modify-write.
+    # DynamoDB ADD initialises missing numeric attributes to 0 before adding, so
+    # the first write of the month is handled correctly without a pre-read.
+    # ReturnValues=ALL_NEW (set by TenantScopedDynamoDB.update_item) gives us the
+    # running totals for metric emission and budget enforcement below.
     summary_key = {"PK": f"TENANT#{tenant_id}", "SK": f"BILLING#{year_month}"}
+    update_response = db.update_item(
+        TENANTS_TABLE,
+        summary_key,
+        "SET tenant_id = :tid, year_month = :ym, last_updated = :lu "
+        "ADD total_input_tokens :di, total_output_tokens :do, total_cost_usd :dc",
+        {
+            ":tid": tenant_id,
+            ":ym": year_month,
+            ":lu": _iso_now(),
+            ":di": day_input,
+            ":do": day_output,
+            ":dc": Decimal(str(round(day_cost, 4))),
+        },
+    )
+    updated = update_response.get("Attributes", {})
+    total_input = int(updated.get("total_input_tokens", day_input))
+    total_output = int(updated.get("total_output_tokens", day_output))
+    total_cost = float(updated.get("total_cost_usd", day_cost))
 
-    current_summary = db.get_item(TENANTS_TABLE, summary_key)
+    # 4. Emit metrics for observability
+    # Monthly cost metric used for per-tenant budget alarms
+    try:
+        dimensions = [
+            {"Name": "TenantId", "Value": tenant_id},
+            {"Name": "Tier", "Value": tier},
+        ]
+        _cloudwatch.put_metric_data(
+            Namespace="Platform/Billing",
+            MetricData=[
+                {
+                    "MetricName": "MonthlyCost",
+                    "Value": total_cost,
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+                {
+                    "MetricName": "DailyCost",
+                    "Value": day_cost,
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+                {
+                    "MetricName": "InputTokens",
+                    "Value": float(total_input),
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+                {
+                    "MetricName": "OutputTokens",
+                    "Value": float(total_output),
+                    "Unit": "None",
+                    "Dimensions": dimensions,
+                },
+            ],
+        )
+    except Exception as exc:
+        # CR006: structured logging
+        logger.warning("Failed to emit cost metrics", exc_info=exc)
 
-    total_input = day_input
-    if current_summary:
-        total_input += int(current_summary.get("total_input_tokens", 0))
-
-    total_output = day_output
-    if current_summary:
-        total_output += int(current_summary.get("total_output_tokens", 0))
-
-    total_cost = day_cost
-    if current_summary:
-        total_cost += float(current_summary.get("total_cost_usd", 0.0))
-
-    new_summary = {
-        "PK": f"TENANT#{tenant_id}",
-        "SK": f"BILLING#{year_month}",
-        "tenant_id": tenant_id,
-        "year_month": year_month,
-        "total_input_tokens": total_input,
-        "total_output_tokens": total_output,
-        "total_cost_usd": Decimal(str(round(total_cost, 4))),
-        "last_updated": _iso_now(),
-    }
-    db.put_item(TENANTS_TABLE, new_summary)
-
-    # 4. Check budget
+    # 5. Check budget
     if budget > 0 and total_cost > budget:
         if tenant["status"] == TenantStatus.ACTIVE:
+            # CR006: structured kwargs
             logger.warning(
-                f"Tenant {tenant_id} exceeded budget {budget} (cost={total_cost}). Suspending."
+                "Tenant exceeded monthly budget; suspending",
+                budget=budget,
+                cost=total_cost,
             )
 
-            # Suspend tenant
-            table = _dynamodb.Table(TENANTS_TABLE)
-            table.update_item(
-                Key={"PK": f"TENANT#{tenant_id}", "SK": "METADATA"},
-                UpdateExpression="SET #s = :s, updated_at = :u",
-                ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={
-                    ":s": TenantStatus.SUSPENDED,
-                    ":u": _iso_now(),
-                },
-                ConditionExpression="attribute_exists(PK)",
+            # CR002: Use TenantScopedDynamoDB (data-access-lib) instead of raw boto3.
+            db.update_item(
+                TENANTS_TABLE,
+                {"PK": f"TENANT#{tenant_id}", "SK": "METADATA"},
+                "SET #s = :s, updated_at = :u",
+                {":s": TenantStatus.SUSPENDED, ":u": _iso_now()},
+                expression_attribute_names={"#s": "status"},
+                condition_expression="attribute_exists(PK)",
             )
 
             # Publish event
@@ -228,9 +268,8 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
                 ]
             )
         else:
-            logger.info(
-                f"Tenant {tenant_id} already suspended (cost={total_cost}, budget={budget})"
-            )
+            # CR006: structured kwargs
+            logger.info("Tenant already suspended", cost=total_cost, budget=budget)
 
 
 def lambda_handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
@@ -245,7 +284,8 @@ def lambda_handler(event: dict[str, Any], context: LambdaContext) -> dict[str, A
         date_to_process = datetime.now(UTC) - timedelta(days=1)
 
     tenants = _get_active_tenants()
-    logger.info(f"Found {len(tenants)} active/suspended tenants to process")
+    # CR006: structured kwargs
+    logger.info("Active/suspended tenants found", tenant_count=len(tenants))
 
     processed = 0
     errors = 0
@@ -254,12 +294,16 @@ def lambda_handler(event: dict[str, Any], context: LambdaContext) -> dict[str, A
         try:
             _process_tenant(tenant, date_to_process)
             processed += 1
-        except Exception as exc:
-            logger.exception(f"Failed to process tenant {tenant.get('tenant_id')}: {exc}")
+        except Exception:
+            logger.exception(
+                "Failed to process tenant billing",
+                tenant_id=tenant.get("tenant_id"),
+            )
             errors += 1
 
     status = "success" if errors == 0 else "partial_failure"
-    logger.info(f"Billing pipeline complete. Processed={processed}, Errors={errors}")
+    # CR006: structured kwargs
+    logger.info("Billing pipeline complete", processed=processed, errors=errors)
     return {
         "status": status,
         "processed": processed,

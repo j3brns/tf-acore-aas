@@ -96,9 +96,25 @@ def read_agent_deps(agent_name: str) -> list[str]:
     return [str(dep) for dep in deps]
 
 
-def compute_dependency_hash(deps: list[str]) -> str:
-    """Return canonical dependency hash used for S3 key and SSM metadata."""
+def read_agent_lockfile(agent_name: str) -> str | None:
+    """Read uv.lock from agents/{agent_name}/uv.lock if it exists.
+
+    Returns the file content as a string, or None if the lockfile is absent.
+    """
+    lock_path = REPO_ROOT / "agents" / agent_name / "uv.lock"
+    if not lock_path.exists():
+        return None
+    return lock_path.read_text(encoding="utf-8")
+
+
+def compute_dependency_hash(deps: list[str], lockfile_content: str | None = None) -> str:
+    """Return canonical dependency hash used for S3 key and SSM metadata.
+
+    Includes lockfile content when present to track transitive dependency changes.
+    """
     canonical = "\n".join(sorted(dep.strip() for dep in deps))
+    if lockfile_content is not None:
+        canonical = canonical + "\n---lockfile---\n" + lockfile_content
     return hashlib.sha256(canonical.encode()).hexdigest()[:HASH_LENGTH]
 
 
@@ -249,7 +265,8 @@ def run(agent_name: str, env: str) -> int:
     """Run dependency layer build and publish flow."""
     aws_region = require_aws_region()
     deps = read_agent_deps(agent_name)
-    dep_hash = compute_dependency_hash(deps)
+    lockfile = read_agent_lockfile(agent_name)
+    dep_hash = compute_dependency_hash(deps, lockfile_content=lockfile)
 
     deps_dir = BUILD_DIR / "deps"
     zip_path = BUILD_DIR / f"{agent_name}-deps-{dep_hash}.zip"

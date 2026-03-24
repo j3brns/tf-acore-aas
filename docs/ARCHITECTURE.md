@@ -30,6 +30,7 @@ eu-west-2 London (HOME — owns everything)
 ├── All S3 buckets
 ├── Secrets Manager
 ├── SSM Parameter Store
+├── AppConfig
 ├── EventBridge
 ├── SQS (webhook delivery retry queue only, not async invocation routing)
 ├── Bridge Lambda
@@ -41,7 +42,7 @@ eu-west-2 London (HOME — owns everything)
 
 eu-west-1 Dublin (COMPUTE — current primary runtime region by platform policy)
 ├── AgentCore Runtime (arm64 Firecracker microVM)
-├── AgentCore Observability (traces forwarded to London)
+├── AgentCore runtime telemetry metric stream to London
 ├── AgentCore Browser
 └── AgentCore Code Interpreter
 
@@ -72,6 +73,11 @@ platform. Additional policy tuning remains an ongoing platform task.
 Failover: Dublin → Frankfurt on `ServiceUnavailableException`
 ([RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md)).
 Failover controlled by SSM `/platform/config/runtime-region` with DynamoDB distributed lock.
+
+Dynamic tenant capability policy uses AppConfig in the home region. AppConfig is
+reserved for rollout-sensitive capability policy only; runtime parameters remain
+in SSM and tenant/resource metadata remains in DynamoDB. See
+[ADR-017](decisions/ADR-017-tenant-capability-configuration-model.md).
 
 ## Request Lifecycle (Synchronous)
 
@@ -202,6 +208,38 @@ Operator
 Design rule: platform agents assist and orchestrate control-plane operations; they do
 not bypass the control plane.
 
+## Configuration Ownership Model
+
+The platform splits configuration ownership by change semantics rather than by
+team preference:
+
+| Store | Owns | Does not own |
+|-------|------|--------------|
+| **AppConfig** | Dynamic tenant capability policy: tier feature enablement, capability flags, kill switches, model/tool availability, rollout controls | Tenant state, resource inventory, execution-role ARNs, memory-store ARNs |
+| **SSM Parameter Store** | Platform/runtime parameters: active runtime region, failover parameters, stable service endpoints, AppConfig bootstrap identifiers | Tenant feature policy, invocation state |
+| **DynamoDB** | Tenant metadata and transactional state: status, budgets, execution-role ARN, memory-store ARN, audit/job/session records | Rollout-managed capability toggles |
+
+Control-plane Lambdas cache capability policy locally and evaluate it with
+deny-by-default fallback semantics: use the last known good AppConfig document
+when available, otherwise fall back to an empty policy that enables nothing.
+Kill switches override all rollout rules. Rollback of capability changes uses
+AppConfig version history rather than ad hoc DynamoDB edits.
+
+### Safe Defaults And Fallbacks
+
+- **AppConfig** is fail-closed for tenant capabilities. If a fetch fails, use the
+  last known good cached document; if none exists, use an empty policy that
+  enables nothing. Control-plane code must not reconstruct capability policy
+  from DynamoDB or SSM.
+- **SSM Parameter Store** is for operational inputs only. Missing or invalid SSM
+  values must never widen tenant capability access. Where a runtime-safe default
+  exists in code, it must be an explicitly approved operational default inside
+  the ADR-defined region policy, not an inferred tenant-policy value.
+- **DynamoDB** remains authoritative for tenant metadata and transactional state.
+  If required tenant or resource records are absent, handlers fail the specific
+  operation rather than rebuilding tenant state from AppConfig documents or SSM
+  parameters.
+
 ## Entity Lifecycle
 
 ![Entity state diagram: tenant, agent, invocation, job, and session lifecycle states and transitions](images/tf_acore_aas_entities_state_diagram.drawio.png)
@@ -215,6 +253,8 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 - Attributes: tenantId, appId, displayName, tier, status, createdAt, updatedAt,
   ownerEmail, ownerTeam, memoryStoreArn, runtimeRegion, fallbackRegion,
   apiKeySecretArn, monthlyBudgetUsd, accountId
+- Excludes dynamic capability policy. Capability flags, kill switches, and
+  rollout-managed model/tool availability live in AppConfig, not in this table.
 - Capacity: provisioned, auto-scaling, 5 RCU/WCU minimum
 - Tenant ID policy (create boundary):
   - Canonicalized to lowercase before persistence
@@ -228,8 +268,25 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 - PK: `AGENT#{agentName}`, SK: `VERSION#{semver}`
 - Attributes: agentName, version, ownerTeam, tierMinimum, layerHash,
   layerS3Key, scriptS3Key, runtimeArn, deployedAt, invocationMode,
-  streamingEnabled, estimatedDurationSeconds
+  streamingEnabled, estimatedDurationSeconds, status, approvedBy,
+  approvedAt, releaseNotes
 - Capacity: provisioned, auto-scaling
+
+### Agent Release State Source Of Truth
+
+The release state of an immutable built agent version is owned by
+`platform-agents.status` in DynamoDB. The canonical lifecycle is:
+
+`built -> deployed_staging -> integration_verified -> evaluation_passed -> approved -> promoted`
+
+Terminal branches:
+- `failed` from any pre-promoted gate
+- `rolled_back` from `promoted`
+
+Only `promoted` versions are tenant-invokable. The Bridge resolves the active
+version as the highest semver record for an agent where `status=promoted`.
+Rollback is a forward metadata transition on the bad version; the Bridge then
+falls back to the next-highest promoted version without rebuilding artifacts.
 
 **platform-invocations** — invocation audit log
 - PK: `TENANT#{tenantId}`, SK: `INV#{timestamp}#{invocationId}`
@@ -337,27 +394,31 @@ See [ADR-007](decisions/ADR-007-cdk-terraform.md) for the CDK vs Terraform split
 | 2 | IdentityStack | eu-west-2 | GitLab OIDC WIF roles, Entra JWKS layer, KMS keys |
 | 3 | PlatformStack | eu-west-2 | REST API, WAF, CloudFront, Bridge, BFF, Authoriser, Gateway |
 | 4 | TenantStack | eu-west-2 | Per-tenant Memory store, execution role, usage plan key, SSM |
-| 5 | ObservabilityStack | eu-west-1→2 | Dashboards, alarms, metric streams |
-| 6 | AgentCoreStack | eu-west-1 | Runtime config, cross-region resource wiring |
+| 5 | ObservabilityStack | eu-west-2 | Dashboards, alarms, monitoring-account OAM sink only |
+| 6 | AgentCoreStack | eu-west-1 | Runtime config, metric stream to eu-west-2 observability |
 
 TenantStack deploys per-tenant on EventBridge `platform.tenant.created` event.
 It is **not** deployed by the platform pipeline — only triggered by tenant provisioning.
 Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
 
+ObservabilityStack currently provisions the eu-west-2 monitoring-account OAM sink only.
+No regional OAM member links are deployed yet, so the cross-region observability path
+is represented today by the AgentCoreStack metric stream into eu-west-2 dashboards.
+
 ## Failure Modes
 
-| ID | Failure | Detection | Response |
-|----|---------|-----------|----------|
-| FM-1 | Runtime region unavailable | `ServiceUnavailableException` | [RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md) |
-| FM-2 | Authoriser cold start spike | P99 > 500ms | Provisioned concurrency |
-| FM-3 | Secrets Manager throttling | Cache miss rate | By design (Lambda /tmp cache with TTL) |
-| FM-4 | DynamoDB hot partition | Throttle events on invocations table | Jitter suffix on SK |
-| FM-5 | Bridge Lambda timeout | 504 to client | 16-min Lambda timeout |
-| FM-6 | Interceptor retry storm | DLQ alarm | Idempotency key |
-| FM-7 | AgentCore Memory unavailable | Degraded mode metric | Agent runs without long-term memory |
-| FM-8 | Usage plan quota exhausted | 429 from API Gateway | By design (native enforcement) |
-| FM-9 | DLQ message arrival | DLQ CloudWatch alarm | [RUNBOOK-005](operations/RUNBOOK-005-dlq-management.md) |
-| FM-10 | Billing Lambda failure | DLQ alarm | [RUNBOOK-006](operations/RUNBOOK-006-budget-and-suspension.md) |
+| ID | Failure | Detection | Alarm | Response |
+|----|---------|-----------|-------|----------|
+| FM-1 | Runtime region unavailable | `ServiceUnavailableException` | `FM-1-RuntimeRegionUnavailable` | [RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md) |
+| FM-2 | Authoriser cold start spike | P99 > 500ms | `FM-2-AuthoriserColdStartSpike` | Provisioned concurrency |
+| FM-3 | Secrets Manager throttling | Cache miss rate | `FM-3-SecretsManagerThrottling` | By design (Lambda /tmp cache with TTL) |
+| FM-4 | DynamoDB hot partition | Throttle events on invocations table | `FM-4-DynamoDbHotPartition` | Jitter suffix on SK |
+| FM-5 | Bridge Lambda timeout | 504 to client | `FM-5-BridgeTimeout` | 16-min Lambda timeout |
+| FM-6 | Interceptor retry storm | Interceptor error rate | `FM-6-InterceptorRetryStorm` | Idempotency key |
+| FM-7 | AgentCore Memory unavailable | Degraded mode metric | `FM-7-AgentCoreMemoryDegraded` | Agent runs without long-term memory |
+| FM-8 | Usage plan quota exhausted | 429 from API Gateway | `FM-8-UsagePlanQuotaExhausted` | By design (native enforcement) |
+| FM-9 | DLQ message arrival | DLQ CloudWatch alarm | `FM-9-DLQ-Arrival-{name}` | [RUNBOOK-005](operations/RUNBOOK-005-dlq-management.md) |
+| FM-10 | Billing Lambda failure | Billing Lambda errors | `FM-10-BillingLambdaFailure` | [RUNBOOK-006](operations/RUNBOOK-006-budget-and-suspension.md) |
 
 ## Security Model
 

@@ -1,349 +1,14 @@
-# CLAUDE.md — Rules for AI Coding Assistants
-# Read this at the start of every session. No exceptions.
+# Assistant instructions pointer
 
-## What This Platform Is
+Pointer only.
 
-A production multi-tenant Agent as a Service platform on Amazon Bedrock AgentCore.
-B2B tenants invoke AI agents via REST API. The platform manages isolation, identity,
-memory, tool access, billing, and observability. This is a production system — not
-a prototype — with real tenants, real data, and real compliance obligations.
-
-## Priority Order
-
-When trade-offs arise, resolve in this order:
-1. Security — a security flaw ships last, regardless of schedule
-2. Operability — ops must run this at 3am without a developer on call
-3. Correctness — wrong behaviour is worse than slow behaviour
-4. Performance — optimise only after correctness is proven
-5. Developer experience — the inner loop matters, but it is last
-
-## Absolute Constraints (non-negotiable)
-
-If any implementation path violates these, stop, state the conflict, propose an
-alternative. Never silently work around them.
-
-1. No Cognito anywhere. Auth is Entra ID OIDC/JWT for humans, SigV4 for machines.
-2. No hardcoded credentials, ARNs, account IDs, secrets, or region strings.
-   Exception: CDK stack definitions may declare the home region (eu-west-2) as an
-   architectural constant (e.g. const HOME_REGION = 'eu-west-2'). This constraint
-   applies to application code — Lambda handlers and scripts that call AWS APIs at
-   runtime must always read the region from os.environ['AWS_REGION'].
-3. No IAM policies with wildcard Action or wildcard Resource.
-4. No public S3 buckets.
-5. No long-lived AWS access keys. Bootstrap IAM user deleted after first deploy.
-6. No secrets in GitLab CI/CD variables — Secrets Manager only.
-7. Every Lambda: X-Ray tracing, DLQ, structured JSON logging with appid+tenantid.
-8. Every DynamoDB table: PITR, KMS encryption, deletion protection in staging/prod.
-9. AgentCore Runtime is arm64 only. Dependencies cross-compiled aarch64-manylinux2014.
-   Sync limit 15 minutes. Async uses app.add_async_task / app.complete_async_task.
-10. No impersonation — act-on-behalf only. Original JWT never reaches tool Lambdas.
-11. appid and tenantid on every log line, metric dimension, and trace annotation.
-12. data-access-lib is the only permitted way to access DynamoDB from Lambda handlers.
-13. No superuser IAM roles in normal operation.
-14. All data remains in the EU at all times.
-
-## How To Work
-
-Before writing any code:
-1. Read this file
-2. Read docs/ARCHITECTURE.md
-3. Identify the issue you are working on (GitHub Issues are the canonical task queue; `docs/TASKS.md` is a snapshot)
-4. Read the ADR(s) linked to the current task/issue (use `docs/TASKS.md` as a reference snapshot when needed)
-5. In local WSL, confirm you are in an issue worktree on a policy branch (not `main` in the primary repo working tree)
-6. If not, start via `make worktree` / `make worktree-next-issue` unless the operator explicitly instructs in-place work
-7. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
-   (use `make validate-local-full` when a full-repo secret scan is required)
-8. State which issue/task you are working on explicitly
-
-Before marking any task complete:
-1. All tests pass
-2. `make validate-local` passes
-3. Senior engineer review completed (code review mindset: bugs, regressions, risks, missing tests)
-4. Review recommendations are actioned
-5. Senior engineer review re-run and clear (or remaining risks explicitly accepted by operator)
-6. New infrastructure passes cfn-guard
-7. Before any push: run `make preflight-session` and `make pre-validate-session` (fast path, no cdk synth)
-8. State completion with the issue/task identifier (for legacy tasks, `TASK-NNN complete. Tests passing.`)
-
-When uncertain about a security decision — stop and ask. Do not guess.
-
-### Execution Loop (Drive To Completion)
-
-The agent should drive the task to completion without stopping at the first error.
-Use failure output and operational signals to diagnose and fix the next issue until
-the closure criteria are met.
-
-Preferred signals (use what is available in the current environment):
-- Test failures and stack traces (`pytest`, Jest, `make test-*`)
-- Validation output (`make validate-local`, `make validate-local-full`)
-- Fast pre-push validation (`make validate-pre-push`, `make pre-validate-session`)
-- Lint/typecheck output (Ruff, Pyright, TypeScript)
-- CDK synth/deploy error output
-- Local runtime logs (`make dev-logs`, `docker compose logs`)
-- Platform logs (`make logs-*`, `aws logs tail ...`)
-- Git state (`git status`, diff, merge conflicts)
-
-Do not stop just because one command failed. Investigate the error, form a hypothesis,
-apply a fix, and re-run the smallest relevant check. Only stop for the explicit
-"stop and ask" conditions, gate tasks, or when the operator redirects you.
-
-## When To Stop And Ask
-
-- Any change to DynamoDB partition key or GSI design
-- Any change to IAM policies or trust relationships
-- Any change to authoriser Lambda validation logic
-- Any new dependency adding >10MB to the deployment package
-- Any change affecting tenant isolation in data-access-lib
-- Any change to KMS key policy
-- Any operation touching production data
-
-## Naming Conventions
-
-- AWS resources: platform-{resource}-{environment}
-- Python: snake_case everywhere — this includes source directory names.
-  Lambda source dirs must be snake_case (src/async_runner/, not src/async-runner/)
-  because hyphenated names cannot be Python package names and break static type checking.
-- Every Python source directory must contain an __init__.py so Pyright resolves
-  identically-named modules (e.g. handler.py) as distinct packages.
-- TypeScript: camelCase properties, PascalCase classes
-- Environment variables: SCREAMING_SNAKE_CASE
-- SSM: /platform/{category}/{name}
-- DynamoDB keys: {ENTITY}#{id}
-
-## Forbidden Patterns
-
-```python
-# FORBIDDEN: raw boto3 DynamoDB in handlers
-dynamodb.Table('platform-tenants').get_item(...)
-
-# REQUIRED: data-access-lib only
-from data_access import TenantScopedDynamoDB
-db = TenantScopedDynamoDB(tenant_context)
-
-# FORBIDDEN: hardcoded region
-boto3.client('ssm', region_name='eu-west-2')
-
-# REQUIRED: from environment
-boto3.client('ssm', region_name=os.environ['AWS_REGION'])
-
-# FORBIDDEN: bare exception silencing
-try:
-    do_something()
-except Exception:
-    pass
-
-# REQUIRED: log and handle
-try:
-    do_something()
-except TenantAccessViolation as e:
-    logger.error("Tenant access violation", extra={"tenant_id": tenant_id})
-    return error_response(403, "UNAUTHORISED")
-```
-
-## Issue Workflow (Canonical)
-
-GitHub Issues are the canonical task queue (effective 2026-02-25 13:00 local).
-Use issue `Seq:` for ordering and `Depends on:` for dependency gating.
-`docs/TASKS.md` is a snapshot/report and may lag.
-
-### Queue and worktree commands (preferred)
-
-```bash
-make issue-queue                    # dependency-aware queue ordered by Seq
-make worktree-next-issue            # create worktree for next runnable issue
-make worktree                       # interactive queue/worktree/finish menu
-make worktree-create-issue ISSUE=23 # explicit issue
-make worktree-resume-issue          # resume existing linked issue worktree
-```
-
-### Push policy (mandatory)
-
-All pushes must be pre-validated. Use the enforced path:
-
-```bash
-make worktree-push-issue            # runs preflight + validate-pre-push, then pushes
-```
-
-Or, at minimum, run before a manual push:
-
-```bash
-make preflight-session
-make pre-validate-session           # fast path, no cdk synth
-```
-
-Install local hook once per clone:
-
-```bash
-make install-git-hooks              # installs .githooks/pre-push
-```
-
-The pre-push hook runs `make validate-pre-push` (fast path; no CDK synth).
-
-### Issue lifecycle label policy (mandatory)
-
-- Every task issue must have exactly one `status:*` label at all times.
-- Open task issues must never be `status:done`.
-- Closed task issues must always be `status:done` and must never retain `status:in-progress`, `status:not-started`, or `ready`.
-- `make finish-worktree-close` is the required close path even if the issue was already closed manually; it is the normalization step for lifecycle labels.
-- If issue state or labels drift, run `make issues-reconcile` immediately, then re-run `make issues-audit` until it passes.
-
-### Issue Definition of Done (mandatory)
-
-An issue is done only when all items below are true:
-1. Implementation and tests are complete for the scoped issue; no unresolved TODOs for that scope.
-2. `make validate-local` passes in the issue worktree (or equivalent required checks for remote/mobile mode).
-3. Senior engineer review is complete; findings are fixed or explicitly accepted in writing.
-4. `make preflight-session` and `make pre-validate-session` pass on the final branch state.
-5. Branch is pushed and PR is open with validation evidence and issue linkage.
-6. PR is merged (not just opened).
-7. Issue is closed only after merge verification (`make finish-worktree-close`).
-8. `make issues-audit` passes after close; if not, run `make issues-reconcile` and re-audit before declaring the issue complete.
-9. Worktree cleanup is complete (`git worktree remove ...`, `git branch -d ...`, `git worktree prune`).
-
-### Merge Conflict Rule (mandatory)
-
-Never leave a task in a merge-conflicted state.
-1. If branch update or PR merge reports conflicts, resolve them in the issue worktree immediately.
-2. Re-run targeted tests plus `make preflight-session` and `make pre-validate-session`.
-3. Push the conflict-resolution commit(s) and confirm PR is mergeable before closing the issue.
-4. If a required permission/policy blocks merge, stop and report the blocker with the exact next command.
-
-## Task Workflow (Legacy / Snapshot-Driven)
-
-Every task runs in its own git branch and for local dev (WSL) a worktree. This is so main stays clean and multiple tasks
-can be in flight at the same time without conflicts. When operating in Claude Code mobile / remote prompt mode, worktrees are not required.
-
-This legacy flow (`make task-*`) is still available during transition, but GitHub Issues are now canonical.
-
-### Selecting a task
-
-```bash
-make task-next            # show the next not-started task
-make task-list            # list all tasks and their status
-```
-
-### Starting a task
-
-```bash
-make task-start              # auto-selects the next [ ] task
-make task-start TASK=TASK-011  # explicit task
-```
-
-This will (local WSL mode / default when WSL is detected):
-1. Auto-select the next `[ ]` task (or use the explicit TASK argument)
-2. Create a git worktree at `../worktrees/TASK-NNN-<slug>/`
-3. Create branch `task/NNN-<slug>` from `origin/main`
-4. Update `docs/TASKS.md` in the worktree: mark the task `[~]` and commit it
-5. Run `make validate-local` in the worktree — abort if it fails
-6. Launch Claude Code: `claude --dangerously-skip-permissions <prompt>`
-
-In remote/mobile mode (`make task-start ... -- --env remote`, or when not running in WSL):
-1. Auto-select the task (same rules)
-2. Generate and print the structured prompt for copy/paste into Claude Code mobile
-3. Do not create a worktree
-4. Do not mark `docs/TASKS.md` `[~]` automatically
-
-The prompt instructs the agent to read CLAUDE.md, ARCHITECTURE.md, the task's
-ADRs, state the task name, and work the loop. In local WSL mode it also requires
-`make validate-local`; in remote/mobile mode it first confirms repo path and tool availability.
-
-If the worktree already exists, use `make task-resume` instead.
-
-### Local WSL Safety Rule (mandatory)
-
-In local WSL mode, do not implement task changes directly on `main` in the
-primary repo working tree. Use the worktree protocol (`make task-start` /
-`make task-resume`) by default.
-
-Only work in-place if the operator explicitly instructs that exception in
-writing.
-
-Before implementation in local WSL mode, state:
-- current branch
-- whether you are in a task worktree (or remote/mobile prompt mode)
-
-If task implementation has already started in the wrong location (for example,
-on `main` in the primary repo working tree):
-- Stop creating new edits
-- Create a task branch immediately from the current state
-- Continue on the task branch (or move to a worktree if practical)
-- State the deviation and correction in your session output
-
-### Resuming a task
-
-```bash
-make task-resume              # auto-selects first [~] task with an existing worktree
-make task-resume TASK=TASK-011  # explicit task
-```
-
-Relaunches Claude Code in the existing worktree with the same structured prompt (local WSL mode).
-In remote/mobile mode, it prints the prompt for copy/paste and does not require a worktree.
-
-### Finishing a task
-
-```bash
-make task-finish TASK=TASK-011
-```
-
-Prints the finish checklist and the exact `git push` / `gh pr create` commands.
-The agent is responsible for:
-1. Running `make validate-local` — must pass clean
-   - Use `make validate-local-full` when you need a full-repo secret scan (the default is diff-only secrets)
-2. Running a senior engineer review (bugs/regressions/risks/missing tests first)
-3. Actioning review findings and re-running relevant tests/validation
-4. Re-running senior engineer review until findings are cleared (or explicitly accepted)
-5. Committing all changes with a message referencing `TASK-NNN`
-6. Updating `docs/TASKS.md`: mark `[x]` with today's date and commit SHA
-7. Closing only when errors are cleared, then pushing and opening a PR titled `TASK-NNN: <title>`
-
-### Gate tasks
-
-Some tasks have a Gate field (see docs/TASKS.md). When a gate is present:
-- The agent stops at the gate and presents findings
-- The operator reviews and gives written sign-off.
-- Only then does the agent proceed (or close if that was the final step)
-- Never advance past a gate unilaterally
-
-### Naming conventions for worktrees
-
-| Item       | Pattern                              | Example                              |
-|------------|--------------------------------------|--------------------------------------|
-| Directory  | `../worktrees/TASK-NNN-<slug>/`     | `../worktrees/TASK-011-dynamo-schema/` |
-| Branch     | `task/NNN-<slug>`                    | `task/011-dynamo-schema`             |
-
-The slug is derived from the task title: lowercase, non-alphanumeric → `-`,
-max 50 chars.
-
-### After merge
-
-```bash
-git worktree remove ../worktrees/TASK-NNN-<slug>
-git branch -d task/NNN-<slug>
-git worktree prune
-```
-
-## Technology Stack
-
-| Concern            | Technology                      |
-|--------------------|---------------------------------|
-| Agent runtime      | AgentCore Runtime eu-west-1     |
-| Human auth         | Microsoft Entra ID OIDC         |
-| Machine auth       | AWS SigV4                       |
-| IaC platform       | CDK TypeScript strict           |
-| IaC account vend   | Terraform HCL                   |
-| Python packaging   | uv + pyproject.toml             |
-| Logging            | aws_lambda_powertools Logger    |
-| Testing CDK        | Jest + cdk assertions           |
-| Testing Python     | pytest + LocalStack             |
-| Secrets            | AWS Secrets Manager             |
-| Config             | SSM Parameter Store             |
-| Async agents       | AgentCore add_async_task SDK    |
-| Observability      | AgentCore Observability + CW    |
+Read [CLAUDE.md](CLAUDE.md) for the authoritative rules for AI coding assistants.
+This file exists so tools that look for assistant instruction files can redirect to the source of truth.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **tf-acore-aas** (2686 symbols, 8508 relationships, 219 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **wt307** (2421 symbols, 6283 relationships, 196 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -359,7 +24,7 @@ This project is indexed by GitNexus as **tf-acore-aas** (2686 symbols, 8508 rela
 
 1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
 2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/tf-acore-aas/process/{processName}` — trace the full execution flow step by step
+3. `READ gitnexus://repo/wt307/process/{processName}` — trace the full execution flow step by step
 4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
 
 ## When Refactoring
@@ -398,10 +63,10 @@ This project is indexed by GitNexus as **tf-acore-aas** (2686 symbols, 8508 rela
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/tf-acore-aas/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/tf-acore-aas/clusters` | All functional areas |
-| `gitnexus://repo/tf-acore-aas/processes` | All execution flows |
-| `gitnexus://repo/tf-acore-aas/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/wt307/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/wt307/clusters` | All functional areas |
+| `gitnexus://repo/wt307/processes` | All execution flows |
+| `gitnexus://repo/wt307/process/{name}` | Step-by-step execution trace |
 
 ## Self-Check Before Finishing
 
@@ -411,10 +76,33 @@ Before completing any code modification task, verify:
 3. `gitnexus_detect_changes()` confirms changes match expected scope
 4. All d=1 (WILL BREAK) dependents were updated
 
+## Keeping the Index Fresh
+
+After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
+
+```bash
+npx gitnexus analyze
+```
+
+If the index previously included embeddings, preserve them by adding `--embeddings`:
+
+```bash
+npx gitnexus analyze --embeddings
+```
+
+To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+
+> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+
 ## CLI
 
-- Re-index: `npx gitnexus analyze`
-- Check freshness: `npx gitnexus status`
-- Generate docs: `npx gitnexus wiki`
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->

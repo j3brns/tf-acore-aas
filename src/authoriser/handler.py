@@ -11,6 +11,7 @@ ADRs: ADR-002, ADR-004, ADR-013
 import json
 import os
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,6 +33,12 @@ TENANTS_TABLE = os.environ.get("TENANTS_TABLE")
 # Global clients — connection reuse across warm starts
 _jwk_client: PyJWKClient | None = None
 _dynamodb_resource = None
+
+# CR005: In-memory TTL cache for SigV4 ARN→tenant binding.
+# Avoids a full DynamoDB table scan on every machine-auth request.
+# TTL matches the SSM config cache (60 s) documented in ARCHITECTURE.md.
+_SIGV4_BINDING_CACHE_TTL_SECONDS = int(os.environ.get("SIGV4_BINDING_CACHE_TTL_SECONDS", "60"))
+_sigv4_binding_cache: dict[str, tuple[dict[str, str], float]] = {}
 
 SIGV4_REQUIRED_SIGNED_HEADERS = frozenset({"host", "x-amz-date", "x-tenant-id"})
 SIGV4_MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("SIGV4_MAX_CLOCK_SKEW_SECONDS", "300"))
@@ -116,10 +123,27 @@ def _sigv4_caller_role_arns(caller_arn: str) -> set[str]:
 
 
 def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
-    """Resolve a SigV4 caller to a trusted tenant using tenant metadata."""
+    """Resolve a SigV4 caller to a trusted tenant using tenant metadata.
+
+    CR005: Results are cached in-process for SIGV4_BINDING_CACHE_TTL_SECONDS (default 60 s)
+    to avoid a full DynamoDB table scan on every machine-auth request.
+
+    A GSI on executionRoleArn is the long-term fix (see ISSUE-CR005).  Until that
+    GSI is in place this cache provides the primary latency/cost mitigation.
+    """
     if not TENANTS_TABLE:
         logger.warning("TENANTS_TABLE not set; SigV4 tenant binding unavailable")
         return None
+
+    # Check in-memory cache first.
+    now = time.time()
+    cached = _sigv4_binding_cache.get(caller_arn)
+    if cached is not None:
+        binding, expiry = cached
+        if now < expiry:
+            return binding
+        # Expired — evict and re-resolve below.
+        del _sigv4_binding_cache[caller_arn]
 
     candidate_role_arns = _sigv4_caller_role_arns(caller_arn)
     table = get_dynamodb().Table(TENANTS_TABLE)
@@ -153,7 +177,10 @@ def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
         )
         return None
 
-    return next(iter(matches.values()))
+    result = next(iter(matches.values()))
+    # Store in cache for subsequent warm-Lambda invocations.
+    _sigv4_binding_cache[caller_arn] = (result, now + _SIGV4_BINDING_CACHE_TTL_SECONDS)
+    return result
 
 
 def _normalise_headers(event: dict[str, Any]) -> dict[str, str]:

@@ -29,11 +29,22 @@ CDK_PACKAGE = ROOT / "infra" / "cdk" / "package.json"
 SPA_PACKAGE = ROOT / "spa" / "package.json"
 TASKS_MD = ROOT / "docs" / "TASKS.md"
 OPS_PY = ROOT / "scripts" / "ops.py"
+MAKEFILE = ROOT / "Makefile"
+DEV_BOOTSTRAP_PY = ROOT / "scripts" / "dev-bootstrap.py"
+LOCAL_SETUP_MD = ROOT / "docs" / "development" / "LOCAL-SETUP.md"
+AGENT_GUIDE_MD = ROOT / "docs" / "development" / "AGENT-DEVELOPER-GUIDE.md"
+CI_FILE = ROOT / ".gitlab-ci.yml"
+RUNBOOK_008_MD = ROOT / "docs" / "operations" / "RUNBOOK-008-developer-onboarding.md"
 STAMP_FILE = ROOT / "docs" / "DOCS_SYNC.json"
 
 
 SEMVER_RE = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 TASK_PATH_RE = re.compile(r"\b(src/[A-Za-z0-9._/-]+/handler\.py)\b")
+DOC_TENANT_ID_RE = re.compile(r"\bt-test-\d+\b")
+BOOTSTRAP_TENANT_ID_RE = re.compile(r"\bt-(?:basic|premium)-\d+\b")
+ENV_TEST_KEY_RE = re.compile(
+    r"\b(?:BASIC_TENANT_ID|BASIC_TENANT_JWT|PREMIUM_TENANT_ID|PREMIUM_TENANT_JWT|ADMIN_TENANT_ID|ADMIN_JWT|TEST_JWT_BASIC|TEST_JWT_PREMIUM|TEST_JWT_ADMIN)\b"
+)
 
 
 def _run(cmd: list[str]) -> str:
@@ -102,6 +113,107 @@ def detect_ops_cli_stub_drift() -> list[str]:
     return findings
 
 
+def detect_local_env_test_key_drift() -> list[str]:
+    """Detect mismatches between .env.test keys written by bootstrap.
+
+    The audit compares the .env.test contract against the docs and consumers
+    that read those keys.
+    """
+    findings: list[str] = []
+    makefile_text = MAKEFILE.read_text(encoding="utf-8")
+    bootstrap_text = DEV_BOOTSTRAP_PY.read_text(encoding="utf-8")
+    docs_text = "\n".join(
+        [
+            LOCAL_SETUP_MD.read_text(encoding="utf-8"),
+            AGENT_GUIDE_MD.read_text(encoding="utf-8"),
+            RUNBOOK_008_MD.read_text(encoding="utf-8"),
+        ]
+    )
+
+    makefile_keys = sorted(set(ENV_TEST_KEY_RE.findall(makefile_text)))
+    bootstrap_keys = sorted(set(ENV_TEST_KEY_RE.findall(bootstrap_text)))
+    docs_keys = sorted(set(ENV_TEST_KEY_RE.findall(docs_text)))
+
+    if {"BASIC_TENANT_ID", "BASIC_TENANT_JWT"}.issubset(makefile_keys) and {
+        "TEST_JWT_BASIC",
+        "TEST_JWT_PREMIUM",
+        "TEST_JWT_ADMIN",
+    }.issubset(bootstrap_keys):
+        findings.append(
+            "make dev-invoke reads BASIC_TENANT_ID/BASIC_TENANT_JWT from .env.test, "
+            "but scripts/dev-bootstrap.py writes TEST_JWT_BASIC/"
+            "TEST_JWT_PREMIUM/TEST_JWT_ADMIN instead."
+        )
+
+    if {"BASIC_TENANT_JWT", "PREMIUM_TENANT_JWT", "ADMIN_JWT"}.intersection(docs_keys) and {
+        "TEST_JWT_BASIC",
+        "TEST_JWT_PREMIUM",
+        "TEST_JWT_ADMIN",
+    }.issubset(bootstrap_keys):
+        findings.append(
+            "docs/development/LOCAL-SETUP.md and onboarding docs describe BASIC_TENANT_JWT/"
+            "PREMIUM_TENANT_JWT/ADMIN_JWT, but scripts/dev-bootstrap.py writes TEST_JWT_* keys."
+        )
+
+    return findings
+
+
+def detect_local_fixture_name_drift() -> list[str]:
+    """Detect tenant fixture name drift between local docs and the dev bootstrap seed data."""
+    findings: list[str] = []
+    docs_text = "\n".join(
+        [
+            LOCAL_SETUP_MD.read_text(encoding="utf-8"),
+            AGENT_GUIDE_MD.read_text(encoding="utf-8"),
+            RUNBOOK_008_MD.read_text(encoding="utf-8"),
+        ]
+    )
+    bootstrap_text = DEV_BOOTSTRAP_PY.read_text(encoding="utf-8")
+
+    doc_tenants = sorted(set(DOC_TENANT_ID_RE.findall(docs_text)))
+    bootstrap_tenants = sorted(set(BOOTSTRAP_TENANT_ID_RE.findall(bootstrap_text)))
+
+    if doc_tenants and bootstrap_tenants and set(doc_tenants) != set(bootstrap_tenants):
+        findings.append(
+            "Local docs reference tenant fixtures "
+            f"{doc_tenants}, but scripts/dev-bootstrap.py seeds {bootstrap_tenants}."
+        )
+
+    return findings
+
+
+def detect_branch_deploy_flow_drift() -> list[str]:
+    """
+    Detect drift between the agent guide's deployment story and the real GitLab pipeline.
+    """
+    findings: list[str] = []
+    guide_text = AGENT_GUIDE_MD.read_text(encoding="utf-8")
+    ci_text = CI_FILE.read_text(encoding="utf-8")
+
+    guide_describes_old_flow = (
+        any(
+            phrase in guide_text
+            for phrase in (
+                "push-dev",
+                "feature branch triggers",
+            )
+        )
+        and "promote-staging" in guide_text
+    )
+    ci_is_main_only_for_dev = (
+        "deploy-dev:" in ci_text and 'if: $CI_COMMIT_BRANCH == "main"' in ci_text
+    )
+
+    if guide_describes_old_flow and ci_is_main_only_for_dev:
+        findings.append(
+            "docs/development/AGENT-DEVELOPER-GUIDE.md still describes a "
+            "feature-branch push-dev / promote-staging flow, but .gitlab-ci.yml "
+            "only deploys dev on main and keeps staging/prod gated."
+        )
+
+    return findings
+
+
 def load_stamp() -> dict[str, Any]:
     if not STAMP_FILE.exists():
         return {}
@@ -167,6 +279,9 @@ def cmd_check(json_output: bool = False) -> int:
 
     warnings.extend(detect_task_handler_path_drift())
     warnings.extend(detect_ops_cli_stub_drift())
+    warnings.extend(detect_local_env_test_key_drift())
+    warnings.extend(detect_local_fixture_name_drift())
+    warnings.extend(detect_branch_deploy_flow_drift())
 
     result = {
         "ok": len(errors) == 0,

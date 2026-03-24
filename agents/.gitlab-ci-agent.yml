@@ -104,6 +104,7 @@ promote-staging:
     GITLAB_OIDC_TOKEN:
       aud: sts.amazonaws.com
   script:
+    - make agent-evaluate AGENT=$AGENT_NAME ENV=staging
     - make agent-push AGENT=$AGENT_NAME ENV=staging
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

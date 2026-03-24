@@ -26,9 +26,24 @@ class FakeScopedDb:
             return None
         return dict(item)
 
-    def put_item(self, _table_name: str, item: dict[str, Any]) -> dict[str, Any]:
+    def put_item(
+        self,
+        _table_name: str,
+        item: dict[str, Any],
+        *,
+        condition_expression: str | None = None,
+    ) -> dict[str, Any]:
         pk = str(item["PK"])
         sk = str(item["SK"])
+        if (
+            condition_expression
+            and "attribute_not_exists" in condition_expression
+            and (pk, sk) in self.items
+        ):
+            raise tenant_api_handler.ClientError(
+                {"Error": {"Code": "ConditionalCheckFailedException", "Message": "exists"}},
+                "PutItem",
+            )
         self.items[(pk, sk)] = dict(item)
         return {"Attributes": dict(item)}
 
@@ -77,6 +92,9 @@ class FakeScopedDb:
             item[attr_name] = expression_attribute_values[value_ref]
         self.items[storage_key] = item
         return {"Attributes": dict(item)}
+
+    def scan_all(self, _table_name: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return list(self.items.values())
 
     def scan(
         self,
@@ -501,6 +519,34 @@ def _seed_failover_lock(
     }
 
 
+def _seed_agent_version(
+    fake_state: dict[str, Any],
+    *,
+    agent_name: str,
+    version: str,
+    status: str = "built",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    item = {
+        "PK": f"AGENT#{agent_name}",
+        "SK": f"VERSION#{version}",
+        "agent_name": agent_name,
+        "version": version,
+        "owner_team": "platform",
+        "tier_minimum": "basic",
+        "layer_hash": f"hash-{version}",
+        "layer_s3_key": f"layers/{version}.zip",
+        "script_s3_key": f"scripts/{version}.zip",
+        "deployed_at": "2026-02-25T12:00:00Z",
+        "invocation_mode": "sync",
+        "streaming_enabled": False,
+        "status": status,
+    }
+    if extra:
+        item.update(extra)
+    fake_state["db"].items[(f"AGENT#{agent_name}", f"VERSION#{version}")] = item
+
+
 def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     fake_state: dict[str, Any],
 ) -> None:
@@ -534,6 +580,9 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.created"
     assert detail["tenantId"] == "t-001"
+    assert detail["appId"] == "app-001"
+    assert detail["tier"] == "standard"
+    assert detail["accountId"] == "123456789012"
 
 
 def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, Any]) -> None:
@@ -1995,3 +2044,207 @@ def test_lambda_rollback_returns_404_on_missing_function(fake_state: dict[str, A
 
     response = _invoke(event)
     assert response["statusCode"] == 404
+
+
+def test_platform_register_agent_defaults_to_built(fake_state: dict[str, Any]) -> None:
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.0",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "hash-120",
+            "layerS3Key": "layers/1.2.0.zip",
+            "scriptS3Key": "scripts/1.2.0.zip",
+            "invocationMode": "sync",
+        },
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 201
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
+    assert item["status"] == "built"
+    assert "approved_by" not in item
+
+
+def test_platform_register_agent_rejects_non_built_initial_status(
+    fake_state: dict[str, Any],
+) -> None:
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.1",
+            "status": "promoted",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "hash-121",
+            "layerS3Key": "layers/1.2.1.zip",
+            "scriptS3Key": "scripts/1.2.1.zip",
+            "invocationMode": "sync",
+        },
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    assert ("AGENT#echo-agent", "VERSION#1.2.1") not in fake_state["db"].items
+
+
+def test_platform_promote_agent_updates_metadata_and_emits_event(
+    fake_state: dict[str, Any],
+) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="approved")
+    event = _event(
+        method="PATCH",
+        body={"status": "promoted", "releaseNotes": "approved release evidence recorded"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
+    assert item["status"] == "promoted"
+    assert item["approved_by"] == "user-123"
+    assert item["approved_at"] == "2026-02-25T12:00:00Z"
+    assert item["release_notes"] == "approved release evidence recorded"
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "platform.agent_version.promoted"
+    assert detail["previousStatus"] == "approved"
+    assert detail["status"] == "promoted"
+
+
+def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="promoted")
+    event = _event(
+        method="PATCH",
+        body={"status": "built"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+
+
+def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any]) -> None:
+    # 1. Register as BUILT
+    register_event = _event(
+        method="POST",
+        body={
+            "agentName": "evidence-agent",
+            "version": "1.0.0",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "hash-100",
+            "layerS3Key": "layers/1.0.0.zip",
+            "scriptS3Key": "scripts/1.0.0.zip",
+            "invocationMode": "sync",
+            "status": "built",
+            "commitSha": "abc12345",
+            "pipelineUrl": "https://gitlab.com/pipeline/123",
+            "jobId": "job-456",
+        },
+        roles=["Platform.Admin"],
+    )
+    register_event["path"] = "/v1/platform/agents"
+    register_response = _invoke(register_event)
+    assert register_response["statusCode"] == 201
+
+    # 2. Advance to APPROVED (skipping intermediate for brevity)
+    # Actually, I'll just seed it as APPROVED to test the final promotion metadata
+    _seed_agent_version(
+        fake_state,
+        agent_name="evidence-agent",
+        version="1.0.0",
+        status="approved",
+        extra={
+            "commit_sha": "abc12345",
+            "pipeline_url": "https://gitlab.com/pipeline/123",
+            "job_id": "job-456",
+        },
+    )
+
+    # 3. Promote with evaluation metadata
+    promote_event = _event(
+        method="PATCH",
+        body={
+            "status": "promoted",
+            "evaluationScore": 0.98,
+            "evaluationReportUrl": "https://frankfurt.aws/eval/789",
+            "releaseNotes": "Score: 0.98",
+        },
+        roles=["Platform.Admin"],
+    )
+    promote_event["path"] = "/v1/platform/agents/evidence-agent/versions/1.0.0"
+    promote_response = _invoke(promote_event)
+    assert promote_response["statusCode"] == 200
+
+    from decimal import Decimal
+
+    item = fake_state["db"].items[("AGENT#evidence-agent", "VERSION#1.0.0")]
+    assert item["status"] == "promoted"
+    assert item["evaluation_score"] == Decimal("0.98")
+    assert item["evaluation_report_url"] == "https://frankfurt.aws/eval/789"
+    assert item["approved_by"] == "user-123"
+
+    # Verify event detail
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "platform.agent_version.promoted"
+    assert detail["evaluationScore"] == 0.98
+    assert detail["evaluationReportUrl"] == "https://frankfurt.aws/eval/789"
+
+
+def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="rollback-agent", version="1.0.0", status="promoted")
+
+    event = _event(
+        method="PATCH",
+        body={"status": "rolled_back"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/rollback-agent/versions/1.0.0"
+
+    response = _invoke(event)
+    assert response["statusCode"] == 200
+
+    item = fake_state["db"].items[("AGENT#rollback-agent", "VERSION#1.0.0")]
+    assert item["status"] == "rolled_back"
+    assert item["rolled_back_by"] == "user-123"
+    assert item["rolled_back_at"] == "2026-02-25T12:00:00Z"
+
+    # Verify event detail
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "platform.agent_version.rolled_back"
+    assert detail["status"] == "rolled_back"
+    assert detail["rolledBackBy"] == "user-123"
+    assert detail["rolledBackAt"] == "2026-02-25T12:00:00Z"
+
+
+def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="promoted")
+    event = _event(
+        method="PATCH",
+        body={"status": "rolled_back", "releaseNotes": "error rate spike"},
+        roles=["Platform.Admin"],
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
+    assert item["status"] == "rolled_back"
+    detail_type, detail = _last_event_detail(fake_state)
+    assert detail_type == "platform.agent_version.rolled_back"
+    assert detail["previousStatus"] == "promoted"
+    assert detail["status"] == "rolled_back"

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
+import os
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -203,6 +207,7 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
     monkeypatch.setattr(worktree_issues, "select_worktree_interactive", lambda items: wt)
     monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: "owner/repo")
     monkeypatch.setattr(worktree_issues, "run_preflight", lambda **kwargs: None)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
 
     def _handoff(**kwargs):
         called.update(kwargs)
@@ -223,6 +228,43 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
     assert called["agent_mode"] is None
     assert called["handoff"] is None
     assert called["print_only_override"] is False
+    assert called["mux"] is None
+
+
+def test_cmd_worktree_resume_shell_only_opens_shell_directly(monkeypatch):
+    root = Path("/tmp/repo")
+    wt = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/worktrees/wt33"),
+        head="abc123",
+        branch="wt/infra/33-observabilitystack",
+        is_primary=False,
+    )
+    opened: list[Path] = []
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "list_resume_candidates", lambda _root: [wt])
+    monkeypatch.setattr(worktree_issues, "select_worktree_interactive", lambda items: wt)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: "owner/repo")
+    monkeypatch.setattr(worktree_issues, "run_preflight", lambda **kwargs: None)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "open_shell", lambda path: opened.append(path))
+    monkeypatch.setattr(
+        worktree_issues,
+        "handoff_to_agent_or_shell",
+        lambda **kwargs: pytest.fail("handoff_to_agent_or_shell should not be used"),
+    )
+
+    args = argparse.Namespace(
+        path=None,
+        no_preflight=False,
+        open_shell=True,
+        shell_only=True,
+        command=None,
+    )
+    rc = worktree_issues.cmd_worktree_resume(args)
+
+    assert rc == 0
+    assert opened == [wt.path]
 
 
 def test_cmd_worktree_next_skips_runnable_issue_with_existing_worktree(monkeypatch):
@@ -291,6 +333,147 @@ def test_cmd_worktree_next_skips_runnable_issue_with_existing_worktree(monkeypat
     assert selected_issue.number == 35
 
 
+def test_cmd_worktree_next_shell_only_opens_shell_directly(monkeypatch):
+    root = Path("/tmp/repo")
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    created: list[int] = []
+    opened: list[Path] = []
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_33],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[worktree_issues.QueueItem(issue=issue_33, runnable=True)],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: created.append(kwargs["issue"].number) or Path("/tmp/worktrees/wt33"),
+    )
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "open_shell", lambda path: opened.append(path))
+    monkeypatch.setattr(
+        worktree_issues,
+        "handoff_to_agent_or_shell",
+        lambda **kwargs: pytest.fail("handoff_to_agent_or_shell should not be used"),
+    )
+
+    args = argparse.Namespace(
+        repo=None,
+        stream_label=None,
+        mode="auto",
+        choose=False,
+        allow_blocked=False,
+        base_dir=None,
+        base_ref=None,
+        scope=None,
+        slug=None,
+        name=None,
+        no_claim=False,
+        no_preflight=False,
+        dry_run=False,
+        open_shell=True,
+        shell_only=True,
+        agent=None,
+        agent_mode=None,
+        handoff=None,
+        print_only=False,
+    )
+    rc = worktree_issues.cmd_worktree_next(args)
+
+    assert rc == 0
+    assert created == [33]
+    assert opened == [Path("/tmp/worktrees/wt33")]
+
+
+def test_cmd_worktree_next_existing_worktree_shell_only_opens_shell_directly(monkeypatch):
+    root = Path("/tmp/repo")
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    existing = worktree_issues.WorktreeInfo(
+        path=Path("/tmp/worktrees/wt33"),
+        head="abc123",
+        branch="wt/infra/33-observabilitystack",
+        is_primary=False,
+    )
+    opened: list[Path] = []
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_33],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[worktree_issues.QueueItem(issue=issue_33, runnable=True)],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: existing)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "run_preflight", lambda **kwargs: None)
+    monkeypatch.setattr(worktree_issues, "open_shell", lambda path: opened.append(path))
+    monkeypatch.setattr(
+        worktree_issues,
+        "handoff_to_agent_or_shell",
+        lambda **kwargs: pytest.fail("handoff_to_agent_or_shell should not be used"),
+    )
+
+    args = argparse.Namespace(
+        repo=None,
+        stream_label=None,
+        mode="auto",
+        choose=True,
+        allow_blocked=False,
+        base_dir=None,
+        base_ref=None,
+        scope=None,
+        slug=None,
+        name=None,
+        no_claim=False,
+        no_preflight=False,
+        dry_run=False,
+        open_shell=True,
+        shell_only=True,
+        agent=None,
+        agent_mode=None,
+        handoff=None,
+        print_only=False,
+    )
+
+    monkeypatch.setattr(worktree_issues, "choose_issue_interactive", lambda selection: issue_33)
+
+    rc = worktree_issues.cmd_worktree_next(args)
+
+    assert rc == 0
+    assert opened == [existing.path]
+
+
 def test_create_worktree_for_issue_attaches_existing_local_branch(monkeypatch, tmp_path):
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
@@ -313,6 +496,7 @@ def test_create_worktree_for_issue_attaches_existing_local_branch(monkeypatch, t
 
     monkeypatch.setattr(worktree_issues, "run", _run)
     monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
 
     wt_path = worktree_issues.create_worktree_for_issue(
         root=root,
@@ -357,10 +541,13 @@ def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requ
 
     prompt = worktree_issues.build_agent_prompt_for_worktree(wt, root, "owner/repo")
 
-    assert "DoD: do not stop at code-complete." in prompt
-    assert "Merge conflicts are resolved and re-validated." in prompt
-    assert "make finish-worktree-close" in prompt
-    assert "git worktree prune" in prompt
+    assert "issue #53" in prompt
+    assert "wt/infra/53-explicit-dod" in prompt
+    assert "docs/ARCHITECTURE.md" in prompt
+    assert "make preflight-session" in prompt
+    assert "make pre-validate-session" in prompt
+    assert "validation evidence" in prompt
+    assert "report the blocker" in prompt
 
 
 def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypatch, capsys):
@@ -378,7 +565,10 @@ def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypat
         is_primary=False,
     )
 
-    monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [primary, target])
+    def _list_worktrees(_root):
+        return [primary, target] if target.path.exists() else [primary]
+
+    monkeypatch.setattr(worktree_issues, "list_worktrees", _list_worktrees)
     monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
     monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
     monkeypatch.setattr(worktree_issues, "gh_repo_ready", lambda _root: (False, None))
@@ -399,10 +589,858 @@ def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypat
     assert "git worktree prune" in out
 
 
-def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys):
-    root = Path("/tmp/repo")
+def test_run_gitnexus_command_clears_corrupt_npx_cache_and_retries(monkeypatch, capsys):
+    calls: list[list[str]] = []
+
+    def _subprocess_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                cmd,
+                217,
+                "",
+                (
+                    "npm error code ENOTEMPTY\n"
+                    "npm error path /home/julesb/.npm/_npx/hash/node_modules/chownr\n"
+                ),
+            )
+        return subprocess.CompletedProcess(cmd, 0, "GitNexus ready\n", "")
+
+    removed: list[Path] = []
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(worktree_issues, "gitnexus_cli_path", lambda: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "gitnexus_npx_cache_dir",
+        lambda: Path("/home/julesb/.npm/_npx"),
+    )
+    monkeypatch.setattr(
+        worktree_issues.shutil,
+        "rmtree",
+        lambda path, ignore_errors: removed.append(path),
+    )
+
+    proc = worktree_issues.run_gitnexus_command(Path("/tmp/repo"), ["status"], check=False)
+
+    assert proc.returncode == 0
+    assert calls == [["npx", "--yes", "gitnexus", "status"], ["npx", "--yes", "gitnexus", "status"]]
+    assert removed == [Path("/home/julesb/.npm/_npx")]
+    assert "clearing corrupt npx cache" in capsys.readouterr().out
+
+
+def test_run_gitnexus_command_prefers_local_gitnexus_cli(monkeypatch):
+    calls: list[list[str]] = []
+
+    def _subprocess_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "GitNexus ready\n", "")
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(
+        worktree_issues,
+        "gitnexus_cli_path",
+        lambda: Path("/mnt/c/Users/julia/gitnexus/gitnexus/dist/cli/index.js"),
+    )
+    monkeypatch.setattr(worktree_issues, "shutil_which", lambda name: f"/usr/bin/{name}")
+
+    proc = worktree_issues.run_gitnexus_command(Path("/tmp/repo"), ["status"], check=False)
+
+    assert proc.returncode == 0
+    assert calls == [
+        ["/usr/bin/node", "/mnt/c/Users/julia/gitnexus/gitnexus/dist/cli/index.js", "status"]
+    ]
+
+
+def test_prepare_gitnexus_for_worktree_warns_when_npm_cache_path_unavailable(monkeypatch, capsys):
+    calls: list[list[str]] = []
+
+    def _subprocess_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            217,
+            "",
+            (
+                "npm error code ENOTEMPTY\n"
+                "npm error path /home/julesb/.npm/_npx/hash/node_modules/chownr\n"
+            ),
+        )
+
+    monkeypatch.setattr(worktree_issues, "gitnexus_cli_path", lambda: None)
+    monkeypatch.setattr(worktree_issues, "shutil_which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _subprocess_run)
+    monkeypatch.setattr(worktree_issues, "gitnexus_npx_cache_dir", lambda: None)
+
+    worktree_issues.prepare_gitnexus_for_worktree(Path("/tmp/repo"))
+
+    captured = capsys.readouterr()
+    assert calls == [
+        ["npx", "--yes", "gitnexus", "status"],
+        ["npx", "--yes", "gitnexus", "analyze"],
+    ]
+    assert "npm cache path unavailable" in captured.err
+    assert "rebuilding local index" in captured.out
+
+
+def test_cmd_wt_batch_writes_manifest_and_launches_detached_agents(monkeypatch, capsys, tmp_path):
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    issue_35 = _issue(
+        number=35,
+        task_id="TASK-028",
+        seq=280,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    created: list[int] = []
+    launched: list[tuple[int, str, Path, str]] = []
+    manifest_payloads: dict[Path, dict[str, object]] = {}
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_33, issue_35],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[
+                worktree_issues.QueueItem(issue=issue_33, runnable=True),
+                worktree_issues.QueueItem(issue=issue_35, runnable=True),
+            ],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: (
+            created.append(kwargs["issue"].number)
+            or Path(f"/tmp/worktrees/wt{kwargs['issue'].number}")
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+    monkeypatch.setattr(worktree_issues, "batch_run_id", lambda: "run-20260320-000001")
+    monkeypatch.setattr(
+        worktree_issues,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "wt/task/test\n", ""),
+    )
+
+    def _write_json(path, payload):
+        manifest_payloads[path] = payload
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(worktree_issues, "write_json_file", _write_json)
+
+    def _launch(**kwargs):
+        launched.append(
+            (
+                kwargs["issue_number"],
+                kwargs["agent"],
+                kwargs["path"],
+                kwargs["command"],
+            )
+        )
+        issue_number = kwargs["issue_number"]
+        wt_path = kwargs["path"]
+        return worktree_issues.BatchLaunchResult(
+            issue_number=issue_number,
+            agent=kwargs["agent"],
+            worktree_path=wt_path,
+            branch="wt/task/test",
+            command=kwargs["command"],
+            state="running",
+            pid=2000 + issue_number,
+            local_status_path=wt_path / ".build" / "agent-run" / "status.json",
+            stdout_log_path=wt_path / ".build" / "agent-run" / "stdout.log",
+            stderr_log_path=wt_path / ".build" / "agent-run" / "stderr.log",
+            detail="started detached agent process",
+        )
+
+    monkeypatch.setattr(worktree_issues, "launch_agent_detached", _launch)
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=2,
+            agents="gemini",
+            agent_mode="yolo",
+            base_dir=None,
+            interactive=False,
+            dry_run=False,
+        )
+    )
+
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert created == [33, 35]
+    assert [item[0] for item in launched] == [33, 35]
+    manifest_path = root / ".build" / "worktree-runs" / "run-20260320-000001" / "manifest.json"
+    assert manifest_path in manifest_payloads
+    assert manifest_payloads[manifest_path]["run_id"] == "run-20260320-000001"
+    assert manifest_payloads[manifest_path]["count_selected"] == 2
+    assert len(manifest_payloads[manifest_path]["entries"]) == 2
+    assert "Batch run: 2 issue(s)" in out
+    assert "Run id:   run-20260320-000001" in out
+    assert f"Manifest: {manifest_path}" in out
+    assert "[1/2] #33 -> starting" in out
+    assert "[1/2] #33 -> running pid=2033" in out
+    assert "[2/2] #35 -> starting" in out
+    assert "[2/2] #35 -> running pid=2035" in out
+    assert "Run summary:" in out
+
+
+def test_cmd_wt_batch_reuses_existing_worktree_when_agent_not_running(
+    monkeypatch, capsys, tmp_path
+):
+    repo = "owner/repo"
+    issue_41 = _issue(
+        number=41,
+        task_id="TASK-041",
+        seq=410,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    existing = worktree_issues.WorktreeInfo(
+        path=tmp_path / "worktrees" / "wt41",
+        head="abc123",
+        branch="wt/infra/41-test",
+        is_primary=False,
+    )
+    launched: list[Path] = []
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_41],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[worktree_issues.QueueItem(issue=issue_41, runnable=True)],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: existing)
+    monkeypatch.setattr(worktree_issues, "worktree_agent_running", lambda path: False)
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda path: None)
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+    monkeypatch.setattr(worktree_issues, "batch_run_id", lambda: "run-20260320-000002")
+    monkeypatch.setattr(
+        worktree_issues,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "wt/infra/41-test\n", ""),
+    )
+
+    def _launch(**kwargs):
+        launched.append(kwargs["path"])
+        return worktree_issues.BatchLaunchResult(
+            issue_number=41,
+            agent=kwargs["agent"],
+            worktree_path=kwargs["path"],
+            branch="wt/infra/41-test",
+            command=kwargs["command"],
+            state="running",
+            pid=2041,
+            local_status_path=kwargs["path"] / ".build" / "agent-run" / "status.json",
+            stdout_log_path=kwargs["path"] / ".build" / "agent-run" / "stdout.log",
+            stderr_log_path=kwargs["path"] / ".build" / "agent-run" / "stderr.log",
+            detail="started detached agent process",
+        )
+
+    monkeypatch.setattr(worktree_issues, "launch_agent_detached", _launch)
+    monkeypatch.setattr(worktree_issues, "write_json_file", worktree_issues.write_json_file)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: pytest.fail("create_worktree_for_issue should not be used"),
+    )
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=1,
+            agents="gemini",
+            agent_mode="yolo",
+            base_dir=None,
+            interactive=False,
+            dry_run=False,
+        )
+    )
+
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert launched == [existing.path]
+    assert "Batch run: 1 issue(s)" in out
+    assert "[1/1] #41 -> starting" in out
+    assert "[1/1] #41 -> running pid=2041" in out
+
+
+def test_cmd_wt_batch_skips_existing_worktree_with_running_agent(monkeypatch, capsys, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    repo = "owner/repo"
+    issue_41 = _issue(
+        number=41,
+        task_id="TASK-041",
+        seq=410,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    issue_42 = _issue(
+        number=42,
+        task_id="TASK-042",
+        seq=420,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    existing = worktree_issues.WorktreeInfo(
+        path=tmp_path / "worktrees" / "wt41",
+        head="abc123",
+        branch="wt/infra/41-test",
+        is_primary=False,
+    )
+    created: list[int] = []
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_41, issue_42],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[
+                worktree_issues.QueueItem(issue=issue_41, runnable=True),
+                worktree_issues.QueueItem(issue=issue_42, runnable=True),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "find_linked_worktree_for_issue",
+        lambda _root, issue_number: existing if issue_number == 41 else None,
+    )
+    monkeypatch.setattr(
+        worktree_issues, "worktree_agent_running", lambda path: path == existing.path
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: (
+            created.append(kwargs["issue"].number)
+            or tmp_path / "worktrees" / f"wt{kwargs['issue'].number}"
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda path: None)
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+    monkeypatch.setattr(worktree_issues, "batch_run_id", lambda: "run-20260320-000003")
+    monkeypatch.setattr(
+        worktree_issues,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "wt/infra/42-test\n", ""),
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "launch_agent_detached",
+        lambda **kwargs: worktree_issues.BatchLaunchResult(
+            issue_number=kwargs["issue_number"],
+            agent=kwargs["agent"],
+            worktree_path=kwargs["path"],
+            branch="wt/infra/42-test",
+            command=kwargs["command"],
+            state="running",
+            pid=2042,
+            local_status_path=kwargs["path"] / ".build" / "agent-run" / "status.json",
+            stdout_log_path=kwargs["path"] / ".build" / "agent-run" / "stdout.log",
+            stderr_log_path=kwargs["path"] / ".build" / "agent-run" / "stderr.log",
+            detail="started detached agent process",
+        ),
+    )
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=2,
+            agents="gemini",
+            agent_mode="yolo",
+            base_dir=None,
+            interactive=False,
+            dry_run=False,
+        )
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert created == [42]
+    assert f"Skipping #41: agent already running in {existing.path}" in out
+    assert "WARNING: only 1 runnable issue(s) available (requested 2)" in out
+    assert "[1/1] #42 -> running pid=2042" in out
+
+
+def test_launch_agent_detached_writes_runtime_state(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    worktree = tmp_path / "wt41"
+    root.mkdir(parents=True, exist_ok=True)
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda path: None)
+
+    result = worktree_issues.launch_agent_detached(
+        root=root,
+        run_id="run-20260320-000004",
+        issue_number=41,
+        path=worktree,
+        branch="wt/infra/41-test",
+        agent="gemini",
+        command='python3 -c "import time; time.sleep(5)"',
+    )
+
+    try:
+        assert result.state == "running"
+        assert result.pid is not None
+        assert worktree_issues.pid_is_running(result.pid) is True
+        assert result.local_status_path is not None and result.local_status_path.exists()
+        assert result.stdout_log_path is not None and result.stdout_log_path.exists()
+        assert result.stderr_log_path is not None and result.stderr_log_path.exists()
+        pid_path = worktree / ".build" / "agent-run" / "pid"
+        assert pid_path.read_text(encoding="utf-8").strip() == str(result.pid)
+        status = json.loads(result.local_status_path.read_text(encoding="utf-8"))
+        assert status["run_id"] == "run-20260320-000004"
+        assert status["issue_number"] == 41
+        assert status["branch"] == "wt/infra/41-test"
+        assert status["agent"] == "gemini"
+        assert status["state"] == "running"
+        assert status["backend"] == "detached"
+        assert status["pid"] == result.pid
+        assert status["orchestrator_manifest"].endswith(
+            ".build/worktree-runs/run-20260320-000004/manifest.json"
+        )
+        assert worktree_issues.worktree_agent_running(worktree) is True
+    finally:
+        if result.pid is not None and worktree_issues.pid_is_running(result.pid):
+            os.kill(result.pid, signal.SIGTERM)
+            subprocess.run(["bash", "-lc", f"wait {result.pid}"], check=False)
+
+
+def test_launch_agent_detached_rejects_tty_only_agents(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    worktree = tmp_path / "wt41"
+    root.mkdir(parents=True, exist_ok=True)
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda path: None)
+
+    with pytest.raises(worktree_issues.CliError, match="does not support detached startup"):
+        worktree_issues.launch_agent_detached(
+            root=root,
+            run_id="run-20260320-tty-only",
+            issue_number=41,
+            path=worktree,
+            branch="wt/infra/41-test",
+            agent="codex",
+            command="codex --yolo test",
+        )
+
+
+def test_launch_agent_detached_marks_early_exit_failed(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    worktree = tmp_path / "wt41"
+    root.mkdir(parents=True, exist_ok=True)
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda path: None)
+    created: dict[str, object] = {}
+
+    class _FakeProc:
+        pid = 4242
+
+        def wait(self, timeout=None):
+            return 1
+
+    def _popen(cmd, **kwargs):
+        created["cmd"] = cmd
+        created["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(worktree_issues.subprocess, "Popen", _popen)
+
+    result = worktree_issues.launch_agent_detached(
+        root=root,
+        run_id="run-20260320-fail-fast",
+        issue_number=41,
+        path=worktree,
+        branch="wt/infra/41-test",
+        agent="gemini",
+        command="false",
+    )
+
+    assert result.state == "failed"
+    assert "startup probe" in result.detail
+    assert result.local_status_path is not None
+    assert created["cmd"][:2] == ["bash", "-lc"]
+    status = json.loads(result.local_status_path.read_text(encoding="utf-8"))
+    assert status["state"] == "failed"
+    assert worktree_issues.worktree_agent_running(worktree) is False
+
+
+def test_cmd_wt_batch_rejects_tty_only_agent_pool_in_detached_mode(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+
+    with pytest.raises(worktree_issues.CliError, match="Detached wt-batch does not support"):
+        worktree_issues.cmd_wt_batch(
+            argparse.Namespace(
+                repo=None,
+                stream_label=None,
+                mode="auto",
+                count=1,
+                agents="codex",
+                agent_mode="yolo",
+                base_dir=None,
+                interactive=False,
+                dry_run=False,
+            )
+        )
+
+
+def test_cmd_wt_batch_interactive_launches_tmux_session(monkeypatch, capsys, tmp_path):
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    tmux_calls: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(worktree_issues, "fetch_repo_issues", lambda *_args, **_kwargs: [issue_33])
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[worktree_issues.QueueItem(issue=issue_33, runnable=True)],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: tmp_path / "worktrees" / f"wt{kwargs['issue'].number}",
+    )
+    monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
+    monkeypatch.setattr(worktree_issues, "build_agent_prompt_for_worktree", lambda *args: "prompt")
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_agent_command",
+        lambda agent, mode, prompt: f"{agent}:{mode}:{prompt}",
+    )
+    monkeypatch.setattr(worktree_issues, "batch_run_id", lambda: "run-20260320-000005")
+    monkeypatch.setattr(
+        worktree_issues,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "wt/task/test\n", ""),
+    )
+    monkeypatch.setattr(worktree_issues, "tmux_available", lambda: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "worktree_session_pair",
+        lambda label: worktree_issues.SessionPair(label=label, session_name="wt-batch-20260320"),
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "launch_tmux_batch_session",
+        lambda **kwargs: tmux_calls.update(kwargs),
+    )
+
+    rc = worktree_issues.cmd_wt_batch(
+        argparse.Namespace(
+            repo=None,
+            stream_label=None,
+            mode="auto",
+            count=1,
+            agents="codex",
+            agent_mode="yolo",
+            base_dir=None,
+            interactive=True,
+            dry_run=False,
+        )
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert tmux_calls["session_name"] == "wt-batch-20260320"
+    assert tmux_calls["attach"] is True
+    assert tmux_calls["announce_windows"] is True
+    assert tmux_calls["launches"] == [
+        (
+            "wt33",
+            tmp_path / "worktrees" / "wt33",
+            "codex:yolo:prompt",
+        )
+    ]
+    assert "interactive: tmux session wt-batch-20260320" in out
+    status_path = tmp_path / "worktrees" / "wt33" / ".build" / "agent-run" / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["backend"] == "tmux"
+    assert status["state"] == "interactive"
+    assert status["session_name"] == "wt-batch-20260320"
+
+
+def test_cleanup_finished_worktree_changes_out_of_target_before_remove(
+    monkeypatch, capsys, tmp_path
+):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
     target = worktree_issues.WorktreeInfo(
-        path=Path("/tmp/worktrees/wt153"),
+        path=tmp_path / "worktrees" / "wt153",
+        head="abc123",
+        branch="wt/task/153-sample",
+        is_primary=False,
+    )
+    target.path.mkdir(parents=True, exist_ok=True)
+    changed_to: list[Path] = []
+    branch_deleted = False
+
+    monkeypatch.setattr(worktree_issues.os, "getcwd", lambda: str(target.path))
+    monkeypatch.setattr(worktree_issues.os, "chdir", lambda path: changed_to.append(Path(path)))
+    monkeypatch.setattr(
+        worktree_issues,
+        "local_branch_exists",
+        lambda _root, _branch: not branch_deleted,
+    )
+
+    def _run(cmd, *, cwd=None, **_kwargs):
+        nonlocal branch_deleted
+        if cmd[:3] == ["git", "worktree", "remove"]:
+            target.path.rmdir()
+        if cmd[:3] == ["git", "branch", "-d"]:
+            branch_deleted = True
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(worktree_issues, "run", _run)
+
+    result = worktree_issues.cleanup_finished_worktree(root, target)
+    out = capsys.readouterr().out
+
+    assert changed_to == [root]
+    assert result == {
+        "worktree_removed": True,
+        "branch_deleted": True,
+        "worktree_pruned": True,
+    }
+    assert f"Removed worktree {target.path}" in out
+
+
+def test_launch_tmux_batch_session_starts_grid(monkeypatch, capsys):
+    launches = [
+        ("wt33", Path("/tmp/worktrees/wt33"), "codex --yolo"),
+        ("wt35", Path("/tmp/worktrees/wt35"), "gemini --normal"),
+    ]
+    calls: list[list[str]] = []
+    attached: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "tmux_session_exists", lambda _name: False)
+
+    def _run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(bin_path, args):
+        attached["bin_path"] = bin_path
+        attached["args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_tmux_batch_session(
+            session_name="worktrees",
+            launches=launches,
+            attach=True,
+            announce_windows=False,
+        )
+
+    out = capsys.readouterr().out
+    assert "tmux session 'worktrees' launching with 2 worktree window(s)" in out
+    assert calls[0][:4] == ["tmux", "new-session", "-d", "-s"]
+    assert calls[0][4] == "worktrees"
+    assert calls[1][:3] == ["tmux", "split-window", "-h"]
+    assert any(cmd[:3] == ["tmux", "new-window", "-t"] for cmd in calls)
+    assert any(cmd[:3] == ["tmux", "select-window", "-t"] for cmd in calls)
+    assert attached["bin_path"] == "tmux"
+    assert attached["args"] == ["tmux", "attach-session", "-t", "worktrees"]
+
+
+def test_launch_tmux_batch_session_replaces_existing_session(monkeypatch, capsys):
+    launches = [("wt33", Path("/tmp/worktrees/wt33"), "codex --yolo")]
+    calls: list[list[str]] = []
+    attached: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "tmux_session_exists", lambda _name: True)
+
+    def _run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(bin_path, args):
+        attached["bin_path"] = bin_path
+        attached["args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_tmux_batch_session(
+            session_name="worktrees",
+            launches=launches,
+            attach=True,
+            announce_windows=True,
+        )
+
+    out = capsys.readouterr().out
+    assert "already exists — replacing." in out
+    assert calls[0] == ["tmux", "kill-session", "-t", "worktrees"]
+    assert attached["args"] == ["tmux", "attach-session", "-t", "worktrees"]
+
+
+def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):
+    path = Path("/tmp/worktrees/wt33")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "worktree_session_pair",
+        lambda label: worktree_issues.SessionPair(
+            label=label, session_name="wt33-20260319-213333-000003"
+        ),
+    )
+
+    def _execvp(bin_path, args):
+        captured["bin_path"] = bin_path
+        captured["args"] = args
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    worktree_issues.launch_zellij_session(
+        path=path,
+        agent_command="codex --yolo",
+        attach=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "already exists — attaching." in out
+    assert captured["bin_path"] == "/home/julesb/bin/zellij"
+    assert captured["args"] == ["/home/julesb/bin/zellij", "attach", "wt33-20260319-213333-000003"]
+    assert "Session label: wt33" in out
+    assert "Session name:  wt33-20260319-213333-000003" in out
+
+
+def test_launch_zellij_batch_session_adds_tabs_to_existing_session(monkeypatch, capsys):
+    launches = [
+        ("wt33", Path("/tmp/worktrees/wt33"), "codex --yolo"),
+        ("wt35", Path("/tmp/worktrees/wt35"), "gemini --normal"),
+    ]
+    captured: dict[str, object] = {}
+    run_calls: list[list[str]] = []
+    asset_dir = Path("/tmp/batch-assets-existing")
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _mkdtemp(*, prefix):
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        return str(asset_dir)
+
+    def _run(cmd, **kwargs):
+        run_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(bin_path, args):
+        captured["bin_path"] = bin_path
+        captured["args"] = args
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
+    monkeypatch.setattr(worktree_issues, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    worktree_issues.launch_zellij_batch_session(
+        session_name="worktrees",
+        launches=launches,
+        attach=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "already exists — replacing." in out
+    assert run_calls == [["/home/julesb/bin/zellij", "delete-session", "worktrees"]]
+    assert captured["bin_path"] == "bash"
+    assert captured["args"][0] == "bash"
+    assert captured["args"][1] == "-lc"
+    assert "--session worktrees" in captured["args"][2]
+    layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
+    assert f'pane command="{asset_dir / "wt33-agent.sh"}"' in layout
+    assert f'pane command="{asset_dir / "wt35-agent.sh"}"' in layout
+
+
+def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    target = worktree_issues.WorktreeInfo(
+        path=tmp_path / "worktrees" / "wt153",
         head="abc123",
         branch="wt/task/153-sample",
         is_primary=False,
@@ -414,6 +1452,10 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
         is_primary=True,
     )
     edits: list[list[str]] = []
+    cleanup_calls: list[tuple[list[str], Path | None]] = []
+    branch_deleted = False
+
+    target.path.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [primary, target])
     monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
@@ -445,6 +1487,22 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
 
     monkeypatch.setattr(worktree_issues, "gh_text", _gh_text)
     monkeypatch.setattr(worktree_issues, "ensure_label_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "local_branch_exists",
+        lambda _root, _branch: not branch_deleted,
+    )
+
+    def _run(cmd, *, cwd=None, **_kwargs):
+        nonlocal branch_deleted
+        cleanup_calls.append((cmd, cwd))
+        if cmd[:3] == ["git", "worktree", "remove"]:
+            target.path.rmdir()
+        if cmd[:3] == ["git", "branch", "-d"]:
+            branch_deleted = True
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(worktree_issues, "run", _run)
 
     worktree_issues.close_issue_done(root, path=target.path, force=False)
     out = capsys.readouterr().out
@@ -464,5 +1522,265 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
             "status:in-progress",
         ]
     ]
+    assert cleanup_calls == [
+        (["git", "worktree", "remove", str(target.path)], root),
+        (["git", "branch", "-d", "wt/task/153-sample"], root),
+        (["git", "worktree", "prune"], root),
+    ]
     assert "Issue #153 already closed." in out
     assert "Normalized closed-issue lifecycle labels." in out
+    assert "Cleaning up worktree..." in out
+    assert f"Removed worktree {target.path}" in out
+    assert "Deleted branch wt/task/153-sample" in out
+    assert "Pruned stale worktree refs" in out
+    report_path = root / ".build" / "worktree-closeouts" / "issue-153-wt_task_153-sample.json"
+    assert f"Closeout report: {report_path}" in out
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["stage"] == "complete"
+    assert report["issue_closed"] is True
+    assert report["cleanup_verified"] is True
+    assert report["cleanup"] == {
+        "branch_deleted": True,
+        "worktree_pruned": True,
+        "worktree_removed": True,
+    }
+    assert [event["stage"] for event in report["events"]] == [
+        "starting",
+        "merge-check",
+        "issue-close",
+        "cleanup",
+        "cleanup-verified",
+    ]
+    assert report["events"][0]["message"] == "closeout started"
+    assert report["events"][-1]["message"] == "cleanup verified"
+    assert all(isinstance(event["ts"], str) for event in report["events"])
+    assert all(isinstance(event["pid"], int) for event in report["events"])
+
+
+def test_cmd_finish_close_json_prints_closeout_report(monkeypatch, capsys, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    target = worktree_issues.WorktreeInfo(
+        path=tmp_path / "worktrees" / "wt153",
+        head="abc123",
+        branch="wt/task/153-sample",
+        is_primary=False,
+    )
+    report_path = root / ".build" / "worktree-closeouts" / "issue-153-wt_task_153-sample.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_payload = {
+        "branch": target.branch,
+        "events": [
+            {
+                "stage": "complete",
+                "message": "done",
+                "pid": 1,
+                "ts": "2026-01-01T00:00:00Z",
+            }
+        ],
+        "issue_closed": True,
+        "issue_id": 153,
+        "merged_pr_required": True,
+        "repo": "owner/repo",
+        "stage": "complete",
+        "worktree_path": str(target.path),
+    }
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "list_worktrees", lambda _root: [target])
+    monkeypatch.setattr(worktree_issues, "resolve_current_worktree", lambda _path, _wts: target)
+    monkeypatch.setattr(worktree_issues, "current_path", lambda: target.path)
+    monkeypatch.setattr(worktree_issues, "closeout_report_path", lambda _root, _target: report_path)
+    monkeypatch.setattr(
+        worktree_issues,
+        "close_issue_done",
+        lambda *_args, **_kwargs: report_path.write_text(
+            json.dumps(report_payload, indent=2) + "\n", encoding="utf-8"
+        ),
+    )
+
+    rc = worktree_issues.cmd_finish_close(argparse.Namespace(path=None, force=False, json=True))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert json.loads(out.splitlines()[-1]) == report_payload
+
+
+def test_launch_zellij_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    asset_dir = tmp_path / "session-assets"
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _mkdtemp(*, prefix):
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        return str(asset_dir)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_session(
+            path=tmp_path,
+            agent_command="echo agent",
+            session_name="wt123",
+            attach=True,
+        )
+
+    assert calls
+    assert calls[0][0] == "bash"
+    assert calls[0][1] == "-lc"
+    assert "rm -rf " in calls[0][2]
+    assert "--new-session-with-layout" in calls[0][2]
+    assert "--session wt123" in calls[0][2]
+    layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
+    assert 'args "-lc"' not in layout
+    assert f'pane command="{asset_dir / "agent.sh"}"' in layout
+    assert f'pane command="{asset_dir / "shell.sh"}"' in layout
+    assert (asset_dir / "agent.sh").read_text(encoding="utf-8").endswith("\n")
+    assert (asset_dir / "shell.sh").read_text(encoding="utf-8").endswith("\n")
+
+
+def test_launch_zellij_session_adds_tab_to_existing_session(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    subprocess_calls: list[list[str]] = []
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+    monkeypatch.setattr(
+        worktree_issues,
+        "worktree_session_pair",
+        lambda label: worktree_issues.SessionPair(
+            label=label, session_name="wt123-20260319-213333-000004"
+        ),
+    )
+
+    def _run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_session(
+            path=tmp_path,
+            agent_command="echo agent",
+            session_name="wt123",
+            attach=True,
+        )
+
+    assert calls
+    assert subprocess_calls == [["stty", "-ixon"]]
+    assert calls[0][0] == "/home/julesb/bin/zellij"
+    assert calls[0][1:] == ["attach", "wt123"]
+
+
+def test_zellij_session_exists_handles_ansi_colored_output(monkeypatch):
+    def _run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            "\x1b[32;1mwt278\x1b[m [Created \x1b[35;1m0s\x1b[m ago]\n",
+            "",
+        )
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+
+    assert worktree_issues.zellij_session_exists("wt278") is True
+
+
+def test_launch_zellij_batch_session_starts_or_adds_with_layout(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    subprocess_calls: list[list[str]] = []
+    asset_dir = tmp_path / "batch-assets"
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: False)
+
+    def _mkdtemp(*, prefix):
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        return str(asset_dir)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
+
+    def _run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues.subprocess, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_batch_session(
+            session_name="worktrees",
+            launches=[("wt123", tmp_path, "echo agent")],
+            attach=True,
+        )
+
+    assert calls
+    assert subprocess_calls == [["stty", "-ixon"]]
+    assert calls[0][0] == "bash"
+    assert calls[0][1] == "-lc"
+    assert "rm -rf " in calls[0][2]
+    assert "--new-session-with-layout" in calls[0][2]
+    assert "--session worktrees" in calls[0][2]
+    layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
+    assert 'args "-lc"' not in layout
+    assert f'pane command="{asset_dir / "wt123-agent.sh"}"' in layout
+    assert f'pane command="{asset_dir / "wt123-shell.sh"}"' in layout
+
+
+def test_launch_zellij_batch_session_adds_to_existing_session(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    subprocess_calls: list[list[str]] = []
+    asset_dir = tmp_path / "batch-assets-existing"
+
+    monkeypatch.setattr(worktree_issues, "zellij_bin", lambda: "/home/julesb/bin/zellij")
+    monkeypatch.setattr(worktree_issues, "zellij_session_exists", lambda _name: True)
+
+    def _mkdtemp(*, prefix):
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        return str(asset_dir)
+
+    def _run(cmd, **kwargs):
+        subprocess_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _execvp(file, args):
+        calls.append([file, *args[1:]])
+        raise SystemExit(0)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
+    monkeypatch.setattr(worktree_issues, "run", _run)
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.launch_zellij_batch_session(
+            session_name="worktrees",
+            launches=[("wt123", tmp_path, "echo agent")],
+            attach=True,
+        )
+
+    assert calls
+    assert subprocess_calls == [["/home/julesb/bin/zellij", "delete-session", "worktrees"]]
+    assert calls[0][0] == "bash"
+    assert calls[0][1] == "-lc"
+    assert "--session worktrees" in calls[0][2]
+    layout = (asset_dir / "layout.kdl").read_text(encoding="utf-8")
+    assert f'pane command="{asset_dir / "wt123-agent.sh"}"' in layout

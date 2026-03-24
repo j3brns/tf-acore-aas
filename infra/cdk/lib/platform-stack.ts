@@ -30,6 +30,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import { resolveEntraConfiguration } from './entra-config';
@@ -445,6 +446,12 @@ export class PlatformStack extends cdk.Stack {
     );
     this.billingFn.addToRolePolicy(
       new iam.PolicyStatement({
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      }),
+    );
+    this.billingFn.addToRolePolicy(
+      new iam.PolicyStatement({
         actions: ['events:PutEvents'],
         resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
       }),
@@ -454,6 +461,98 @@ export class PlatformStack extends cdk.Stack {
     new events.Rule(this, 'DailyBillingRule', {
       schedule: events.Schedule.cron({ hour: '0', minute: '0' }),
       targets: [new targets.LambdaFunction(this.billingFn)],
+    });
+
+    // --- Tenant Provisioner (Issue #291) ---
+
+    // The TenantStack template is synthesized during 'cdk synth' and needs to be
+    // available to the provisioner Lambda via S3.
+    // NOTE: This assumes 'cdk synth' has run and populated cdk.out.
+    const tenantStackTemplateAsset = new s3assets.Asset(this, 'TenantStackTemplateAsset', {
+      path: path.join(__dirname, `../cdk.out/platform-tenant-stub-${env}.template.json`),
+    });
+
+    const tenantProvisionerFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/tenant_provisioner'),
+      handler: 'handler.lambda_handler',
+      functionNameSuffix: 'tenant-provisioner',
+      timeout: cdk.Duration.minutes(11), // Must be > stack deployment poll (10m)
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'tenant-provisioner',
+        PLATFORM_ENV: env,
+        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        TENANT_STACK_TEMPLATE_URL: tenantStackTemplateAsset.bucket.s3UrlForObject(tenantStackTemplateAsset.s3ObjectKey),
+      },
+    });
+
+    this.tenantsTable.grantReadWriteData(tenantProvisionerFn);
+    tenantStackTemplateAsset.grantRead(tenantProvisionerFn);
+
+    tenantProvisionerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TenantStackCloudFormationAccess',
+        actions: [
+          'cloudformation:CreateStack',
+          'cloudformation:UpdateStack',
+          'cloudformation:DescribeStacks',
+          'cloudformation:GetTemplate',
+        ],
+        resources: [`arn:aws:cloudformation:${this.region}:${this.account}:stack/platform-tenant-*/*`],
+      }),
+    );
+
+    tenantProvisionerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TenantStackIamAccess',
+        actions: [
+          'iam:CreateRole',
+          'iam:DeleteRole',
+          'iam:PutRolePolicy',
+          'iam:DeleteRolePolicy',
+          'iam:GetRole',
+          'iam:PassRole',
+          'iam:TagRole',
+        ],
+        resources: [`arn:aws:iam::${this.account}:role/platform-tenant-*`],
+      }),
+    );
+
+    tenantProvisionerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TenantStackSsmAccess',
+        actions: [
+          'ssm:PutParameter',
+          'ssm:GetParameter',
+          'ssm:DeleteParameter',
+          'ssm:AddTagsToResource',
+        ],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/platform/tenants/*`],
+      }),
+    );
+
+    tenantProvisionerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TenantStackBedrockAccess',
+        actions: [
+          'bedrock-agentcore:CreateMemory',
+          'bedrock-agentcore:UpdateMemory',
+          'bedrock-agentcore:DeleteMemory',
+          'bedrock-agentcore:GetMemory',
+          'bedrock-agentcore:TagResource',
+        ],
+        resources: ['*'], // Resource-level permissions not fully supported for all AgentCore resources yet
+      }),
+    );
+
+    new events.Rule(this, 'TenantCreatedRule', {
+      ruleName: `platform-tenant-created-${env}`,
+      description: 'Trigger tenant provisioning when a new tenant is created',
+      eventPattern: {
+        source: ['platform.tenant_api'],
+        detailType: ['tenant.created'],
+      },
+      targets: [new targets.LambdaFunction(tenantProvisionerFn)],
     });
 
     this.toolsTable.grantReadData(this.requestInterceptorFn);
@@ -533,6 +632,16 @@ export class PlatformStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const spaLogBucket = new s3.Bucket(this, 'SpaLogBucket', {
+      bucketName: `platform-spa-logs-${env}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
+      accessControl: s3.BucketAccessControl.LOG_DELIVERY_WRITE,
+    });
+
     new ssm.StringParameter(this, 'ResultsBucketArnParam', {
       parameterName: `/platform/core/${env}/results-bucket-arn`,
       stringValue: resultsBucket.bucketArn,
@@ -597,6 +706,11 @@ export class PlatformStack extends cdk.Stack {
         httpVersion: 'http2',
         priceClass: 'PriceClass_100',
         ipv6Enabled: true,
+        logging: {
+          bucket: spaLogBucket.bucketRegionalDomainName,
+          includeCookies: false,
+          prefix: 'spa-cloudfront/',
+        },
         customErrorResponses: [
           {
             errorCode: 403,
@@ -697,6 +811,36 @@ export class PlatformStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    apiAccessLogGroup.addMetricFilter('TenantRequestCountFilter', {
+      metricName: 'RequestCount',
+      metricNamespace: 'Platform/API',
+      metricValue: '1',
+      filterPattern: logs.FilterPattern.exists('$.tenantId'),
+      dimensions: {
+        TenantId: '$.tenantId',
+      },
+    });
+
+    apiAccessLogGroup.addMetricFilter('TenantErrorCountFilter', {
+      metricName: 'ErrorCount',
+      metricNamespace: 'Platform/API',
+      metricValue: '1',
+      filterPattern: logs.FilterPattern.numberValue('$.status', '>=', 400),
+      dimensions: {
+        TenantId: '$.tenantId',
+      },
+    });
+
+    apiAccessLogGroup.addMetricFilter('TenantLatencyFilter', {
+      metricName: 'Latency',
+      metricNamespace: 'Platform/API',
+      metricValue: '$.latency',
+      filterPattern: logs.FilterPattern.exists('$.latency'),
+      dimensions: {
+        TenantId: '$.tenantId',
+      },
+    });
+
     this.api = new apigateway.RestApi(this, 'PlatformRestApi', {
       restApiName: `${this.stackName}-rest-api`,
       description: 'Platform northbound REST API (ADR-003)',
@@ -733,14 +877,15 @@ export class PlatformStack extends cdk.Stack {
           requestTime: '$context.requestTime',
           httpMethod: '$context.httpMethod',
           resourcePath: '$context.resourcePath',
-          status: '$context.status',
+          status: 0, // Placeholder for numeric type in JSON.stringify
           protocol: '$context.protocol',
-          responseLength: '$context.responseLength',
+          responseLength: 0, // Placeholder
           tenantId: '$context.authorizer.tenantid',
           appId: '$context.authorizer.appid',
           sub: '$context.authorizer.sub',
           tier: '$context.authorizer.tier',
-        })),
+          latency: 0, // Placeholder
+        }).replace(':0', ':$context.status').replace(':0', ':$context.responseLength').replace(':0', ':$context.responseLatency')),
         dataTraceEnabled: false,
         loggingLevel: apigateway.MethodLoggingLevel.INFO,
         methodOptions: {

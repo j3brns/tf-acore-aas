@@ -1,9 +1,9 @@
 # =============================================================================
 # PLATFORM MAKEFILE
-# Run `make help` to see all targets
+# Run `make help` for a grouped summary, or `make help-all` for the full dump
 # =============================================================================
 
-.PHONY: help bootstrap ensure-tools validate-local validate-local-full
+.PHONY: help help-all bootstrap ensure-tools validate-local validate-local-full
 .PHONY: validate-local-prereqs validate-python validate-openapi validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
 .PHONY: docs-sync-audit docs-sync-stamp rules-sync-audit
@@ -12,6 +12,7 @@
 .PHONY: worktree-create worktree-list worktree-clean
 .PHONY: infra-synth infra-diff infra-deploy infra-deploy-prod-ci infra-destroy
 .PHONY: infra-rollback-lambda infra-set-runtime-region
+.PHONY: tf-validate tf-fmt-check tf-plan tf-apply
 .PHONY: failover-lock-acquire failover-lock-release
 .PHONY: bootstrap-cdk bootstrap-secrets bootstrap-gitlab-oidc
 .PHONY: bootstrap-post-deploy bootstrap-verify bootstrap-delete-iam-user
@@ -25,8 +26,8 @@
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
-.PHONY: worktree issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
-.PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close
+.PHONY: worktree wt-go wt-batch issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
+.PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close finish-worktree-close-json
 .PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
 ENV ?= dev
@@ -36,11 +37,75 @@ all: help
 
 ## help: Print available targets
 help:
-	@echo "Platform Makefile"
-	@echo ""
-	@echo "Usage: make <target> [ENV=dev|staging|prod] [AGENT=name] [TENANT=id]"
-	@echo ""
-	@grep -E '^## ' Makefile | sed 's/^## /  /'
+	@pager="$$(command -v more.exe 2>/dev/null || command -v more 2>/dev/null || command -v cat 2>/dev/null || echo cat)"; \
+	if [ -t 1 ] && [ -z "$$NO_COLOR" ]; then c_def="$$(printf '\033[36m')"; c_rst="$$(printf '\033[0m')"; else c_def=""; c_rst=""; fi; \
+	build_help() { \
+		echo "Platform Makefile"; \
+		echo ""; \
+		echo "Categories:"; \
+		ex() { printf '    %-26s %s\n' "$$1" "$$2"; }; \
+		echo "  Setup"; \
+		ex "bootstrap" "install tools and check prerequisites"; \
+		ex "ensure-tools" "install missing dev tools"; \
+		echo ""; \
+		echo "  Validation"; \
+		ex "validate-local" "fast local validation"; \
+		ex "validate-pre-push" "pre-push checks without cdk synth"; \
+		echo ""; \
+		echo "  Development"; \
+		ex "dev" "start local development environment"; \
+		ex "dev-logs" "stream local service logs"; \
+		ex "dev-invoke" "invoke the echo agent locally"; \
+		echo ""; \
+		echo "  Tests"; \
+		ex "test-unit" "run unit tests"; \
+		ex "test-int" "run integration tests"; \
+		ex "test-agent AGENT=echo-agent" "run one agent's tests"; \
+		echo ""; \
+		echo "  Worktrees / issues"; \
+		ex "worktree" "open the interactive issue queue"; \
+		ex "wt-go" "launch the next runnable issue in zellij"; \
+		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}] [INTERACTIVE=1]" "start detached runs or use tmux for interactive agent sessions"; \
+		ex "worktree-next-issue" "create a worktree for the next queued issue"; \
+		ex "worktree-create-issue" "create a worktree for a specific issue"; \
+		ex "worktree-resume-issue [OPEN_SHELL=off] [CMD='make test-unit']" "resume a linked issue worktree"; \
+		ex "worktree-push-issue" "push the current issue worktree branch"; \
+		ex "issue-queue" "show the issue queue"; \
+		ex "issues-audit" "check issue lifecycle and queue invariants"; \
+		ex "issues-reconcile" "repair task issue labels"; \
+		echo ""; \
+		echo "  Infrastructure / bootstrap"; \
+		ex "infra-synth" "synthesise all CDK stacks"; \
+		ex "infra-diff" "show CDK diff before deployment"; \
+		ex "infra-deploy" "deploy CDK stacks to a non-prod env"; \
+		ex "tf-plan ENV=${c_def}prod${c_rst}" "plan Terraform account-vending changes"; \
+		ex "tf-apply ENV=${c_def}prod${c_rst}" "apply Terraform account-vending changes"; \
+		ex "bootstrap-*" "bootstrap and seed platform resources"; \
+		echo ""; \
+		echo "  Agent / SPA / ops"; \
+		ex "agent-* [AGENT=${c_def}name${c_rst}] [ENV=${c_def}dev${c_rst}|staging|prod]" "package, deploy, invoke, or roll back agents"; \
+		ex "spa-push" "build and deploy the SPA"; \
+		ex "ops-login" "authenticate as operator via Entra"; \
+		ex "ops-top-tenants" "show top tenants by token consumption"; \
+		ex "logs-* [ENV=${c_def}prod${c_rst}] [MINUTES=${c_def}30${c_rst}]" "tail Lambda logs"; \
+		echo ""; \
+		echo "  Meta"; \
+		ex "preflight-session" "run issue-worktree preflight checks"; \
+		ex "pre-validate-session" "run enforced pre-push validation"; \
+		ex "install-git-hooks" "install local git hooks"; \
+		ex "gitnexus-refresh" "refresh the local GitNexus index"; \
+		echo ""; \
+		echo "Run 'make help-all' for the full reference."; \
+	}; \
+	if [ -t 1 ] && [ "$$pager" != "cat" ]; then \
+		build_help | "$$pager"; \
+	else \
+		build_help; \
+	fi
+
+## help-all: Print every documented target
+help-all:
+	@grep -E '^## ' Makefile | sed 's/^## /  /' || true
 
 # =============================================================================
 # BOOTSTRAP AND SETUP
@@ -267,7 +332,7 @@ dev:
 	@echo "==> Starting local development environment"
 	docker compose up -d
 	@echo "==> Waiting for LocalStack to be ready..."
-	@until aws --endpoint-url=http://localhost:4566 s3 ls >/dev/null 2>&1; do sleep 2; done
+	@until curl -sf http://localhost:4566/_localstack/health >/dev/null 2>&1; do sleep 2; done
 	uv run python scripts/dev-bootstrap.py
 	@echo ""
 	@echo "==> Local environment ready"
@@ -393,8 +458,47 @@ failover-lock-release:
 	uv run python scripts/failover_lock.py release --env $(ENV)
 
 # =============================================================================
+# ACCOUNT VENDING (Terraform)
+# =============================================================================
+
+## tf-validate: Validate Terraform account-vending configuration (no credentials required)
+tf-validate:
+	@echo "==> Terraform validate (account vending)"
+	cd infra/terraform && terraform init -backend=false -input=false >/dev/null 2>&1 && \
+		terraform validate
+	@echo "==> Terraform validation passed"
+
+## tf-fmt-check: Check Terraform formatting
+tf-fmt-check:
+	@echo "==> Terraform fmt check"
+	terraform fmt -check -recursive infra/terraform/
+	@echo "==> Terraform fmt passed"
+
+## tf-plan: Plan Terraform account-vending changes (requires Organizations admin credentials)
+## Usage: make tf-plan ENV=prod
+tf-plan:
+	@test -n "$(ENV)" || (echo "ERROR: ENV required. Usage: make tf-plan ENV=prod" && exit 1)
+	cd infra/terraform && terraform plan \
+		-var-file=envs/$(ENV)/terraform.tfvars \
+		-out=tfplan-$(ENV)
+
+## tf-apply: Apply Terraform account-vending changes (requires operator approval)
+## Usage: make tf-apply ENV=prod
+tf-apply:
+	@test -n "$(ENV)" || (echo "ERROR: ENV required. Usage: make tf-apply ENV=prod" && exit 1)
+	@test "$(ENV)" != "prod" || (echo "WARNING: Applying to PRODUCTION. Ensure plan has been reviewed." && read -p "Type 'apply-prod' to confirm: " confirm && [ "$$confirm" = "apply-prod" ])
+	cd infra/terraform && terraform apply tfplan-$(ENV)
+
+# =============================================================================
 # AGENT DEVELOPER COMMANDS
 # =============================================================================
+
+## agent-evaluate: Run evaluation gate against golden test cases
+## Usage: make agent-evaluate AGENT=my-agent [ENV=staging]
+agent-evaluate:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agent-evaluate AGENT=my-agent" && exit 1)
+	@echo "==> Running evaluation gate for $(AGENT)"
+	uv run python scripts/evaluate_agent.py $(AGENT) --env $(ENV)
 
 ## agent-push: Package and deploy an agent
 ## Usage: make agent-push AGENT=my-agent [ENV=dev]
@@ -409,10 +513,10 @@ agent-push:
 	fi
 	@echo "==> Packaging agent code"
 	uv run python scripts/package_agent.py $(AGENT)
-	@echo "==> Deploying to AgentCore Runtime"
-	uv run python scripts/deploy_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Running agent tests"
 	$(MAKE) test-agent AGENT=$(AGENT)
+	@echo "==> Deploying to AgentCore Runtime"
+	uv run python scripts/deploy_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Registering agent"
 	uv run python scripts/register_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Agent $(AGENT) deployed successfully to $(ENV)"
@@ -630,7 +734,7 @@ plan-dev:
 	uv run python scripts/plan_dev.py "$(TASK)"
 
 # =============================================================================
-# TASK LIFECYCLE (worktree-based agent sessions)
+# DEPRECATED TASK SNAPSHOT FLOW (use only when explicitly requested)
 # =============================================================================
 
 ## task-next: Print the next not-started task from docs/TASKS.md
@@ -666,7 +770,13 @@ task-prompt:
 	uv run python scripts/task.py prompt $(TASK)
 
 # =============================================================================
-# ISSUE-DRIVEN WORKTREE FLOW (GitHub Issues SoT)
+# ISSUE-DRIVEN WORKTREE FLOW (canonical GitHub Issues path)
+# Start here:
+#   1) issue-queue
+#   2) worktree / worktree-next-issue / worktree-create-issue / worktree-resume-issue
+#   3) preflight-session + pre-validate-session
+#   4) worktree-push-issue
+#   5) finish-worktree-summary + finish-worktree-close
 # =============================================================================
 
 ## issue-queue: Show issue queue ordered by Seq (with dependency blocking)
@@ -701,6 +811,18 @@ worktree:
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",)
 
+## wt-go: Start the next runnable issue worktree in a visible zellij session
+## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task] [AGENT=gemini] [AGENT_MODE=yolo]
+wt-go:
+	$(MAKE) --no-print-directory worktree-next-issue \
+		OPEN_SHELL=1 \
+		HANDOFF=execute-now \
+		ZELLIJ=1 \
+		$(if $(QUEUE_MODE),QUEUE_MODE=$(QUEUE_MODE),) \
+		$(if $(STREAM),STREAM=$(STREAM),) \
+		AGENT=$(if $(AGENT),$(AGENT),gemini) \
+		AGENT_MODE=$(if $(AGENT_MODE),$(AGENT_MODE),yolo)
+
 ## worktree-next-issue: Create a worktree for the next runnable issue in the queue
 ## Usage: make worktree-next-issue [QUEUE_MODE=auto|ready|open-task] [DRY_RUN=1] [OPEN_SHELL=1]
 worktree-next-issue:
@@ -715,7 +837,22 @@ worktree-next-issue:
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(ZELLIJ),--zellij,) \
+		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,)
+
+## wt-batch: Create multiple runnable issue worktrees and start detached agent runs
+## Usage: make wt-batch [COUNT=3] [AGENTS=gemini] [AGENT_MODE=yolo] [INTERACTIVE=1]
+wt-batch:
+	uv run python scripts/worktree_issues.py wt-batch \
+		--count $(if $(COUNT),$(COUNT),3) \
+		--agents "$(if $(AGENTS),$(AGENTS),$(if $(INTERACTIVE),gemini,codex,gemini))" \
+		--agent-mode "$(if $(AGENT_MODE),$(AGENT_MODE),yolo)" \
+		$(if $(QUEUE_MODE),--mode "$(QUEUE_MODE)",--mode auto) \
+		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(BASE_DIR),--base-dir "$(BASE_DIR)",) \
+		$(if $(INTERACTIVE),--interactive,) \
+		$(if $(DRY_RUN),--dry-run,)
 
 ## worktree-create-issue: Create a worktree for a specific issue number
 ## Usage: make worktree-create-issue ISSUE=23 [DRY_RUN=1] [OPEN_SHELL=1]
@@ -733,6 +870,8 @@ worktree-create-issue:
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(ZELLIJ),--zellij,) \
+		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,) \
 		$(if $(SCOPE),--scope "$(SCOPE)",) \
 		$(if $(SLUG),--slug "$(SLUG)",) \
@@ -751,6 +890,8 @@ worktree-resume-issue:
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(ZELLIJ),--zellij,) \
+		$(if $(TMUX),--tmux,) \
 		$(if $(PRINT_ONLY),--print-only,)
 
 ## preflight-session: Run issue-worktree preflight checks for current worktree
@@ -782,6 +923,14 @@ finish-worktree-close:
 	uv run python scripts/worktree_issues.py finish-close \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(FORCE),--force,)
+
+## finish-worktree-close-json: Close the current worktree issue and print the closeout report JSON
+## Usage: make finish-worktree-close-json [WT_PATH=../worktrees/wt23] [FORCE=1]
+finish-worktree-close-json:
+	uv run python scripts/worktree_issues.py finish-close \
+		$(if $(WT_PATH),--path "$(WT_PATH)",) \
+		$(if $(FORCE),--force,) \
+		--json
 
 ## agent-handoff: Print/launch agent command with agent selection and yolo modes for current path
 ## Usage: make agent-handoff [AGENT=codex] [AGENT_MODE=yolo] [HANDOFF=print-only]

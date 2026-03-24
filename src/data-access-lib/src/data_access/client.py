@@ -155,11 +155,20 @@ class TenantScopedDynamoDB:
         response = table.get_item(Key=key)
         return response.get("Item")
 
-    def put_item(self, table_name: str, item: dict[str, Any]) -> None:
+    def put_item(
+        self,
+        table_name: str,
+        item: dict[str, Any],
+        *,
+        condition_expression: str | None = None,
+    ) -> None:
         """Write an item, enforcing tenant partition on PK."""
         self._validate_pk(item)
         table = self._dynamodb.Table(table_name)
-        table.put_item(Item=item)
+        kwargs: dict[str, Any] = {"Item": item}
+        if condition_expression:
+            kwargs["ConditionExpression"] = condition_expression
+        table.put_item(**kwargs)
 
     def update_item(
         self,
@@ -430,14 +439,25 @@ class TenantScopedS3:
         self._s3.delete_object(Bucket=bucket, Key=key)
 
     def list_objects(self, bucket: str, prefix: str = "") -> list[dict[str, Any]]:
-        """List objects under the tenant prefix.
+        """List all objects under the tenant prefix, handling S3 pagination.
 
         The optional prefix is appended to the tenant prefix, keeping
         the listing inside the tenant's directory.
+
+        list_objects_v2 returns at most 1000 keys per call.  This method
+        follows continuation tokens until all pages have been consumed so that
+        callers always receive the complete object list.
         """
         full_prefix = self._prefix + prefix
-        response = self._s3.list_objects_v2(Bucket=bucket, Prefix=full_prefix)
-        return response.get("Contents", [])
+        items: list[dict[str, Any]] = []
+        kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": full_prefix}
+        while True:
+            response = self._s3.list_objects_v2(**kwargs)
+            items.extend(response.get("Contents", []))
+            if not response.get("IsTruncated"):
+                break
+            kwargs["ContinuationToken"] = response["NextContinuationToken"]
+        return items
 
     def generate_presigned_url(
         self,

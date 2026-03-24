@@ -104,8 +104,8 @@ def test_seed_tenants_correct_tiers() -> None:
     bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
     bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
     items = {item["tenant_id"]: item for item in _scan_table(ddb_resource, "platform-tenants")}
-    assert items["t-basic-001"]["tier"] == "basic"
-    assert items["t-premium-001"]["tier"] == "premium"
+    assert items["t-test-001"]["tier"] == "basic"
+    assert items["t-test-002"]["tier"] == "premium"
 
 
 @mock_aws

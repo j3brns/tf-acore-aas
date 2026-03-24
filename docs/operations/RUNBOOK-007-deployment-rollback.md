@@ -1,5 +1,19 @@
 # RUNBOOK-007: Deployment Rollback
 
+## Normal Agent Promotion
+Agent promotion is a control-plane metadata change against an already registered
+version. Do not rebuild or repackage the agent as part of promotion.
+
+1. Register the candidate version. New versions enter the registry in `built` state.
+2. Advance the exact version through `deployed_staging`, `integration_verified`,
+   `evaluation_passed`, and `approved`.
+3. Promote the version to `promoted`.
+4. Record release notes or ticket evidence with the promotion action.
+
+Operational rule:
+- Promotion changes agent status metadata only. The active default version is the
+  highest `promoted` semver in the agent registry.
+
 ## Auto-Rollback (handled by pipeline)
 The canary deployment monitors error_rate_high alarm. If it fires within 30 minutes
 of a deployment, the Lambda alias automatically rolls back to the previous version.
@@ -33,9 +47,14 @@ npx cdk deploy --all --context env=prod --rollback
 ## Agent Rollback
 ```bash
 make agent-rollback AGENT={agentName} ENV=prod
-# Redeploys the previous agent version from the platform-agents DynamoDB registry
-# Does not require a pipeline run
+# Marks the current promoted version as rolled_back and re-points runtime metadata
+# to the next-highest promoted version in the agent registry
+# Does not require a rebuild or pipeline run
 ```
+
+Operational rule:
+- Never delete a bad agent version from the registry. Rollback is a forward metadata
+  transition that preserves audit history.
 
 ## Post-Rollback
 1. Verify error rate is recovering: make ops-error-rate ENV=prod MINUTES=5

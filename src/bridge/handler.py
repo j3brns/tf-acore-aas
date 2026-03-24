@@ -33,6 +33,7 @@ from botocore.exceptions import (
 from data_access import TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AgentRecord,
+    AgentStatus,
     InvocationMode,
     InvocationRecord,
     InvocationStatus,
@@ -40,6 +41,8 @@ from data_access.models import (
     JobStatus,
     TenantContext,
     TenantTier,
+    is_invokable_agent_status,
+    normalize_agent_status,
 )
 
 logger = Logger(service="bridge")
@@ -89,6 +92,7 @@ VALID_WEBHOOK_EVENTS = {"job.completed", "job.failed"}
 _ssm_client = None
 _sts_client = None
 _dynamodb_resource = None
+_cloudwatch_client = None
 
 # Cache for SSM parameters (60s TTL as per ARCHITECTURE.md)
 _config_cache: dict[str, Any] = {}
@@ -118,6 +122,13 @@ def get_dynamodb():
     if _dynamodb_resource is None:
         _dynamodb_resource = boto3.resource("dynamodb", region_name=_aws_region())
     return _dynamodb_resource
+
+
+def get_cloudwatch():
+    global _cloudwatch_client
+    if _cloudwatch_client is None:
+        _cloudwatch_client = boto3.client("cloudwatch", region_name=_aws_region())
+    return _cloudwatch_client
 
 
 def get_runtime_client(region: str, credentials: dict[str, Any] | None = None) -> Any:
@@ -301,19 +312,38 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
         table = ddb.Table(AGENTS_TABLE)
 
         if not version:
-            # Query for latest version
+            # Query for latest versions and find the highest semver that is tenant-invokable.
             response = table.query(
                 KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"),
-                ScanIndexForward=False,
-                Limit=1,
+                ScanIndexForward=False,  # Highest version SK first
             )
             items = response.get("Items", [])
             if not items:
                 return None
-            item = items[0]
+
+            invokable_items = [
+                i
+                for i in items
+                if is_invokable_agent_status(_coerce_optional_string(i.get("status")))
+            ]
+            item = max(invokable_items, key=_agent_record_sort_key, default=None)
         else:
             response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": f"VERSION#{version}"})
             item = response.get("Item")
+            item_status = _coerce_optional_string(item.get("status")) if item else None
+            if item and not is_invokable_agent_status(item_status):
+                logger.warning(
+                    "Requested agent version is not invokable",
+                    extra={
+                        "agent_name": agent_name,
+                        "version": version,
+                        "status": normalize_agent_status(
+                            item_status,
+                            default=AgentStatus.PROMOTED,
+                        ).value,
+                    },
+                )
+                return None
 
         if not item:
             return None
@@ -329,10 +359,28 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             deployed_at=str(item["deployed_at"]),
             invocation_mode=InvocationMode(str(item["invocation_mode"])),
             streaming_enabled=bool(item.get("streaming_enabled", False)),
+            status=normalize_agent_status(
+                _coerce_optional_string(item.get("status")),
+                default=AgentStatus.PROMOTED,
+            ),
+            approved_by=_coerce_optional_string(item.get("approved_by")),
+            approved_at=_coerce_optional_string(item.get("approved_at")),
+            release_notes=_coerce_optional_string(item.get("release_notes")),
             runtime_arn=str(item["runtime_arn"]) if item.get("runtime_arn") else None,
             estimated_duration_seconds=int(item["estimated_duration_seconds"])  # type: ignore
             if item.get("estimated_duration_seconds")
             else None,
+            commit_sha=_coerce_optional_string(item.get("commit_sha")),
+            pipeline_url=_coerce_optional_string(item.get("pipeline_url")),
+            job_id=_coerce_optional_string(item.get("job_id")),
+            evaluation_score=(
+                float(item["evaluation_score"])  # type: ignore
+                if item.get("evaluation_score") is not None
+                else None
+            ),
+            evaluation_report_url=_coerce_optional_string(item.get("evaluation_report_url")),
+            rolled_back_by=_coerce_optional_string(item.get("rolled_back_by")),
+            rolled_back_at=_coerce_optional_string(item.get("rolled_back_at")),
         )
     except Exception:
         logger.exception("Failed to fetch agent record", extra={"agent_name": agent_name})
@@ -922,11 +970,23 @@ def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_newer_agent_record(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
-    candidate_deployed_at = str(candidate.get("deployed_at", ""))
-    current_deployed_at = str(current.get("deployed_at", ""))
-    if candidate_deployed_at != current_deployed_at:
-        return candidate_deployed_at > current_deployed_at
-    return str(candidate.get("version", "")) > str(current.get("version", ""))
+    return _agent_record_sort_key(candidate) > _agent_record_sort_key(current)
+
+
+def _semver_sort_key(version: str) -> tuple[int, ...]:
+    parts = version.split(".")
+    key: list[int] = []
+    for part in parts:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        key.append(int(digits) if digits else 0)
+    return tuple(key)
+
+
+def _agent_record_sort_key(item: dict[str, Any]) -> tuple[tuple[int, ...], str]:
+    return (
+        _semver_sort_key(str(item.get("version", ""))),
+        str(item.get("deployed_at", "")),
+    )
 
 
 def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
@@ -935,6 +995,10 @@ def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
 
     latest_by_name: dict[str, dict[str, Any]] = {}
     for item in items:
+        # Filter: only promoted agents are visible/invokable.
+        if not is_invokable_agent_status(_coerce_optional_string(item.get("status"))):
+            continue
+
         agent_name = _coerce_optional_string(item.get("agent_name"))
         if agent_name is None:
             continue
@@ -973,14 +1037,15 @@ def get_agent_detail(path_params: dict[str, Any], request_id: str) -> dict[str, 
     table = ddb.Table(AGENTS_TABLE)
     response = table.query(KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"))
     items = response.get("Items", [])
-    if not items:
+
+    # Filter: only promoted versions are visible to tenants.
+    promoted_items = [
+        i for i in items if is_invokable_agent_status(_coerce_optional_string(i.get("status")))
+    ]
+    if not promoted_items:
         return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
 
-    sorted_items = sorted(
-        items,
-        key=lambda item: (str(item.get("deployed_at", "")), str(item.get("version", ""))),
-        reverse=True,
-    )
+    sorted_items = sorted(promoted_items, key=_agent_record_sort_key, reverse=True)
     latest = sorted_items[0]
     detail = _agent_summary_from_item(latest)
     detail["versions"] = [
@@ -1373,6 +1438,11 @@ def invoke_real_runtime(
         _coerce_optional_string(runtime_response.get("runtimeSessionId")) or session_id
     )
 
+    # Extract usage if available
+    usage = runtime_response.get("usage", {})
+    input_tokens = int(usage.get("inputTokens", 0))
+    output_tokens = int(usage.get("outputTokens", 0))
+
     if agent.invocation_mode == InvocationMode.STREAMING:
         if not response_stream:
             _close_runtime_body(runtime_body)
@@ -1412,6 +1482,8 @@ def invoke_real_runtime(
             InvocationStatus.SUCCESS,
             latency_ms,
             InvocationMode.STREAMING,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             session_id=runtime_session_id,
             runtime_region=region,
         )
@@ -1483,6 +1555,8 @@ def invoke_real_runtime(
             InvocationStatus.SUCCESS,
             latency_ms,
             InvocationMode.ASYNC,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             job_id=job_id,
             session_id=runtime_session_id or session_id or "async-session",
             runtime_region=region,
@@ -1511,6 +1585,8 @@ def invoke_real_runtime(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.SYNC,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         session_id=runtime_session_id or "unknown-session",
         runtime_region=region,
     )
@@ -1527,7 +1603,11 @@ def invoke_real_runtime(
                 "output": output_text,
                 "sessionId": runtime_session_id,
                 "timestamp": datetime.now(UTC).isoformat(),
-                "usage": {"inputTokens": 0, "outputTokens": 0, "latencyMs": latency_ms},
+                "usage": {
+                    "inputTokens": input_tokens,
+                    "outputTokens": output_tokens,
+                    "latencyMs": latency_ms,
+                },
             }
         ),
     }
@@ -1643,6 +1723,8 @@ def handle_sync_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.SYNC,
+        input_tokens=0,
+        output_tokens=0,
         session_id=effective_session_id,
     )
 
@@ -1711,6 +1793,8 @@ def handle_streaming_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.STREAMING,
+        input_tokens=0,
+        output_tokens=0,
         session_id=effective_session_id,
     )
     return None
@@ -1776,6 +1860,8 @@ def handle_async_invocation(
         InvocationStatus.SUCCESS,
         latency_ms,
         InvocationMode.ASYNC,
+        input_tokens=0,
+        output_tokens=0,
         job_id=job_id,
         session_id=session_id or "async-session",
     )
@@ -1802,6 +1888,8 @@ def log_invocation(
     status: InvocationStatus,
     latency_ms: int,
     mode: InvocationMode,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
     job_id: str | None = None,
     session_id: str | None = None,
     error_code: str | None = None,
@@ -1823,8 +1911,8 @@ def log_invocation(
             agent_name=agent.agent_name,
             agent_version=agent.version,
             session_id=session_id or "unknown-session",
-            input_tokens=0,
-            output_tokens=0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             latency_ms=latency_ms,
             status=status,
             runtime_region=runtime_region or get_config()["runtime_region"],
@@ -1862,8 +1950,87 @@ def log_invocation(
             item["error_code"] = record.error_code
 
         db.put_item(INVOCATIONS_TABLE, item)
+
+        # Emit real-time metrics for observability (TASK-290)
+        emit_invocation_metrics(
+            tenant_context, agent, status, latency_ms, input_tokens, output_tokens
+        )
     except Exception:
         logger.exception("Failed to log invocation")
+
+
+def emit_invocation_metrics(
+    tenant_context: TenantContext,
+    agent: AgentRecord,
+    status: InvocationStatus,
+    latency_ms: int,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Emit real-time invocation metrics to CloudWatch."""
+    try:
+        cw = get_cloudwatch()
+
+        # We emit two sets of metrics:
+        # 1. Detailed: {TenantId, AgentName}
+        # 2. Aggregate: {TenantId} (for the tenant dashboard)
+
+        dimensions_sets = [
+            [
+                {"Name": "TenantId", "Value": tenant_context.tenant_id},
+                {"Name": "AgentName", "Value": agent.agent_name},
+            ],
+            [
+                {"Name": "TenantId", "Value": tenant_context.tenant_id},
+            ],
+        ]
+
+        metric_data = []
+        for dims in dimensions_sets:
+            metric_data.extend(
+                [
+                    {
+                        "MetricName": "Invocations",
+                        "Value": 1.0,
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    },
+                    {
+                        "MetricName": "Latency",
+                        "Value": float(latency_ms),
+                        "Unit": "Milliseconds",
+                        "Dimensions": dims,
+                    },
+                    {
+                        "MetricName": "InputTokens",
+                        "Value": float(input_tokens),
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    },
+                    {
+                        "MetricName": "OutputTokens",
+                        "Value": float(output_tokens),
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    },
+                ]
+            )
+
+            if status != InvocationStatus.SUCCESS:
+                metric_data.append(
+                    {
+                        "MetricName": "Errors",
+                        "Value": 1.0,
+                        "Unit": "Count",
+                        "Dimensions": dims,
+                    }
+                )
+
+        # CloudWatch PutMetricData has a limit of 1000 metrics per call
+        # but here we have at most 10 metrics (5 names * 2 sets), so it's fine.
+        cw.put_metric_data(Namespace="Platform/Bridge", MetricData=metric_data)
+    except Exception as e:
+        logger.warning(f"Failed to emit invocation metrics: {e}")
 
 
 def log_job(tenant_context: TenantContext, record: JobRecord) -> None:

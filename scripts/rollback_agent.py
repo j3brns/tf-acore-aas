@@ -1,35 +1,28 @@
 """
-rollback_agent.py — Roll back an agent to its previous deployed version.
+rollback_agent.py — Roll back an agent version using the Platform API.
 
-Queries the platform-agents DynamoDB table for the previous version,
-re-deploys that version to AgentCore Runtime, and updates the registry.
+Uses the Platform API (tenant-api) to mark the current version as ROLLBACK.
+The Bridge Lambda automatically falls back to the previous RELEASED version.
 
 Usage:
     uv run python scripts/rollback_agent.py <agent_name> --env <env>
-
-Called by: make agent-rollback AGENT=<name> ENV=prod
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import boto3
-from boto3.dynamodb.conditions import Key
-from botocore.exceptions import ClientError
-
-# Reuse bucket resolution from build_layer
-from build_layer import resolve_layer_bucket
 
 logger = logging.getLogger("rollback_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_aws_region() -> str:
@@ -40,109 +33,129 @@ def require_aws_region() -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Roll back an agent")
+    parser = argparse.ArgumentParser(description="Roll back agent")
     parser.add_argument("agent_name", help="Name of the agent")
     parser.add_argument("--env", required=True, choices=["dev", "staging", "prod"])
+    parser.add_argument("--api-base-url", help="Override Platform API base URL")
+    parser.add_argument("--token", help="Override Platform API access token")
     return parser.parse_args()
 
 
-def get_agent_versions(table, agent_name: str) -> list[dict]:
-    """Query DynamoDB for all versions of the agent, latest first."""
+def _request_api(
+    url: str,
+    method: str,
+    token: str,
+    body: dict | None = None,
+) -> dict:
+    data = json.dumps(body).encode("utf-8") if body else None
+    request = Request(url, data=data, method=method)
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Accept", "application/json")
+
     try:
-        response = table.query(
-            KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"),
-            ScanIndexForward=False,  # Highest version SK first
-        )
-        items = response.get("Items", [])
-        return sorted(
-            items, key=lambda x: (x.get("deployed_at", ""), x.get("version", "")), reverse=True
-        )
-    except ClientError as e:
-        logger.error(f"Failed to query DynamoDB: {e}")
-        return []
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as e:
+        error_body = e.read().decode("utf-8")
+        try:
+            error_json = json.loads(error_body)
+            message = error_json.get("message", error_body)
+        except json.JSONDecodeError:
+            message = error_body
+        logger.error(f"API Error ({e.code}): {message}")
+        raise RuntimeError(f"API Error {e.code}: {message}") from e
+    except URLError as e:
+        logger.error(f"Failed to reach API: {e.reason}")
+        raise RuntimeError(f"Connection Error: {e.reason}") from e
 
 
-def rollback_agent(agent_name: str, env: str) -> bool:
+def rollback_agent(agent_name: str, env: str, api_base_url: str | None, token: str | None) -> bool:
     aws_region = require_aws_region()
-    dynamodb = boto3.resource("dynamodb", region_name=aws_region)
-    table = dynamodb.Table("platform-agents")
 
-    versions = get_agent_versions(table, agent_name)
-    if len(versions) < 2:
-        logger.error(f"Rollback failed: No previous version found for agent '{agent_name}'.")
+    # Resolve API Base URL and Token
+    api_url = api_base_url or os.environ.get("API_BASE_URL") or os.environ.get("VITE_API_BASE_URL")
+    if not api_url:
+        logger.error("API_BASE_URL environment variable is not set")
         return False
 
-    current_version = versions[0]
-    previous_version = versions[1]
-
-    logger.info(
-        f"Rolling back agent '{agent_name}' from v{current_version['version']} "
-        f"(deployed {current_version.get('deployed_at')}) to v{previous_version['version']} "
-        f"(deployed {previous_version.get('deployed_at')})"
+    api_token = (
+        token or os.environ.get("PLATFORM_ACCESS_TOKEN") or os.environ.get("OPS_ACCESS_TOKEN")
     )
+    if not api_token:
+        # Try to load from local credentials if in dev
+        creds_path = Path.home() / ".platform" / "credentials"
+        if creds_path.exists():
+            try:
+                creds = json.loads(creds_path.read_text())
+                profile = creds.get("profiles", {}).get(env, {})
+                api_token = profile.get("accessToken")
+                if not api_url:
+                    api_url = profile.get("apiBaseUrl")
+            except Exception:
+                pass
 
-    bucket = resolve_layer_bucket(env, aws_region)
-    deps_key = previous_version["layer_s3_key"]
-    script_key = previous_version["script_s3_key"]
-    version = previous_version["version"]
-    layer_hash = previous_version["layer_hash"]
+    if not api_token:
+        logger.error("PLATFORM_ACCESS_TOKEN environment variable is not set")
+        return False
 
-    ssm = boto3.client("ssm", region_name=aws_region)
-
-    # 1. Update AgentCore Runtime
+    # 1. Get current released version
+    agents_url = f"{api_url.rstrip('/')}/v1/platform/agents"
+    logger.info(f"Fetching agent versions for '{agent_name}'")
     try:
-        acore = boto3.client("bedrock-agentcore", region_name=aws_region)
-        logger.info(f"Updating AgentCore Runtime for '{agent_name}' to previous artifacts")
-        response = acore.update_agent_code(
-            agentName=agent_name,
-            code={
-                "s3Bucket": bucket,
-                "depsKey": deps_key,
-                "scriptKey": script_key,
-            },
-        )
-        runtime_arn = response.get("agentArn")
-        if runtime_arn:
+        resp = _request_api(agents_url, "GET", api_token)
+        items = resp.get("items", [])
+        agent_versions = [
+            i for i in items if i.get("agent_name") == agent_name and i.get("status") == "released"
+        ]
+        if not agent_versions:
+            logger.error(f"No RELEASED versions found for agent '{agent_name}'")
+            return False
+
+        # Sort by semver (naive)
+        agent_versions.sort(key=lambda x: [int(p) for p in x["version"].split(".")], reverse=True)
+        current_version = agent_versions[0]["version"]
+
+        if len(agent_versions) < 2:
+            logger.error(
+                f"Rollback failed: No previous RELEASED version found for agent '{agent_name}'. "
+                f"Current version is {current_version}."
+            )
+            return False
+    except Exception as e:
+        logger.error(f"Failed to fetch agent versions: {e}")
+        return False
+
+    rollback_url = (
+        f"{api_url.rstrip('/')}/v1/platform/agents/{agent_name}/versions/{current_version}"
+    )
+    body = {"status": "rollback"}
+
+    logger.info(f"Rolling back agent '{agent_name}' v{current_version} via API in {env}")
+    try:
+        _request_api(rollback_url, "PATCH", api_token, body)
+
+        # 2. Update latest-version in SSM (as a fallback/convenience for infra)
+        # We need to find the NEW latest released version
+        if len(agent_versions) > 1:
+            new_version = agent_versions[1]["version"]
+            ssm = boto3.client("ssm", region_name=aws_region)
             ssm.put_parameter(
-                Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
-                Value=runtime_arn,
+                Name=f"/platform/agents/{env}/{agent_name}/latest-version",
+                Value=new_version,
                 Type="String",
                 Overwrite=True,
             )
+            logger.info(f"Updated SSM latest-version to v{new_version}")
     except Exception as e:
-        logger.warning(f"Failed to call AgentCore Runtime API: {e}")
-        if os.environ.get("CI"):
-            logger.info("Continuing anyway because CI is set")
-
-    # 2. Update SSM Registry
-    logger.info("Updating SSM registry to previous version artifacts")
-    ssm_updates = {
-        f"/platform/agents/{env}/{agent_name}/latest-version": version,
-        f"/platform/agents/{env}/{agent_name}/script-s3-key": script_key,
-        f"/platform/layers/{env}/{agent_name}/hash": layer_hash,
-        f"/platform/layers/{env}/{agent_name}/s3-key": deps_key,
-    }
-
-    for name, val in ssm_updates.items():
-        try:
-            ssm.put_parameter(Name=name, Value=val, Type="String", Overwrite=True)
-        except ClientError as e:
-            logger.error(f"Failed to update SSM parameter {name}: {e}")
-            return False
-
-    # 3. Delete the rolled-back version from DynamoDB
-    logger.info(f"Deleting rolled-back version v{current_version['version']} from DynamoDB")
-    try:
-        table.delete_item(Key={"PK": current_version["PK"], "SK": current_version["SK"]})
-    except ClientError as e:
-        logger.error(f"Failed to delete bad version from DynamoDB: {e}")
+        logger.error(f"Rollback failed: {e}")
         return False
 
-    logger.info(f"Agent '{agent_name}' successfully rolled back to v{version}")
+    logger.info(f"Agent '{agent_name}' v{current_version} rolled back successfully via API")
     return True
 
 
 if __name__ == "__main__":
     args = parse_args()
-    if not rollback_agent(args.agent_name, args.env):
+    if not rollback_agent(args.agent_name, args.env, args.api_base_url, args.token):
         sys.exit(1)

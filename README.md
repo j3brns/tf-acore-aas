@@ -257,7 +257,9 @@ A single-layer failure is not sufficient to compromise tenant data boundaries.
 
 ```text
 tf-acore-aas/
-├── CLAUDE.md                  AI coding assistant rules
+├── AGENTS.md                 Pointer to CLAUDE.md
+├── CLAUDE.md                 AI coding assistant rules
+├── GEMINI.md                 Pointer to CLAUDE.md
 ├── Makefile                   Dev, test, ops, and deploy commands
 ├── .env.example               Required environment variables
 ├── .githooks/                 Repository-local Git hooks
@@ -315,6 +317,7 @@ All work is tracked through [GitHub Issues](https://github.com/j3brns/tf-acore-a
 make issue-queue              # Dependency-aware queue ordered by Seq
 make worktree-next-issue      # Create worktree for next runnable issue
 make worktree                 # Interactive worktree menu
+make wt-go                    # Create next runnable worktree and launch zellij session
 make preflight-session        # Branch and issue policy checks
 make pre-validate-session     # Fast pre-push validation without cdk synth
 make worktree-push-issue      # Push with preflight and validation enforced
@@ -377,7 +380,7 @@ Platform Lambda source directories use `snake_case`. The shared `src/data-access
 | CDK testing | Jest and cdk-assertions |
 | Python testing | pytest and LocalStack |
 | Secrets | AWS Secrets Manager |
-| Configuration | AWS SSM Parameter Store |
+| Configuration | AWS AppConfig for dynamic capability policy; AWS SSM Parameter Store for runtime/platform parameters |
 | Async agents | AgentCore `add_async_task` and `complete_async_task` SDK |
 | Observability | AgentCore Observability and Amazon CloudWatch |
 

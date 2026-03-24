@@ -1,6 +1,8 @@
 # CLAUDE.md — Rules for AI Coding Assistants
 # Read this at the start of every session. No exceptions.
 
+If this repository also contains a `GEMINI.md`, read it alongside this file.
+
 ## What This Platform Is
 
 A production multi-tenant Agent as a Service platform on Amazon Bedrock AgentCore.
@@ -47,13 +49,14 @@ alternative. Never silently work around them.
 Before writing any code:
 1. Read this file
 2. Read docs/ARCHITECTURE.md
-3. Identify the issue you are working on (GitHub Issues are the canonical task queue; `docs/TASKS.md` is a snapshot)
+3. Identify the issue you are working on. GitHub Issues are the canonical task queue; `docs/TASKS.md` is a snapshot.
 4. Read the ADR(s) linked to the current task/issue (use `docs/TASKS.md` as a reference snapshot when needed)
 5. In local WSL, confirm you are in an issue worktree on a policy branch (not `main` in the primary repo working tree)
 6. If not, start via `make worktree` / `make worktree-next-issue` unless the operator explicitly instructs in-place work
 7. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
    (use `make validate-local-full` when a full-repo secret scan is required)
 8. State which issue/task you are working on explicitly
+9. Do not use `make task-*` unless the operator explicitly asks for the legacy snapshot workflow.
 
 Before marking any task complete:
 1. All tests pass
@@ -213,7 +216,7 @@ Never leave a task in a merge-conflicted state.
 Every task runs in its own git branch and for local dev (WSL) a worktree. This is so main stays clean and multiple tasks
 can be in flight at the same time without conflicts. When operating in Claude Code mobile / remote prompt mode, worktrees are not required.
 
-This legacy flow (`make task-*`) is still available during transition, but GitHub Issues are now canonical.
+This deprecated flow (`make task-*`) is only for explicit legacy/snapshot work. GitHub Issues are canonical; use the issue worktree flow by default.
 
 ### Selecting a task
 
@@ -343,7 +346,7 @@ git worktree prune
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **wt266** (2202 symbols, 6793 relationships, 178 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **wt307** (2421 symbols, 6283 relationships, 196 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -359,7 +362,7 @@ This project is indexed by GitNexus as **wt266** (2202 symbols, 6793 relationshi
 
 1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
 2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/wt266/process/{processName}` — trace the full execution flow step by step
+3. `READ gitnexus://repo/wt307/process/{processName}` — trace the full execution flow step by step
 4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
 
 ## When Refactoring
@@ -398,10 +401,10 @@ This project is indexed by GitNexus as **wt266** (2202 symbols, 6793 relationshi
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/wt266/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/wt266/clusters` | All functional areas |
-| `gitnexus://repo/wt266/processes` | All execution flows |
-| `gitnexus://repo/wt266/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/wt307/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/wt307/clusters` | All functional areas |
+| `gitnexus://repo/wt307/processes` | All execution flows |
+| `gitnexus://repo/wt307/process/{name}` | Step-by-step execution trace |
 
 ## Self-Check Before Finishing
 
@@ -411,10 +414,33 @@ Before completing any code modification task, verify:
 3. `gitnexus_detect_changes()` confirms changes match expected scope
 4. All d=1 (WILL BREAK) dependents were updated
 
+## Keeping the Index Fresh
+
+After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
+
+```bash
+npx gitnexus analyze
+```
+
+If the index previously included embeddings, preserve them by adding `--embeddings`:
+
+```bash
+npx gitnexus analyze --embeddings
+```
+
+To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+
+> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+
 ## CLI
 
-- Re-index: `npx gitnexus analyze`
-- Check freshness: `npx gitnexus status`
-- Generate docs: `npx gitnexus wiki`
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->

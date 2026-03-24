@@ -1,8 +1,9 @@
 """
 hash_layer.py — Dependency hash checker for agent layer caching.
 
-Reads [project.dependencies] from the agent's pyproject.toml, computes a
-canonical SHA256 hash, and compares against the stored hash in SSM.
+Reads [project.dependencies] from the agent's pyproject.toml and the resolved
+lockfile (uv.lock), computes a canonical SHA256 hash, and compares against the
+stored hash in SSM.
 
 Exit codes:
     0  Hash matches — dependencies unchanged, use warm push path (~15s)
@@ -10,14 +11,16 @@ Exit codes:
 
 Hash algorithm:
     - Read [project.dependencies] list
-    - Canonicalise: sort, strip whitespace
-    - SHA256 of canonical form
+    - Read uv.lock content (if present)
+    - Canonicalise deps: sort, strip whitespace
+    - Combine canonical deps with lockfile content
+    - SHA256 of combined form
     - First 16 hex characters
 
 Usage:
     uv run python scripts/hash_layer.py <agent_name> --env <env>
 
-Implemented in TASK-033.
+Implemented in TASK-033, updated in issue #267.
 ADRs: ADR-006, ADR-008
 """
 
@@ -43,14 +46,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HASH_LENGTH = 16
 
 
-def compute_dependency_hash(deps: list[str]) -> str:
-    """Return a canonical SHA256 hash of a dependency list.
+def compute_dependency_hash(deps: list[str], lockfile_content: str | None = None) -> str:
+    """Return a canonical SHA256 hash of dependencies and lockfile state.
 
-    Canonical form: each entry stripped of whitespace, sorted, joined by
-    newline.  Returns the first HASH_LENGTH hex characters of SHA256.
+    Canonical form: each dep entry stripped of whitespace, sorted, joined by
+    newline.  When lockfile content is provided it is appended after a separator.
+    Returns the first HASH_LENGTH hex characters of SHA256.
     Same deps in any order produce the same hash.
     """
     canonical = "\n".join(sorted(d.strip() for d in deps))
+    if lockfile_content is not None:
+        canonical = canonical + "\n---lockfile---\n" + lockfile_content
     return hashlib.sha256(canonical.encode()).hexdigest()[:HASH_LENGTH]
 
 
@@ -67,6 +73,17 @@ def read_agent_deps(agent_name: str) -> list[str]:
     if not isinstance(deps, list):
         raise ValueError(f"[project.dependencies] must be a list in {toml_path}")
     return [str(d) for d in deps]
+
+
+def read_agent_lockfile(agent_name: str) -> str | None:
+    """Read uv.lock from agents/{agent_name}/uv.lock if it exists.
+
+    Returns the file content as a string, or None if the lockfile is absent.
+    """
+    lock_path = REPO_ROOT / "agents" / agent_name / "uv.lock"
+    if not lock_path.exists():
+        return None
+    return lock_path.read_text(encoding="utf-8")
 
 
 def get_ssm_hash(agent_name: str, env: str, aws_region: str) -> str | None:
@@ -124,12 +141,14 @@ def run(agent_name: str, env: str) -> int:
     aws_region = require_aws_region()
 
     deps = read_agent_deps(agent_name)
-    computed = compute_dependency_hash(deps)
+    lockfile = read_agent_lockfile(agent_name)
+    computed = compute_dependency_hash(deps, lockfile_content=lockfile)
     logger.info(
-        "Computed hash for %s: %s (%d deps)",
+        "Computed hash for %s: %s (%d deps, lockfile=%s)",
         agent_name,
         computed,
         len(deps),
+        "present" if lockfile is not None else "absent",
     )
 
     stored = get_ssm_hash(agent_name, env, aws_region)

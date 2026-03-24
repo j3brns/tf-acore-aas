@@ -25,6 +25,7 @@ export interface ObservabilityStackProps extends cdk.StackProps {
   readonly sessionsTable: dynamodb.ITable;
   readonly toolsTable: dynamodb.ITable;
   readonly opsLocksTable: dynamodb.ITable;
+  readonly billingFn: lambda.IFunction;
   readonly dlqs: Record<string, sqs.IQueue>;
 }
 
@@ -188,6 +189,8 @@ export class ObservabilityStack extends cdk.Stack {
     );
 
     // --- 2. Cross-Region Observability Sink ---
+    // This stack owns the monitoring-account sink only.
+    // Regional member links belong in source-region stacks when that topology is added.
 
     new oam.CfnSink(this, 'ObservabilitySink', {
       name: 'PlatformObservabilitySink',
@@ -209,6 +212,12 @@ export class ObservabilityStack extends cdk.Stack {
           },
         ],
       },
+    });
+
+    new cdk.CfnOutput(this, 'CrossRegionObservabilityTopology', {
+      value: 'SINK_ONLY_NO_OAM_LINKS',
+      description:
+        'ObservabilityStack provisions the monitoring-account OAM sink only; regional member links are not yet provisioned.',
     });
 
     // --- 3. Failure Mode (FM) Alarms ---
@@ -282,6 +291,47 @@ export class ObservabilityStack extends cdk.Stack {
       });
     }
 
+    // FM-3: Secrets Manager throttling (Cache miss rate)
+    // Detected via custom metric emitted by Lambda handlers when /tmp cache misses
+    new cloudwatch.Alarm(this, 'Fm3SecretsManagerThrottlingAlarm', {
+      alarmName: `${alarmNamePrefix}-FM-3-SecretsManagerThrottling`,
+      alarmDescription: 'Secrets Manager cache miss rate is high (throttling risk)',
+      metric: new cloudwatch.Metric({
+        namespace: 'Platform',
+        metricName: 'SecretsManagerCacheMissCount',
+        period: cdk.Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 50,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // FM-6: Interceptor retry storm (high error rate on interceptor Lambdas)
+    new cloudwatch.Alarm(this, 'Fm6InterceptorRetryStormAlarm', {
+      alarmName: `${alarmNamePrefix}-FM-6-InterceptorRetryStorm`,
+      alarmDescription: 'Gateway interceptor error rate indicates retry storm',
+      metric: new cloudwatch.MathExpression({
+        expression: 'reqErrors + resErrors',
+        usingMetrics: {
+          reqErrors: props.requestInterceptorFn.metricErrors({
+            period: cdk.Duration.minutes(1),
+            statistic: 'Sum',
+          }),
+          resErrors: props.responseInterceptorFn.metricErrors({
+            period: cdk.Duration.minutes(1),
+            statistic: 'Sum',
+          }),
+        },
+        period: cdk.Duration.minutes(1),
+      }),
+      threshold: 20,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
     // FM-7: AgentCore Memory unavailable (Degraded mode metric)
     // Note: AgentCore metrics are custom metrics from the SDK
     new cloudwatch.Alarm(this, 'Fm7AgentCoreMemoryDegradedAlarm', {
@@ -310,6 +360,20 @@ export class ObservabilityStack extends cdk.Stack {
       threshold: 100, // Threshold for total 429s across all tenants
       evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+    });
+
+    // FM-10: Billing Lambda failure (errors or timeout)
+    new cloudwatch.Alarm(this, 'Fm10BillingLambdaFailureAlarm', {
+      alarmName: `${alarmNamePrefix}-FM-10-BillingLambdaFailure`,
+      alarmDescription: 'Billing Lambda is failing (errors detected)',
+      metric: props.billingFn.metricErrors({
+        period: cdk.Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
     // API 5xx Errors Alarm

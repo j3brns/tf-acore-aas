@@ -15,12 +15,21 @@ import time
 
 import pytest
 from data_access.models import (
+    AGENT_STATUS_TRANSITIONS,
+    APPCONFIG_DYNAMIC_CAPABILITY_AREAS,
+    DYNAMODB_TENANT_METADATA_AREAS,
     INVOCATION_TTL_SECONDS,
+    INVOKABLE_AGENT_STATUSES,
     JITTER_LENGTH,
     JOB_TTL_SECONDS,
     OPS_LOCK_TTL_SECONDS,
+    REGISTERABLE_AGENT_STATUSES,
     SESSION_TTL_SECONDS,
+    SSM_PLATFORM_PARAMETER_AREAS,
     AgentRecord,
+    AgentStatus,
+    CapabilityRollout,
+    ConfigurationStore,
     InvocationMode,
     InvocationRecord,
     InvocationStatus,
@@ -29,10 +38,14 @@ from data_access.models import (
     OpsLockRecord,
     SessionRecord,
     SessionStatus,
+    TenantCapabilityPolicy,
     TenantRecord,
     TenantStatus,
     TenantTier,
     ToolRecord,
+    configuration_store_for,
+    is_invokable_agent_status,
+    normalize_agent_status,
 )
 
 # ---------------------------------------------------------------------------
@@ -134,6 +147,101 @@ class TestTenantRecord:
             assert tenant.status == status
 
 
+class TestConfigurationOwnership:
+    def test_appconfig_owns_dynamic_capability_policy(self):
+        assert configuration_store_for("kill_switches") == ConfigurationStore.APPCONFIG
+        assert configuration_store_for("tool_availability") == ConfigurationStore.APPCONFIG
+
+    def test_ssm_owns_platform_runtime_parameters(self):
+        assert configuration_store_for("runtime_region_parameters") == ConfigurationStore.SSM
+        assert configuration_store_for("appconfig_bootstrap") == ConfigurationStore.SSM
+
+    def test_dynamodb_retains_tenant_metadata_and_state(self):
+        assert configuration_store_for("tenant_resource_inventory") == ConfigurationStore.DYNAMODB
+        assert configuration_store_for("tenant_state") == ConfigurationStore.DYNAMODB
+
+    def test_resource_metadata_not_moved_into_appconfig(self):
+        assert "tenant_resource_inventory" in DYNAMODB_TENANT_METADATA_AREAS
+        assert "tenant_resource_inventory" not in APPCONFIG_DYNAMIC_CAPABILITY_AREAS
+        assert "tenant_resource_inventory" not in SSM_PLATFORM_PARAMETER_AREAS
+
+    def test_unknown_configuration_area_is_rejected(self):
+        with pytest.raises(ValueError):
+            configuration_store_for("surprise_bucket")
+
+
+class TestCapabilityRollout:
+    def test_rejects_invalid_rollout_percentage(self):
+        with pytest.raises(ValueError):
+            CapabilityRollout(enabled=True, rollout_percentage=101)
+
+    def test_disabled_rollout_always_denies(self):
+        rollout = CapabilityRollout(
+            enabled=False,
+            rollout_percentage=100,
+            tenant_allow_list=frozenset({"t-acme"}),
+        )
+        assert not rollout.is_enabled_for(tenant_id="t-acme", tenant_tier=TenantTier.PREMIUM)
+
+    def test_tenant_allow_list_overrides_percentage(self):
+        rollout = CapabilityRollout(
+            enabled=True,
+            rollout_percentage=0,
+            tenant_allow_list=frozenset({"t-acme"}),
+        )
+        assert rollout.is_enabled_for(tenant_id="t-acme", tenant_tier=TenantTier.BASIC)
+
+    def test_tier_allow_list_gates_capability(self):
+        rollout = CapabilityRollout(
+            enabled=True,
+            rollout_percentage=100,
+            tier_allow_list=frozenset({TenantTier.PREMIUM}),
+        )
+        assert rollout.is_enabled_for(tenant_id="t-premium", tenant_tier=TenantTier.PREMIUM)
+        assert not rollout.is_enabled_for(tenant_id="t-basic", tenant_tier=TenantTier.BASIC)
+
+    def test_percentage_targeting_is_deterministic(self):
+        rollout = CapabilityRollout(enabled=True, rollout_percentage=25)
+        first = rollout.is_enabled_for(tenant_id="t-acme", tenant_tier=TenantTier.STANDARD)
+        second = rollout.is_enabled_for(tenant_id="t-acme", tenant_tier=TenantTier.STANDARD)
+        assert first is second
+
+
+class TestTenantCapabilityPolicy:
+    def test_safe_fallback_denies_unknown_capability(self):
+        policy = TenantCapabilityPolicy.safe_fallback()
+        assert not policy.is_enabled(
+            "tools.browser",
+            tenant_id="t-acme",
+            tenant_tier=TenantTier.PREMIUM,
+        )
+
+    def test_kill_switch_overrides_rollout(self):
+        policy = TenantCapabilityPolicy(
+            capabilities={
+                "tools.browser": CapabilityRollout(enabled=True, rollout_percentage=100),
+            },
+            killed_capabilities=frozenset({"tools.browser"}),
+        )
+        assert not policy.is_enabled(
+            "tools.browser",
+            tenant_id="t-acme",
+            tenant_tier=TenantTier.PREMIUM,
+        )
+
+    def test_capability_lookup_is_case_insensitive(self):
+        policy = TenantCapabilityPolicy(
+            capabilities={
+                "models.sonnet": CapabilityRollout(enabled=True, rollout_percentage=100),
+            }
+        )
+        assert policy.is_enabled(
+            "MODELS.SONNET",
+            tenant_id="t-acme",
+            tenant_tier=TenantTier.STANDARD,
+        )
+
+
 # ---------------------------------------------------------------------------
 # AgentRecord
 # ---------------------------------------------------------------------------
@@ -185,6 +293,41 @@ class TestAgentRecord:
         agent = _make_agent()
         with pytest.raises((dataclasses.FrozenInstanceError, TypeError)):
             agent.version = "9.9.9"  # type: ignore[misc]
+
+    def test_default_status_is_built(self):
+        assert _make_agent().status is AgentStatus.BUILT
+
+    def test_all_agent_statuses_accepted(self):
+        for status in AgentStatus:
+            agent = _make_agent(status=status)
+            assert agent.status == status
+
+
+class TestAgentReleaseStatusHelpers:
+    def test_registerable_status_is_built_only(self):
+        assert REGISTERABLE_AGENT_STATUSES == frozenset({AgentStatus.BUILT})
+
+    def test_promoted_is_only_invokable_status(self):
+        assert INVOKABLE_AGENT_STATUSES == frozenset({AgentStatus.PROMOTED})
+        assert is_invokable_agent_status(AgentStatus.PROMOTED) is True
+        assert is_invokable_agent_status(AgentStatus.APPROVED) is False
+
+    def test_legacy_status_aliases_normalize_to_canonical_states(self):
+        assert normalize_agent_status("pending") is AgentStatus.BUILT
+        assert normalize_agent_status("released") is AgentStatus.PROMOTED
+        assert normalize_agent_status("rollback") is AgentStatus.ROLLED_BACK
+
+    def test_agent_status_transition_map_matches_release_flow(self):
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.BUILT] == frozenset(
+            {AgentStatus.DEPLOYED_STAGING, AgentStatus.FAILED}
+        )
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.APPROVED] == frozenset(
+            {AgentStatus.PROMOTED, AgentStatus.FAILED}
+        )
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.PROMOTED] == frozenset(
+            {AgentStatus.ROLLED_BACK}
+        )
+        assert AGENT_STATUS_TRANSITIONS[AgentStatus.ROLLED_BACK] == frozenset()
 
 
 # ---------------------------------------------------------------------------

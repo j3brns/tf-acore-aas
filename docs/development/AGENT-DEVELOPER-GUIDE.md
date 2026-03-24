@@ -23,9 +23,9 @@ make test-agent AGENT=my-agent               # Run unit + golden tests
 make dev                                    # Start local environment (LocalStack + mocks)
 make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=local  # Invoke via local bridge
 
-# 5. Deploy to AWS dev (real compute, real compute)
-make agent-push AGENT=my-agent ENV=dev      # Package, deploy to Runtime, and register
-make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=dev    # Invoke your agent on real AWS
+# 5. Validate locally, then push to AWS dev (real compute)
+make agent-push AGENT=my-agent ENV=dev      # Package, run agent tests, deploy to Runtime, and register
+make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
 ```
 
 ## Local vs. AWS Development
@@ -53,6 +53,12 @@ agents/my-agent/
 
 ## The Agent Manifest (pyproject.toml)
 
+The manifest contract is explicit:
+- `[project]` owns packaging identity and versioning.
+- `[tool.agentcore]` owns platform metadata used by validation, deployment, registration, and evaluation.
+- Unknown keys under platform-owned manifest tables are rejected by `make validate-agent-manifest`.
+- Agent push automation validates this contract before any AWS API call.
+
 ```toml
 [project]
 name = "my-agent"
@@ -66,7 +72,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
+https://github.com/j3brns/tf-acore-aas/pull/330/conflict?name=docs%252Fdevelopment%252FAGENT-DEVELOPER-GUIDE.md&ancestor_oid=dc566f919ca5fc5b5e3dea61ba6a13e53045a4a6&base_oid=61bf5a8f2a40927646c23893ec3cd6619a0f96ba&head_oid=c605d2c7cbc3a6696f08db638e21143baa050ecadev = [
     "bedrock-agentcore-starter-toolkit>=0.2.5",
     "pytest>=8.0.0",
 ]
@@ -74,7 +80,7 @@ dev = [
 [tool.agentcore]
 name = "my-agent"
 owner_team = "team-commerce"
-tier_minimum = "standard"      # basic | standard | premium | enterprise
+tier_minimum = "standard"      # basic | standard | premium
 handler = "handler:invoke"
 invocation_mode = "sync"       # sync | streaming | async
 estimated_duration_seconds = 30
@@ -86,6 +92,25 @@ max_tokens = 4096
 [tool.agentcore.deployment]
 type = "zip"                   # zip (default) | container
 ```
+
+### Canonical Schema Boundary
+
+| Table | Fields | Required |
+|-------|--------|----------|
+| `[project]` | `name`, `version` | yes |
+| `[tool.agentcore]` | `name`, `owner_team`, `tier_minimum`, `handler`, `invocation_mode` | yes |
+| `[tool.agentcore]` | `streaming_enabled`, `estimated_duration_seconds` | no |
+| `[tool.agentcore.llm]` | `model_id`, `max_tokens` | no |
+| `[tool.agentcore.deployment]` | `type` (`zip` or `container`) | no |
+| `[tool.agentcore.evaluations]` | `threshold`, `evaluation_region` | no |
+
+Validation rules:
+- `project.name`, `tool.agentcore.name`, and the agent directory name must match.
+- `handler` must use `module:function` form.
+- `tier_minimum` must be `basic`, `standard`, or `premium`.
+- `invocation_mode` must be `sync`, `streaming`, or `async`.
+- `estimated_duration_seconds` and `max_tokens` must be positive integers.
+- `threshold` must be between `0.0` and `1.0`.
 
 ## Invocation Modes
 
@@ -158,10 +183,10 @@ def invoke(payload: dict, context: RequestContext):
 ## Dependency Management
 
 Dependencies are cross-compiled for arm64 (AgentCore Runtime requirement).
-The platform hashes `[project.dependencies]` to detect changes:
+The platform hashes `[project.dependencies]` **and** `uv.lock` to detect changes:
 
-- **Warm push** (deps unchanged): <30 seconds — zip code only.
-- **Cold push** (deps changed): <2 minutes — `uv` cross-compiles arm64 deps.
+- **Warm push** (deps and lockfile unchanged): <30 seconds — zip code only.
+- **Cold push** (deps or lockfile changed): <2 minutes — `uv` cross-compiles arm64 deps.
 
 To add a dependency:
 ```bash
@@ -231,9 +256,11 @@ returns 403 before the tool Lambda is invoked. The agent sees a tool error, not 
 
 ## Pipeline Promotion
 
-Pushing to a feature branch triggers: validate → test → push-dev (auto).
-Merge to main triggers: promote-staging (manual gate, requires evaluation score).
-Staging → prod: two-reviewer approval in GitLab.
+Pushing any branch triggers validate and test.
+Merge requests also run the plan stage.
+Merge to `main` triggers `deploy-dev` automatically.
+`deploy-staging` is a manual gate on `main` and keeps the evaluation score check.
+`deploy-prod` is a manual gate on `main` and requires two-reviewer approval in GitLab.
 
 Production deploys fail closed unless the GitLab project protects the `prod`
 environment and requires at least two approvals. CI verifies that state by

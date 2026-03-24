@@ -57,7 +57,7 @@ Ordered steps with validation at each:
 5. **First CDK deploy** — deploys the 5 bootstrap-supported home-region stacks from the
    local machine (not pipeline)
 6. **Post-deploy seeding** — creates first admin, seeds SSM, registers echo-agent
-7. **Smoke test** — invokes echo-agent, checks alarms, confirms quota headroom
+7. **Smoke test** — validates deployed stacks and seeded records, then optionally invokes echo-agent
 8. **Delete bootstrap user** — removes temporary IAM user (MANDATORY)
 
 Each step writes to bootstrap-report.json (S3 bucket: platform-bootstrap-reports-{env}).

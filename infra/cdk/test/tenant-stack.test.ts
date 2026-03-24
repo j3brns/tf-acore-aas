@@ -36,6 +36,7 @@ describe('TenantStack (TASK-025)', () => {
     tenantId: 't-test123',
     tier: 'basic',
     accountId: '123456789012',
+    monthlyBudgetUsd: '100',
   };
 
   test('creates tenant execution role with scoped DynamoDB and S3 permissions', () => {
@@ -169,6 +170,40 @@ describe('TenantStack (TASK-025)', () => {
     expect(asArray(statement.Resource)).toEqual([
       'arn:aws:bedrock-agentcore:eu-west-1:123456789012:runtime/*',
     ]);
+  });
+
+  test('creates per-tenant CloudWatch dashboard and budget alarm', () => {
+    const template = synthTemplate({
+      ...defaultContext,
+      monthlyBudgetUsd: '500',
+    });
+
+    template.hasResourceProperties('AWS::CloudWatch::Dashboard', {
+      DashboardName: 'platform-tenant-t-test123',
+      DashboardBody: Match.anyValue(),
+    });
+
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'platform-tenant-t-test123-budget-exceeded',
+      AlarmDescription: 'Monthly budget exceeded for tenant t-test123 (Limit: $500)',
+      Threshold: 500,
+      ComparisonOperator: 'GreaterThanThreshold',
+      MetricName: 'MonthlyCost',
+      Namespace: 'Platform/Billing',
+      Dimensions: Match.arrayWith([
+        Match.objectLike({ Name: 'TenantId', Value: 't-test123' }),
+        Match.objectLike({ Name: 'Tier', Value: 'basic' }),
+      ]),
+    });
+  });
+
+  test('uses default budget if context is missing', () => {
+    const template = synthTemplate(defaultContext);
+
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'platform-tenant-t-test123-budget-exceeded',
+      Threshold: 100, // Default in code
+    });
   });
 
   test('fails if context is missing', () => {

@@ -54,9 +54,9 @@ for a stronger end-to-end check once the local stack is running.
 
 ## Test Tenants (seeded by dev-bootstrap.py)
 
-After `make dev`, two test tenants are available. Their JWTs are in `.env.test`:
+After `make dev`, two test tenants are available. Their tenant IDs and JWTs are in `.env.test`:
 
-| Variable              | Tenant     | Tier     |
+| Variable              | Value      | Purpose  |
 |-----------------------|------------|----------|
 | BASIC_TENANT_JWT      | t-basic-001 | basic    |
 | PREMIUM_TENANT_JWT    | t-premium-001 | premium  |
