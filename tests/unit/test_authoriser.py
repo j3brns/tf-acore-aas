@@ -627,6 +627,123 @@ def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_get_
     assert binding == {"tenant_id": "t-test-001", "app_id": "app-001", "tier": "basic"}
 
 
+# ---------------------------------------------------------------------------
+# CR005 cache tests (findings 4, 5, 6 from senior review)
+# ---------------------------------------------------------------------------
+
+_BASE_ROLE_ARN = "arn:aws:iam::123456789012:role/platform-tenant-t-001-role"
+_ASSUMED_ROLE_ARN = "arn:aws:sts::123456789012:assumed-role/platform-tenant-t-001-role/session-1"
+_SCAN_ITEM = {
+    "tenantId": "t-001",
+    "appId": "app-001",
+    "tier": "basic",
+    "executionRoleArn": _BASE_ROLE_ARN,
+}
+_EXPECTED_BINDING = {"tenant_id": "t-001", "app_id": "app-001", "tier": "basic"}
+
+
+@patch("src.authoriser.handler.get_dynamodb")
+def test_cache_hit_prevents_second_scan(mock_get_dynamodb, mock_env):
+    """Finding 4: second call with same ARN must not invoke table.scan."""
+    import src.authoriser.handler as mod
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.return_value = {"Items": [_SCAN_ITEM]}
+
+    with patch.dict(mod._sigv4_binding_cache, {}, clear=True):
+        result1 = mod.resolve_sigv4_tenant_binding(_ASSUMED_ROLE_ARN)
+        result2 = mod.resolve_sigv4_tenant_binding(_ASSUMED_ROLE_ARN)
+
+    assert result1 == _EXPECTED_BINDING
+    assert result2 == _EXPECTED_BINDING
+    assert mock_table.scan.call_count == 1
+
+
+@patch("src.authoriser.handler.get_dynamodb")
+def test_session_name_churn_hits_cache_via_base_role_arn(mock_get_dynamodb, mock_env):
+    """Finding 2: different session name for same role must hit cache, not scan again."""
+    import src.authoriser.handler as mod
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.return_value = {"Items": [_SCAN_ITEM]}
+
+    assumed_arn_s2 = "arn:aws:sts::123456789012:assumed-role/platform-tenant-t-001-role/session-2"
+
+    with patch.dict(mod._sigv4_binding_cache, {}, clear=True):
+        result1 = mod.resolve_sigv4_tenant_binding(_ASSUMED_ROLE_ARN)  # populates cache
+        result2 = mod.resolve_sigv4_tenant_binding(assumed_arn_s2)  # different session
+
+    assert result1 == _EXPECTED_BINDING
+    assert result2 == _EXPECTED_BINDING
+    assert mock_table.scan.call_count == 1
+
+
+@patch("src.authoriser.handler.time")
+@patch("src.authoriser.handler.get_dynamodb")
+def test_cache_expiry_triggers_fresh_scan(mock_get_dynamodb, mock_time, mock_env):
+    """Finding 5: after TTL expires, a fresh scan must be issued."""
+    import src.authoriser.handler as mod
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.return_value = {"Items": [_SCAN_ITEM]}
+
+    mock_time.time.return_value = 1000.0
+
+    with patch.dict(mod._sigv4_binding_cache, {}, clear=True):
+        mod.resolve_sigv4_tenant_binding(_ASSUMED_ROLE_ARN)  # first call at t=1000
+
+        # Advance time past TTL
+        mock_time.time.return_value = 1000.0 + mod._SIGV4_BINDING_CACHE_TTL_SECONDS + 1
+
+        mod.resolve_sigv4_tenant_binding(_ASSUMED_ROLE_ARN)  # second call — expired
+
+    assert mock_table.scan.call_count == 2
+
+
+@patch("src.authoriser.handler.get_dynamodb")
+def test_negative_result_is_cached_prevents_second_scan(mock_get_dynamodb, mock_env):
+    """Finding 1+6: unknown ARN must be cached as negative; second call must not scan again."""
+    import src.authoriser.handler as mod
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.return_value = {"Items": []}  # no match
+
+    unknown_arn = "arn:aws:sts::999999999999:assumed-role/unknown-role/session"
+
+    with patch.dict(mod._sigv4_binding_cache, {}, clear=True):
+        result1 = mod.resolve_sigv4_tenant_binding(unknown_arn)
+        result2 = mod.resolve_sigv4_tenant_binding(unknown_arn)
+
+    assert result1 is None
+    assert result2 is None
+    assert mock_table.scan.call_count == 1
+
+
+@patch("src.authoriser.handler.get_dynamodb")
+def test_cache_bounded_evicts_oldest_when_full(mock_get_dynamodb, mock_env):
+    """Finding 3: cache must not grow past SIGV4_BINDING_CACHE_MAXSIZE."""
+    import src.authoriser.handler as mod
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.return_value = {"Items": []}
+
+    maxsize = 4
+    with (
+        patch.object(mod, "_SIGV4_BINDING_CACHE_MAXSIZE", maxsize),
+        patch.dict(mod._sigv4_binding_cache, {}, clear=True),
+    ):
+        for i in range(maxsize + 2):
+            arn = f"arn:aws:sts::123456789012:assumed-role/role-{i}/s"
+            mod.resolve_sigv4_tenant_binding(arn)
+
+        assert len(mod._sigv4_binding_cache) <= maxsize
+
+
 @patch("src.authoriser.handler.get_jwk_client")
 def test_handler_unexpected_error(mock_get_jwk_client, mock_env, lambda_context):
     mock_get_jwk_client.side_effect = Exception("Crash")

@@ -37,8 +37,16 @@ _dynamodb_resource = None
 # CR005: In-memory TTL cache for SigV4 ARN→tenant binding.
 # Avoids a full DynamoDB table scan on every machine-auth request.
 # TTL matches the SSM config cache (60 s) documented in ARCHITECTURE.md.
+# Negative results (unknown/ambiguous ARN) are also cached to prevent repeated
+# full scans on probe traffic or misconfigured callers.
+# Maxsize caps memory usage on long-running Lambdas with high ARN churn.
 _SIGV4_BINDING_CACHE_TTL_SECONDS = int(os.environ.get("SIGV4_BINDING_CACHE_TTL_SECONDS", "60"))
-_sigv4_binding_cache: dict[str, tuple[dict[str, str], float]] = {}
+_SIGV4_BINDING_CACHE_NEGATIVE_TTL_SECONDS = int(
+    os.environ.get("SIGV4_BINDING_CACHE_NEGATIVE_TTL_SECONDS", "10")
+)
+_SIGV4_BINDING_CACHE_MAXSIZE = int(os.environ.get("SIGV4_BINDING_CACHE_MAXSIZE", "512"))
+# Values are (binding | None, expiry_timestamp).  None = cached negative result.
+_sigv4_binding_cache: dict[str, tuple[dict[str, str] | None, float]] = {}
 
 SIGV4_REQUIRED_SIGNED_HEADERS = frozenset({"host", "x-amz-date", "x-tenant-id"})
 SIGV4_MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("SIGV4_MAX_CLOCK_SKEW_SECONDS", "300"))
@@ -122,11 +130,27 @@ def _sigv4_caller_role_arns(caller_arn: str) -> set[str]:
     return candidates
 
 
+def _cache_put(key: str, value: dict[str, str] | None, ttl: float) -> None:
+    """Insert a value into the binding cache, evicting oldest entry if at capacity."""
+    at_capacity = len(_sigv4_binding_cache) >= _SIGV4_BINDING_CACHE_MAXSIZE
+    if at_capacity and key not in _sigv4_binding_cache:
+        # Evict the entry with the earliest expiry.
+        oldest = min(_sigv4_binding_cache, key=lambda k: _sigv4_binding_cache[k][1])
+        del _sigv4_binding_cache[oldest]
+    _sigv4_binding_cache[key] = (value, time.time() + ttl)
+
+
 def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
     """Resolve a SigV4 caller to a trusted tenant using tenant metadata.
 
-    CR005: Results are cached in-process for SIGV4_BINDING_CACHE_TTL_SECONDS (default 60 s)
-    to avoid a full DynamoDB table scan on every machine-auth request.
+    CR005: Results (including negative results) are cached in-process to avoid a
+    full DynamoDB table scan on every machine-auth request:
+    - Positive matches cached for SIGV4_BINDING_CACHE_TTL_SECONDS (default 60 s).
+    - Negative results cached for SIGV4_BINDING_CACHE_NEGATIVE_TTL_SECONDS (default 10 s)
+      to prevent repeated full scans from unrecognised or probing callers.
+    - All candidate ARNs for a caller (assumed-role + base IAM role) share the same
+      cache entry so session-name churn does not defeat the cache.
+    - Cache is bounded to SIGV4_BINDING_CACHE_MAXSIZE entries (default 512).
 
     A GSI on executionRoleArn is the long-term fix (see ISSUE-CR005).  Until that
     GSI is in place this cache provides the primary latency/cost mitigation.
@@ -135,17 +159,21 @@ def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
         logger.warning("TENANTS_TABLE not set; SigV4 tenant binding unavailable")
         return None
 
-    # Check in-memory cache first.
-    now = time.time()
-    cached = _sigv4_binding_cache.get(caller_arn)
-    if cached is not None:
-        binding, expiry = cached
-        if now < expiry:
-            return binding
-        # Expired — evict and re-resolve below.
-        del _sigv4_binding_cache[caller_arn]
-
+    # Compute candidates first so cache lookup covers both assumed-role and base IAM
+    # role ARNs — this prevents session-name churn from defeating the cache.
     candidate_role_arns = _sigv4_caller_role_arns(caller_arn)
+
+    # Check in-memory cache.  Both positive and negative results are cached.
+    now = time.time()
+    for cache_key in (caller_arn, *candidate_role_arns):
+        cached = _sigv4_binding_cache.get(cache_key)
+        if cached is not None:
+            binding, expiry = cached
+            if now < expiry:
+                return binding
+            # Expired — evict and re-resolve below.
+            del _sigv4_binding_cache[cache_key]
+            break
     table = get_dynamodb().Table(TENANTS_TABLE)
     matches: dict[str, dict[str, str]] = {}
     scan_kwargs: dict[str, Any] = {}
@@ -167,19 +195,24 @@ def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
                 break
             scan_kwargs["ExclusiveStartKey"] = last_evaluated_key
     except Exception:
-        logger.exception("Failed to resolve SigV4 tenant binding", extra={"caller_arn": caller_arn})
+        logger.exception("Failed to resolve SigV4 tenant binding", caller_arn=caller_arn)
         return None
 
     if len(matches) != 1:
         logger.warning(
             "SigV4 caller tenant binding not unique",
-            extra={"caller_arn": caller_arn, "match_count": len(matches)},
+            caller_arn=caller_arn,
+            match_count=len(matches),
         )
+        # Cache the negative result to prevent repeated full scans for this ARN.
+        for arn in candidate_role_arns:
+            _cache_put(arn, None, _SIGV4_BINDING_CACHE_NEGATIVE_TTL_SECONDS)
         return None
 
     result = next(iter(matches.values()))
-    # Store in cache for subsequent warm-Lambda invocations.
-    _sigv4_binding_cache[caller_arn] = (result, now + _SIGV4_BINDING_CACHE_TTL_SECONDS)
+    # Cache by all candidate ARNs so session-name churn does not cause cache misses.
+    for arn in candidate_role_arns:
+        _cache_put(arn, result, _SIGV4_BINDING_CACHE_TTL_SECONDS)
     return result
 
 
@@ -385,7 +418,7 @@ def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
         logger.warning("JWT has expired")
         return generate_policy("user", "Deny", method_arn, {})
     except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid JWT: {str(e)}")
+        logger.warning("Invalid JWT", error=str(e))
         return generate_policy("user", "Deny", method_arn, {})
     except Exception:
         logger.exception("Unexpected error during JWT validation")
