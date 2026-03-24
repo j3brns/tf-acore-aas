@@ -11,6 +11,25 @@ GitHub Issues: https://github.com/j3brns/tf-acore-aas/issues
 This file remains useful as a historical snapshot/report/export and may lag behind
 live issue state.
 
+## Active Blockers (as of 2026-03-24)
+
+These open GitHub Issues represent constraint violations or deployment blockers.
+Address before considering the platform production-ready.
+
+| Issue | Severity | Constraint | Summary |
+|-------|----------|-----------|---------|
+| #283 | **CRITICAL** | Absolute #12 | Raw DynamoDB calls in handlers bypass data-access-lib |
+| #224 | **CRITICAL** | Absolute #2  | Hardcoded Entra JWKS/audience values in PlatformStack |
+| #225 | **HIGH**     | Absolute #7  | Platform Lambdas not attached to VPC security group |
+| #216 | **HIGH**     | —            | Bridge Lambda missing runtime IAM and config wiring |
+| #214 | **HIGH**     | —            | BFF Lambda missing runtime config/secrets for token refresh |
+| #222 | **MEDIUM**   | —            | Operator API endpoints are stubs (runbooks treat as real) |
+| #218 | **MEDIUM**   | —            | /v1/health does not match documented unauthenticated contract |
+| #217 | **MEDIUM**   | —            | API Gateway exposure misaligned with implemented routes |
+| #213 | **MEDIUM**   | —            | Failover observability covers only primary runtime region |
+| #211 | **MEDIUM**   | —            | Failover lock naming inconsistent between admin and bridge |
+| #210 | **MEDIUM**   | —            | Platform failover route not deployable (missing IAM on tenant API) |
+
 ## How To Use This File
 
 Each task is a single Claude Code session. Before starting any task:
@@ -159,7 +178,7 @@ Nothing in Phase 2 starts until written confirmation.
               18 tests passing. validate-local passes.
               Note: createdAt preservation test added (senior engineer review finding)
 
-[ ] TASK-016  Write src/authoriser/handler.py
+[x] TASK-016  Write src/authoriser/handler.py
               Entra JWT path: JWKS fetch+cache, sig validate, expiry, audience, issuer
               Roles claim check for admin routes (Platform.Admin, Platform.Operator)
               SigV4 path: signature validate, x-tenant-id header
@@ -168,8 +187,10 @@ Nothing in Phase 2 starts until written confirmation.
               ADRs: ADR-002, ADR-004 | Tests: >80% coverage
               Test cases: valid JWT, expired, wrong audience, wrong issuer,
               cross-tenant header injection, suspended tenant, admin route non-admin JWT
+              Done: implemented; hardened via Issues #185, #187, #143, #188, #258
+              Note: Issue #176 open — functional refactor (non-blocking)
 
-[ ] TASK-017  Write src/tenant_api/handler.py
+[x] TASK-017  Write src/tenant_api/handler.py
               CREATE: validate, conditional write, provision Memory store,
               create API key in Secrets Manager, publish EventBridge event
               READ: authorise (own tenant or Platform.Admin), enrich with usage
@@ -177,6 +198,9 @@ Nothing in Phase 2 starts until written confirmation.
               DELETE: soft delete, 30-day retention, EventBridge event
               Uses data-access-lib exclusively — no raw DynamoDB calls
               ADRs: ADR-012 | Tests: CRUD + isolation + soft delete + event emission
+              Done: implemented; hardened via Issues #144, #145, #154, #177, #186, #190, #203
+              Note: Issue #177 open — functional refactor (non-blocking)
+              Note: Issue #283 open — raw DynamoDB bypass in some handler paths (BLOCKER — see below)
 
 [x] TASK-018  Write src/bridge/handler.py
               Reads invocation_mode from agent registry
@@ -196,12 +220,13 @@ Nothing in Phase 2 starts until written confirmation.
               make ops-*, make logs-*, make spa-*
               ADRs: none | Tests: make validate-local must pass end-to-end
 
-[ ] TASK-020  Write agents/echo-agent/ reference pattern
+[x] TASK-020  Write agents/echo-agent/ reference pattern
               Demonstrates all three invocation modes (sync, streaming, async)
               async mode uses app.add_async_task / app.complete_async_task
               Full test suite, golden test cases (3 per mode)
               End-to-end through full local stack
               ADRs: ADR-005, ADR-008 | Tests: all golden cases pass
+              Done: implemented; aligned via Issue #278
 
 **Phase 2 Gate**: make dev + make test-unit both pass clean.
 Echo agent invocable end-to-end in local environment in all three modes.
@@ -210,33 +235,39 @@ Echo agent invocable end-to-end in local environment in all three modes.
 
 ## Phase 3 — CDK Infrastructure
 
-[ ] TASK-021  NetworkStack
+[x] TASK-021  NetworkStack
               VPC, private/public subnets, VPC endpoints (S3, DynamoDB, SSM,
               Secrets Manager, AgentCore), security groups, NACLs
               VPC peering or PrivateLink to eu-west-1 for Runtime invocation
               ADRs: ADR-009 | Tests: Jest construct tests
+              Done: implemented; hardened via Issues #259, #292
+              Note: Issue #225 open — Lambda VPC security group attachment (BLOCKER)
 
-[ ] TASK-022  IdentityStack
+[x] TASK-022  IdentityStack
               GitLab OIDC WIF provider + pipeline roles (one per stage, least-privilege)
               Entra JWKS Lambda layer (bakes JWKS URL into layer)
               KMS keys: one per data classification (tenant-data, platform-config, logs)
               KMS key policies: no wildcard principal
               ADRs: ADR-002 | Tests: Jest construct tests
+              Done: implemented
 
-[ ] TASK-023  PlatformStack
+[x] TASK-023  PlatformStack
               REST API (not HTTP API): usage plans, per-method throttle, WAF association
               WAF: AWS managed rules + UK IP rate limiting + custom rules
               CloudFront distribution: S3 OAC, CSP response headers policy
               Bridge Lambda, BFF Lambda, Authoriser Lambda (provisioned concurrency=10)
               AgentCore Gateway resource with REQUEST+RESPONSE interceptors wired
               ADRs: ADR-003, ADR-004, ADR-011 | Tests: Jest construct tests
+              Done: implemented; hardened via Issues #165, #258, #265
+              Note: Issue #224 open — hardcoded Entra JWKS/audience values (BLOCKER — Constraint #2)
 
-[ ] TASK-024  AgentCoreStack
+[x] TASK-024  AgentCoreStack
               Runtime configuration pointing to eu-west-1
               Memory template (provisioned per-tenant in TenantStack)
               Identity configuration for Entra JWKS
               Observability metric stream eu-west-1→eu-west-2
               ADRs: ADR-001, ADR-009 | Tests: Jest construct tests
+              Done: implemented; hardened via Issues #256, #288, #289
 
 [x] TASK-025  TenantStack
               Provisioned per-tenant by EventBridge trigger on platform.tenant.created
@@ -268,28 +299,32 @@ make bootstrap-dev succeeds. Operator completes RUNBOOK-001 in dev.
 
 ## Phase 4 — Bootstrap and Operations Tooling
 
-[ ] TASK-028  Write scripts/bootstrap.py
+[x] TASK-028  Write scripts/bootstrap.py
               Ordered steps: CDK bootstrap (all 3 regions), secrets seeding,
               GitLab OIDC wiring, first CDK deploy, post-deploy seeding,
               smoke test (invoke echo-agent), delete bootstrap IAM user
               Validates each step before proceeding to next
               Writes bootstrap-report.json to S3 (audit trail)
               ADRs: ADR-007 | Tests: run in dev, verify bootstrap-report.json
+              Done: implemented; hardened via Issues #260, #282, #285
 
-[ ] TASK-029  Write scripts/ops.py
+[x] TASK-029  Write scripts/ops.py
               Full operations CLI. All commands call Admin REST API — not direct AWS SDK.
               Commands: top-tenants, tenant-sessions, suspend-tenant, reinstate-tenant,
               quota-report, invocation-report, security-events, dlq-inspect, dlq-redrive,
               error-rate, failover-lock-acquire, failover-lock-release,
               set-runtime-region, notify-tenant
               ADRs: none | Tests: unit tests with mocked REST API responses
+              Done: implemented; aligned via Issue #198
+              Note: Issue #222 open — some operator endpoints still stubbed
 
-[ ] TASK-030  Write scripts/failover_lock.py
+[x] TASK-030  Write scripts/failover_lock.py
               DynamoDB conditional write for lock acquire (prevents race condition)
               TTL 5-minute auto-expire on lock record
               Release on success or error (finally block)
               Used by: infra-set-runtime-region Makefile target
               ADRs: ADR-009 | Tests: concurrent acquire, only one succeeds
+              Done: implemented; Issues #210, #211 open for deployment wiring
 
 [x] TASK-031  Implement Admin REST API routes
               POST /v1/platform/failover
@@ -321,30 +356,34 @@ No AWS console access permitted during runbook testing.
 
 ## Phase 5 — Agent Developer Experience
 
-[ ] TASK-033  Write scripts/hash_layer.py
+[x] TASK-033  Write scripts/hash_layer.py
               Read [project.dependencies] from agent pyproject.toml
               Canonical serialisation: sorted keys, no whitespace variance
               SHA256, return first 16 hex chars
               Compare to SSM /platform/layers/{agentName}/hash
               Exit 0 = match (fast path), Exit 1 = mismatch (rebuild)
               ADRs: ADR-006, ADR-008 | Tests: same deps = same hash, order invariant
+              Done: implemented; hardened via Issues #120, #267
 
-[ ] TASK-034  Write scripts/build_layer.py
+[x] TASK-034  Write scripts/build_layer.py
               uv pip install --python-platform aarch64-manylinux2014 --python-version 3.12
               --target=.build/deps --only-binary=:all:
               Zip .build/deps/ to .build/{agent}-deps-{hash}.zip
               Upload to S3, update SSM hash and s3-key
               ADRs: ADR-006 | Tests: verify arm64 binary format in zip
+              Done: implemented
 
-[ ] TASK-035  Write scripts/package_agent.py, deploy_agent.py, register_agent.py
+[~] TASK-035  Write scripts/package_agent.py, deploy_agent.py, register_agent.py
               package: zip agent code excluding pycache, .venv, tests
               deploy: invoke AgentCore Runtime create/update API
               For zip mode: code_zip with s3_bucket, deps_key, script_key
               For container mode: buildx --platform linux/arm64, push ECR
               register: write to DynamoDB platform-agents, SSM runtime ARN
               ADRs: ADR-005, ADR-008 | Tests: dry run mode verified
+              In progress: files exist; Issue #42 open for remaining gaps (register_agent
+              script key persistence, deploy_agent error handling)
 
-[ ] TASK-036  Write gateway/interceptors/request_interceptor.py
+[x] TASK-036  Write gateway/interceptors/request_interceptor.py
               Validate Bearer JWT against Entra JWKS
               Check tierMinimum for requested tool
               Return 403 immediately if tier insufficient (tool never invoked)
@@ -352,6 +391,7 @@ No AWS console access permitted during runbook testing.
               Inject x-tenant-id, x-app-id, x-tier, x-acting-sub headers
               Idempotency: Lambda Powertools keyed on Mcp-Session-Id + body.id
               ADRs: ADR-004 | Tests: tier enforcement, scoped token structure
+              Done: implemented; hardened via Issues #119, #143
 
 [x] TASK-037  Write gateway/interceptors/response_interceptor.py
               tools/list: filter to tierMinimum <= tenant tier
@@ -408,10 +448,12 @@ All three invocation modes work end-to-end in dev AWS environment.
               ADRs: none | Tests: component tests
               Done: 2026-03-03
 
-[ ] TASK-043  CloudFront CSP and CORS
+[x] TASK-043  CloudFront CSP and CORS
               Response headers policy: full CSP, X-Frame-Options, HSTS
               REST API CORS: AllowOrigins from CloudFront domain only (not wildcard)
               ADRs: ADR-003 | Tests: CORS preflight passes, CSP headers present
+              Done: implemented via Issues #261, #264, #265
+              Note: Issues #163, #164 open for custom domain and cache hardening
 
 **Phase 6 Gate**: Operator logs in via Entra, invokes echo-agent in all three modes,
 sees results. Admin view shows platform health metrics.
@@ -420,7 +462,7 @@ sees results. Admin view shows platform health metrics.
 
 ## Phase 7 — CI/CD Pipeline
 
-[ ] TASK-044  Write .gitlab-ci.yml platform pipeline
+[x] TASK-044  Write .gitlab-ci.yml platform pipeline
               Stages: validate → test → plan → deploy-dev → deploy-staging → deploy-prod
               validate: ruff, mypy, tsc, cdk synth, cfn-guard, detect-secrets
               test: Jest CDK tests + pytest unit + pytest integration
@@ -430,12 +472,14 @@ sees results. Admin view shows platform health metrics.
               deploy-prod: two-reviewer approval, canary, auto-rollback
               All stages use GitLab WIF OIDC — no long-lived keys
               ADRs: ADR-007 | Tests: pipeline lint, dry run
+              Done: implemented; hardened via Issues #142, #279, #280, #281
 
 [ ] TASK-045  Canary deploy and auto-rollback
               Lambda alias with weighted routing: 10% new, 90% previous
               CloudWatch alarm on error_rate_high triggers alias rollback
               Rollback completes within 5 minutes of alarm trigger
               ADRs: none | Tests: inject synthetic errors, verify rollback
+              Note: Issue #110 closed (environment-aware canary policy added to CI)
 
 **Phase 7 Gate**: MR to main triggers full pipeline end-to-end. Auto-rollback tested.
 
@@ -448,12 +492,13 @@ sees results. Admin view shows platform health metrics.
               app.complete_async_task in agent code, with Bridge + jobs polling/webhooks.
               ADRs: ADR-010 | Decision aligned: 2026-03-09
 
-[ ] TASK-047  Write src/webhook_delivery/handler.py
+[x] TASK-047  Write src/webhook_delivery/handler.py
               EventBridge rule on DynamoDB Stream for JOB table status=complete
               POST to registered webhookUrl with HMAC-SHA256 signature
               Retry: 3 attempts, exponential backoff (2s, 4s, 8s)
               On exhaustion: update JOB record, alert ops
               ADRs: ADR-010 | Tests: signature verification, retry behaviour
+              Done: implemented via Issue #193
 
 [x] TASK-048  Job polling and webhook registration APIs
               GET  /v1/jobs/{jobId}: status, presigned result URL when complete
@@ -484,17 +529,21 @@ task. Result delivered via webhook and available via poll endpoint.
               Environments: dev/staging LOG_ONLY, prod ENFORCE.
               Done: 2026-03-10, issue #58
 
-[ ] TASK-052  Billing metering pipeline
+[~] TASK-052  Billing metering pipeline
               Daily Lambda aggregates token counts per tenant
               Applies pricing model from SSM per tier
               Writes BILLING_SUMMARY to DynamoDB
               Suspends tenant on budget exceeded
               Phase: after Phase 7
+              In progress: src/billing/ exists; Issues #215, #226, #228 closed (schema
+              alignment, fallback pricing, pagination); Issue #215 open for remaining schema gaps
 
-[ ] TASK-053  Tenant self-service portal
+[~] TASK-053  Tenant self-service portal
               Currently: operator-provisioned via Admin API
               Future: tenant admin can invite users, rotate API keys, view usage
               Phase: backlog
+              In progress: SPA pages implemented for tenant members, invites, webhooks;
+              Issues #170, #171, #172 closed; Issue #199 open (webhook page contract drift)
 
 [ ] TASK-054  Re-evaluate runtime placement in eu-west-2
               AWS now supports AgentCore Runtime in eu-west-2, but the approved
