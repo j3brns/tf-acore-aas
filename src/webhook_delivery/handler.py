@@ -17,15 +17,17 @@ from typing import Any
 
 import boto3
 import requests
-from aws_lambda_powertools import Logger
+from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.types import TypeDeserializer
 from data_access import TenantContext, TenantScopedDynamoDB
 from data_access.models import TenantTier
 
 logger = Logger(service="webhook-delivery")
+tracer = Tracer()
 
 JOBS_TABLE = os.environ.get("JOBS_TABLE", "platform-jobs")
+TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "platform-tenants")
 WEBHOOK_RETRY_QUEUE_URL = os.environ.get("WEBHOOK_RETRY_QUEUE_URL")
 WEBHOOK_DLQ_URL = os.environ.get("WEBHOOK_DLQ_URL")
 WEBHOOK_MAX_RETRY_ATTEMPTS = int(os.environ.get("WEBHOOK_MAX_RETRY_ATTEMPTS", "3"))
@@ -53,6 +55,7 @@ def get_sqs():
     return _sqs_client
 
 
+@tracer.capture_lambda_handler
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     records = event.get("Records", [])
     if not records:
@@ -331,7 +334,10 @@ def _get_webhook_registration(
     tenant_context: TenantContext, webhook_id: str
 ) -> dict[str, Any] | None:
     db = TenantScopedDynamoDB(tenant_context)
-    record = db.get_item(JOBS_TABLE, {"PK": f"WEBHOOK#{webhook_id}", "SK": "METADATA"})
+    record = db.get_item(
+        TENANTS_TABLE,
+        {"PK": f"TENANT#{tenant_context.tenant_id}", "SK": f"WEBHOOK#{webhook_id}"},
+    )
     if record is None:
         return None
     if str(record.get("tenant_id", "")) != tenant_context.tenant_id:

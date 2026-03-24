@@ -43,16 +43,24 @@ def setup_delivery_env(aws_credentials):
         ddb = boto3.resource("dynamodb", region_name="eu-west-2")
         sqs = boto3.client("sqs", region_name="eu-west-2")
 
+        _key_schema = [
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ]
+        _attr_defs = [
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+        ]
         ddb.create_table(
             TableName="platform-jobs",
-            KeySchema=[
-                {"AttributeName": "PK", "KeyType": "HASH"},
-                {"AttributeName": "SK", "KeyType": "RANGE"},
-            ],
-            AttributeDefinitions=[
-                {"AttributeName": "PK", "AttributeType": "S"},
-                {"AttributeName": "SK", "AttributeType": "S"},
-            ],
+            KeySchema=_key_schema,
+            AttributeDefinitions=_attr_defs,
+            BillingMode="PAY_PER_REQUEST",
+        )
+        ddb.create_table(
+            TableName="platform-tenants",
+            KeySchema=_key_schema,
+            AttributeDefinitions=_attr_defs,
             BillingMode="PAY_PER_REQUEST",
         )
 
@@ -61,6 +69,7 @@ def setup_delivery_env(aws_credentials):
 
         webhook_handler._sqs_client = None
         webhook_handler.JOBS_TABLE = "platform-jobs"
+        webhook_handler.TENANTS_TABLE = "platform-tenants"
         webhook_handler.WEBHOOK_RETRY_QUEUE_URL = retry_queue_url
         webhook_handler.WEBHOOK_DLQ_URL = dlq_queue_url
         webhook_handler.WEBHOOK_MAX_RETRY_ATTEMPTS = 3
@@ -80,14 +89,18 @@ def _serialize_item(item: dict[str, object]) -> dict[str, dict[str, object]]:
 
 
 def _seed_registration(
-    table, *, webhook_id: str = "webhook-001", events: list[str] | None = None
+    tenants_table,
+    *,
+    tenant_id: str = "t-001",
+    webhook_id: str = "webhook-001",
+    events: list[str] | None = None,
 ) -> None:
-    table.put_item(
+    tenants_table.put_item(
         Item={
-            "PK": f"WEBHOOK#{webhook_id}",
-            "SK": "METADATA",
+            "PK": f"TENANT#{tenant_id}",
+            "SK": f"WEBHOOK#{webhook_id}",
             "webhook_id": webhook_id,
-            "tenant_id": "t-001",
+            "tenant_id": tenant_id,
             "app_id": "app-001",
             "callback_url": "https://example.com/webhooks/platform",
             "events": events or ["job.completed"],
@@ -122,7 +135,8 @@ def _seed_job(table, **overrides: object) -> dict[str, object]:
 
 def test_delivers_signed_webhook_and_marks_job_delivered(setup_delivery_env):
     jobs_table = setup_delivery_env["ddb"].Table("platform-jobs")
-    _seed_registration(jobs_table)
+    tenants_table = setup_delivery_env["ddb"].Table("platform-tenants")
+    _seed_registration(tenants_table)
     job_item = _seed_job(jobs_table)
 
     response = MagicMock()
@@ -157,7 +171,8 @@ def test_delivers_signed_webhook_and_marks_job_delivered(setup_delivery_env):
 
 def test_queues_retry_after_delivery_failure(setup_delivery_env):
     jobs_table = setup_delivery_env["ddb"].Table("platform-jobs")
-    _seed_registration(jobs_table)
+    tenants_table = setup_delivery_env["ddb"].Table("platform-tenants")
+    _seed_registration(tenants_table)
     job_item = _seed_job(jobs_table)
 
     with patch.object(
@@ -192,7 +207,8 @@ def test_queues_retry_after_delivery_failure(setup_delivery_env):
 
 def test_marks_job_failed_and_sends_dlq_after_retries_exhausted(setup_delivery_env):
     jobs_table = setup_delivery_env["ddb"].Table("platform-jobs")
-    _seed_registration(jobs_table)
+    tenants_table = setup_delivery_env["ddb"].Table("platform-tenants")
+    _seed_registration(tenants_table)
     _seed_job(jobs_table)
 
     with patch.object(

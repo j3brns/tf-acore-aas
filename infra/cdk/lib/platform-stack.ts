@@ -314,6 +314,7 @@ export class PlatformStack extends cdk.Stack {
       environment: {
         POWERTOOLS_SERVICE_NAME: 'webhook-delivery',
         JOBS_TABLE: this.jobsTable.tableName,
+        TENANTS_TABLE: this.tenantsTable.tableName,
         WEBHOOK_RETRY_QUEUE_URL: webhookDeliveryRetryQueue.queueUrl,
         WEBHOOK_DLQ_URL: webhookDeliveryRetryDlq.queueUrl,
         WEBHOOK_MAX_RETRY_ATTEMPTS: '3',
@@ -372,6 +373,7 @@ export class PlatformStack extends cdk.Stack {
     });
 
     this.tenantsTable.grantReadData(this.authoriserFn);
+    this.tenantsTable.grantReadData(this.webhookDeliveryFn);
     this.jobsTable.grantReadWriteData(this.webhookDeliveryFn);
     this.webhookDeliveryFn.addToRolePolicy(
       new iam.PolicyStatement({

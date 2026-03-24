@@ -19,7 +19,7 @@ from decimal import Decimal
 from typing import Any
 
 import boto3
-from aws_lambda_powertools import Logger
+from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
 from data_access.client import TenantScopedDynamoDB
@@ -30,17 +30,50 @@ from data_access.models import (
 )
 
 logger = Logger(service="billing")
+tracer = Tracer()
 
 # Table names from environment
 TENANTS_TABLE = os.environ["TENANTS_TABLE_NAME"]
 INVOCATIONS_TABLE = os.environ["INVOCATIONS_TABLE_NAME"]
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 
-# Boto3 clients
-_ssm = boto3.client("ssm", region_name=os.environ["AWS_REGION"])
-_events = boto3.client("events", region_name=os.environ["AWS_REGION"])
-_dynamodb = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION"])
-_cloudwatch = boto3.client("cloudwatch", region_name=os.environ["AWS_REGION"])
+# Boto3 clients — lazy initialisation (matches handler convention; avoids import-time failures)
+_ssm = None
+_events = None
+_dynamodb = None
+_cloudwatch = None
+
+
+def _aws_region() -> str:
+    return os.environ["AWS_REGION"]
+
+
+def _get_ssm() -> Any:
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm", region_name=_aws_region())
+    return _ssm
+
+
+def _get_events() -> Any:
+    global _events
+    if _events is None:
+        _events = boto3.client("events", region_name=_aws_region())
+    return _events
+
+
+def _get_dynamodb() -> Any:
+    global _dynamodb
+    if _dynamodb is None:
+        _dynamodb = boto3.resource("dynamodb", region_name=_aws_region())
+    return _dynamodb
+
+
+def _get_cloudwatch() -> Any:
+    global _cloudwatch
+    if _cloudwatch is None:
+        _cloudwatch = boto3.client("cloudwatch", region_name=_aws_region())
+    return _cloudwatch
 
 
 class PricingResolutionError(RuntimeError):
@@ -51,7 +84,7 @@ def _get_pricing(tier: str) -> dict[str, float]:
     """Fetch pricing for a tier from SSM."""
     path = f"/platform/billing/pricing/{tier}"
     try:
-        response = _ssm.get_parameter(Name=path)
+        response = _get_ssm().get_parameter(Name=path)
         value = response.get("Parameter", {}).get("Value")
     except Exception as exc:
         raise PricingResolutionError(f"Failed to fetch pricing parameter {path} from SSM") from exc
@@ -104,7 +137,7 @@ def _get_active_tenants() -> list[dict[str, Any]]:
         tier=TenantTier.PREMIUM,
         sub="billing-pipeline",
     )
-    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_dynamodb)
+    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_get_dynamodb())
     # CR001: FilterExpression requires Attr() conditions, not Key() conditions.
     # Key() is only valid in KeyConditionExpression.
     return db.scan_all(
@@ -139,7 +172,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
         tier=TenantTier(tier),
         sub="billing-pipeline",
     )
-    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_dynamodb)
+    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_get_dynamodb())
 
     # 1. Query invocations for the day
     # SK starts with INV#timestamp
@@ -195,7 +228,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
             {"Name": "TenantId", "Value": tenant_id},
             {"Name": "Tier", "Value": tier},
         ]
-        _cloudwatch.put_metric_data(
+        _get_cloudwatch().put_metric_data(
             Namespace="Platform/Billing",
             MetricData=[
                 {
@@ -249,7 +282,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
             )
 
             # Publish event
-            _events.put_events(
+            _get_events().put_events(
                 Entries=[
                     {
                         "Source": "platform.billing",
@@ -272,6 +305,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
             logger.info("Tenant already suspended", cost=total_cost, budget=budget)
 
 
+@tracer.capture_lambda_handler
 def lambda_handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     """Lambda entry point."""
     logger.info("Billing pipeline started")
