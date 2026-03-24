@@ -294,16 +294,14 @@ def test_write_env_test_with_tokens(tmp_path: Path) -> None:
     tokens = {"basic": "jwt-basic", "premium": "jwt-premium", "admin": "jwt-admin"}
     bootstrap.write_env_test(tokens, env_test_path)  # type: ignore[attr-defined]
     content = env_test_path.read_text()
-    assert (
-        "# Re-run `uv run python scripts/dev-bootstrap.py` (with dev services up) to refresh JWTs"
-        in content
-    )
-    assert "BASIC_TENANT_ID=t-test-001" in content
+    assert "BASIC_TENANT_ID=t-basic-001" in content
+    assert "PREMIUM_TENANT_ID=t-premium-001" in content
     assert "BASIC_TENANT_JWT=jwt-basic" in content
-    assert "PREMIUM_TENANT_ID=t-test-002" in content
     assert "PREMIUM_TENANT_JWT=jwt-premium" in content
-    assert "ADMIN_TENANT_ID=admin-001" in content
     assert "ADMIN_JWT=jwt-admin" in content
+    assert "TEST_JWT_BASIC=jwt-basic" in content
+    assert "TEST_JWT_PREMIUM=jwt-premium" in content
+    assert "TEST_JWT_ADMIN=jwt-admin" in content
     assert "AWS_REGION=eu-west-2" in content
     assert "LOCALSTACK_ENDPOINT=http://localhost:4566" in content
 
@@ -312,12 +310,10 @@ def test_write_env_test_without_tokens_writes_empty_values(tmp_path: Path) -> No
     env_test_path = tmp_path / ".env.test"
     bootstrap.write_env_test({}, env_test_path)  # type: ignore[attr-defined]
     content = env_test_path.read_text()
-    assert "BASIC_TENANT_ID=t-test-001" in content
     assert "BASIC_TENANT_JWT=" in content
-    assert "PREMIUM_TENANT_ID=t-test-002" in content
     assert "PREMIUM_TENANT_JWT=" in content
-    assert "ADMIN_TENANT_ID=admin-001" in content
-    assert "ADMIN_JWT=" in content
+    assert "TEST_JWT_BASIC=" in content
+    assert "TEST_JWT_PREMIUM=" in content
     assert "mock-jwks service was not running" in content
 
 
