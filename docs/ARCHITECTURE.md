@@ -288,6 +288,42 @@ version as the highest semver record for an agent where `status=promoted`.
 Rollback is a forward metadata transition on the bad version; the Bridge then
 falls back to the next-highest promoted version without rebuilding artifacts.
 
+### Release Lifecycle Audit Events
+
+Promotion and rollback are control-plane mutations owned by `tenant-api`. After
+the `platform-agents` record is updated successfully, `tenant-api` emits one
+EventBridge event on the platform event bus with detail type:
+
+- `platform.agent_version.promoted`
+- `platform.agent_version.rolled_back`
+
+Event detail schema:
+
+| Field | Meaning |
+|-------|---------|
+| `schemaVersion` | Payload schema version for downstream consumers |
+| `operation` | `promotion` or `rollback` |
+| `occurredAt` | ISO 8601 UTC timestamp for the persisted transition |
+| `actorTenantId` / `actorAppId` / `actorSub` | Control-plane actor identity; platform-operated routes should carry `tenantid=platform` |
+| `releaseId` | Stable immutable release identifier: `{agentName}:{version}` |
+| `agentRecordPk` / `agentRecordSk` | Stable DynamoDB identifiers for the release record |
+| `agentName` / `version` | Human-readable release identifiers |
+| `previousStatus` / `status` | Canonical lifecycle transition |
+| `approvedBy` / `approvedAt` | Approval evidence attached to the release, when present |
+| `releaseNotes` | Operator-supplied promotion or rollback evidence |
+| `evaluationScore` / `evaluationReportUrl` | Evaluation evidence recorded on promotion, when supplied |
+| `rolledBackBy` / `rolledBackAt` | Rollback actor and timestamp, when the transition is `rolled_back` |
+
+Semantics:
+- emitted only for the auditable terminal control-plane transitions covered by ADR-015: `approved -> promoted` and `promoted -> rolled_back`
+- emitted after the DynamoDB update succeeds, so consumers never observe a promotion or rollback that failed persistence
+- one event per successful transition; consumers should treat `releaseId` plus `status` as the stable release transition identity and may also use the EventBridge envelope `id` for delivery-level deduplication
+
+Operational consumers:
+- operator-facing release dashboards and timelines
+- compliance/audit export pipelines that need immutable release history
+- downstream release automation that reacts to confirmed promotion or rollback state changes
+
 **platform-invocations** — invocation audit log
 - PK: `TENANT#{tenantId}`, SK: `INV#{timestamp}#{invocationId}`
 - Attributes: invocationId, tenantId, appId, agentName, agentVersion,

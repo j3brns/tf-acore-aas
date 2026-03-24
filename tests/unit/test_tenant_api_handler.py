@@ -2104,6 +2104,7 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
     event = _event(
         method="PATCH",
         body={"status": "promoted", "releaseNotes": "approved release evidence recorded"},
+        caller_tenant_id="platform",
         roles=["Platform.Admin"],
     )
     event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
@@ -2118,8 +2119,22 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
     assert item["release_notes"] == "approved release evidence recorded"
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.promoted"
+    assert detail["schemaVersion"] == 1
+    assert detail["operation"] == "promotion"
+    assert detail["occurredAt"] == "2026-02-25T12:00:00Z"
+    assert detail["actorTenantId"] == "platform"
+    assert detail["actorAppId"] == "app-admin"
+    assert detail["actorSub"] == "user-123"
+    assert detail["releaseId"] == "echo-agent:1.2.0"
+    assert detail["agentRecordPk"] == "AGENT#echo-agent"
+    assert detail["agentRecordSk"] == "VERSION#1.2.0"
+    assert detail["agentName"] == "echo-agent"
+    assert detail["version"] == "1.2.0"
     assert detail["previousStatus"] == "approved"
     assert detail["status"] == "promoted"
+    assert detail["approvedBy"] == "user-123"
+    assert detail["approvedAt"] == "2026-02-25T12:00:00Z"
+    assert detail["releaseNotes"] == "approved release evidence recorded"
 
 
 def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, Any]) -> None:
@@ -2232,9 +2247,14 @@ def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
 
 def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None:
     _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="promoted")
+    fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["approved_by"] = "release-admin"
+    fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["approved_at"] = (
+        "2026-02-24T18:30:00Z"
+    )
     event = _event(
         method="PATCH",
         body={"status": "rolled_back", "releaseNotes": "error rate spike"},
+        caller_tenant_id="platform",
         roles=["Platform.Admin"],
     )
     event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
@@ -2246,5 +2266,19 @@ def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None
     assert item["status"] == "rolled_back"
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.rolled_back"
+    assert detail["schemaVersion"] == 1
+    assert detail["operation"] == "rollback"
+    assert detail["occurredAt"] == "2026-02-25T12:00:00Z"
+    assert detail["actorTenantId"] == "platform"
+    assert detail["actorAppId"] == "app-admin"
+    assert detail["actorSub"] == "user-123"
+    assert detail["releaseId"] == "echo-agent:1.2.0"
+    assert detail["agentRecordPk"] == "AGENT#echo-agent"
+    assert detail["agentRecordSk"] == "VERSION#1.2.0"
+    assert detail["agentName"] == "echo-agent"
+    assert detail["version"] == "1.2.0"
     assert detail["previousStatus"] == "promoted"
     assert detail["status"] == "rolled_back"
+    assert detail["approvedBy"] == "release-admin"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "error rate spike"
