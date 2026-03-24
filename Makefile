@@ -349,11 +349,9 @@ dev-logs:
 ## dev-invoke: Invoke echo agent locally with test tenant
 dev-invoke:
 	@TENANT=$$(grep BASIC_TENANT_ID .env.test 2>/dev/null | cut -d= -f2); \
-	JWT=$$(grep BASIC_TENANT_JWT .env.test 2>/dev/null | cut -d= -f2); \
 	uv run python scripts/dev-invoke.py \
 		--agent echo-agent \
-		--tenant "$$TENANT" \
-		--jwt "$$JWT" \
+		--tenant "$${TENANT:-t-basic-001}" \
 		--prompt "$(or $(PROMPT),Hello from local environment)" \
 		--mode "$(or $(MODE),sync)"
 

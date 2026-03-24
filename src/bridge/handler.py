@@ -41,6 +41,8 @@ from data_access.models import (
     JobStatus,
     TenantContext,
     TenantTier,
+    is_invokable_agent_status,
+    normalize_agent_status,
 )
 
 logger = Logger(service="bridge")
@@ -310,7 +312,7 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
         table = ddb.Table(AGENTS_TABLE)
 
         if not version:
-            # Query for latest versions and find the highest semver that is RELEASED
+            # Query for latest versions and find the highest semver that is tenant-invokable.
             response = table.query(
                 KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"),
                 ScanIndexForward=False,  # Highest version SK first
@@ -319,18 +321,26 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             if not items:
                 return None
 
-            released_items = [i for i in items if i.get("status", "released") == "released"]
-            item = max(released_items, key=_agent_record_sort_key, default=None)
+            invokable_items = [
+                i
+                for i in items
+                if is_invokable_agent_status(_coerce_optional_string(i.get("status")))
+            ]
+            item = max(invokable_items, key=_agent_record_sort_key, default=None)
         else:
             response = table.get_item(Key={"PK": f"AGENT#{agent_name}", "SK": f"VERSION#{version}"})
             item = response.get("Item")
-            if item and item.get("status", "released") != "released":
+            item_status = _coerce_optional_string(item.get("status")) if item else None
+            if item and not is_invokable_agent_status(item_status):
                 logger.warning(
-                    "Requested agent version is not RELEASED",
+                    "Requested agent version is not invokable",
                     extra={
                         "agent_name": agent_name,
                         "version": version,
-                        "status": item.get("status"),
+                        "status": normalize_agent_status(
+                            item_status,
+                            default=AgentStatus.PROMOTED,
+                        ).value,
                     },
                 )
                 return None
@@ -349,7 +359,10 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             deployed_at=str(item["deployed_at"]),
             invocation_mode=InvocationMode(str(item["invocation_mode"])),
             streaming_enabled=bool(item.get("streaming_enabled", False)),
-            status=AgentStatus(str(item.get("status", "released"))),
+            status=normalize_agent_status(
+                _coerce_optional_string(item.get("status")),
+                default=AgentStatus.PROMOTED,
+            ),
             approved_by=_coerce_optional_string(item.get("approved_by")),
             approved_at=_coerce_optional_string(item.get("approved_at")),
             release_notes=_coerce_optional_string(item.get("release_notes")),
@@ -357,6 +370,17 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             estimated_duration_seconds=int(item["estimated_duration_seconds"])  # type: ignore
             if item.get("estimated_duration_seconds")
             else None,
+            commit_sha=_coerce_optional_string(item.get("commit_sha")),
+            pipeline_url=_coerce_optional_string(item.get("pipeline_url")),
+            job_id=_coerce_optional_string(item.get("job_id")),
+            evaluation_score=(
+                float(item["evaluation_score"])  # type: ignore
+                if item.get("evaluation_score") is not None
+                else None
+            ),
+            evaluation_report_url=_coerce_optional_string(item.get("evaluation_report_url")),
+            rolled_back_by=_coerce_optional_string(item.get("rolled_back_by")),
+            rolled_back_at=_coerce_optional_string(item.get("rolled_back_at")),
         )
     except Exception:
         logger.exception("Failed to fetch agent record", extra={"agent_name": agent_name})
@@ -971,8 +995,8 @@ def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
 
     latest_by_name: dict[str, dict[str, Any]] = {}
     for item in items:
-        # Filter: only RELEASED agents are visible/invokable
-        if item.get("status", "released") != "released":
+        # Filter: only promoted agents are visible/invokable.
+        if not is_invokable_agent_status(_coerce_optional_string(item.get("status"))):
             continue
 
         agent_name = _coerce_optional_string(item.get("agent_name"))
@@ -1014,12 +1038,14 @@ def get_agent_detail(path_params: dict[str, Any], request_id: str) -> dict[str, 
     response = table.query(KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"))
     items = response.get("Items", [])
 
-    # Filter: only RELEASED versions are visible to tenants
-    released_items = [i for i in items if i.get("status", "released") == "released"]
-    if not released_items:
+    # Filter: only promoted versions are visible to tenants.
+    promoted_items = [
+        i for i in items if is_invokable_agent_status(_coerce_optional_string(i.get("status")))
+    ]
+    if not promoted_items:
         return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
 
-    sorted_items = sorted(released_items, key=_agent_record_sort_key, reverse=True)
+    sorted_items = sorted(promoted_items, key=_agent_record_sort_key, reverse=True)
     latest = sorted_items[0]
     detail = _agent_summary_from_item(latest)
     detail["versions"] = [

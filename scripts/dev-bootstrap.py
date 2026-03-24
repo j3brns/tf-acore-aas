@@ -356,26 +356,29 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
         "API_ISSUER=http://localhost:8766",
         "PLATFORM_ENV=local",
         f"SCOPED_TOKEN_SIGNING_KEY={secrets.token_hex(32)}",
+        "BASIC_TENANT_ID=t-basic-001",
+        "PREMIUM_TENANT_ID=t-premium-001",
+        "ADMIN_TENANT_ID=t-basic-001",
         "",
     ]
     if tokens:
         lines += [
-            "BASIC_TENANT_ID=t-test-001",
             f"BASIC_TENANT_JWT={tokens.get('basic', '')}",
-            "PREMIUM_TENANT_ID=t-test-002",
             f"PREMIUM_TENANT_JWT={tokens.get('premium', '')}",
-            "ADMIN_TENANT_ID=admin-001",
             f"ADMIN_JWT={tokens.get('admin', '')}",
+            f"TEST_JWT_BASIC={tokens.get('basic', '')}",
+            f"TEST_JWT_PREMIUM={tokens.get('premium', '')}",
+            f"TEST_JWT_ADMIN={tokens.get('admin', '')}",
         ]
     else:
         lines += [
             "# JWTs not available (mock-jwks service was not running)",
-            "BASIC_TENANT_ID=t-test-001",
             "BASIC_TENANT_JWT=",
-            "PREMIUM_TENANT_ID=t-test-002",
             "PREMIUM_TENANT_JWT=",
-            "ADMIN_TENANT_ID=admin-001",
             "ADMIN_JWT=",
+            "TEST_JWT_BASIC=",
+            "TEST_JWT_PREMIUM=",
+            "TEST_JWT_ADMIN=",
         ]
     env_test_path.write_text("\n".join(lines) + "\n")
     logger.info("Written %s", env_test_path)

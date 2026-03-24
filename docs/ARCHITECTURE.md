@@ -225,6 +225,21 @@ when available, otherwise fall back to an empty policy that enables nothing.
 Kill switches override all rollout rules. Rollback of capability changes uses
 AppConfig version history rather than ad hoc DynamoDB edits.
 
+### Safe Defaults And Fallbacks
+
+- **AppConfig** is fail-closed for tenant capabilities. If a fetch fails, use the
+  last known good cached document; if none exists, use an empty policy that
+  enables nothing. Control-plane code must not reconstruct capability policy
+  from DynamoDB or SSM.
+- **SSM Parameter Store** is for operational inputs only. Missing or invalid SSM
+  values must never widen tenant capability access. Where a runtime-safe default
+  exists in code, it must be an explicitly approved operational default inside
+  the ADR-defined region policy, not an inferred tenant-policy value.
+- **DynamoDB** remains authoritative for tenant metadata and transactional state.
+  If required tenant or resource records are absent, handlers fail the specific
+  operation rather than rebuilding tenant state from AppConfig documents or SSM
+  parameters.
+
 ## Entity Lifecycle
 
 ![Entity state diagram: tenant, agent, invocation, job, and session lifecycle states and transitions](images/tf_acore_aas_entities_state_diagram.drawio.png)
@@ -253,8 +268,25 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 - PK: `AGENT#{agentName}`, SK: `VERSION#{semver}`
 - Attributes: agentName, version, ownerTeam, tierMinimum, layerHash,
   layerS3Key, scriptS3Key, runtimeArn, deployedAt, invocationMode,
-  streamingEnabled, estimatedDurationSeconds
+  streamingEnabled, estimatedDurationSeconds, status, approvedBy,
+  approvedAt, releaseNotes
 - Capacity: provisioned, auto-scaling
+
+### Agent Release State Source Of Truth
+
+The release state of an immutable built agent version is owned by
+`platform-agents.status` in DynamoDB. The canonical lifecycle is:
+
+`built -> deployed_staging -> integration_verified -> evaluation_passed -> approved -> promoted`
+
+Terminal branches:
+- `failed` from any pre-promoted gate
+- `rolled_back` from `promoted`
+
+Only `promoted` versions are tenant-invokable. The Bridge resolves the active
+version as the highest semver record for an agent where `status=promoted`.
+Rollback is a forward metadata transition on the bad version; the Bridge then
+falls back to the next-highest promoted version without rebuilding artifacts.
 
 **platform-invocations** — invocation audit log
 - PK: `TENANT#{tenantId}`, SK: `INV#{timestamp}#{invocationId}`

@@ -54,6 +54,18 @@ The platform splits configuration ownership across three stores:
 - Percentage rollout must be deterministic per tenant identifier so rollout
   membership stays stable across repeated reads.
 
+## Safe Defaults And Failure Boundaries
+- AppConfig failure is **fail-closed** for tenant capability policy. The control
+  plane must not rebuild capability decisions from DynamoDB tenant records or SSM
+  parameters.
+- SSM parameters are operational inputs, not tenant feature policy. Missing or
+  invalid SSM values must never widen tenant capability access. Where code uses a
+  built-in default for an SSM-backed parameter, that default must be an explicit,
+  approved operational default within existing ADR constraints.
+- DynamoDB remains authoritative for tenant metadata and transactional state. If
+  a required tenant or resource record is missing, the operation fails rather
+  than synthesizing tenant state from AppConfig or SSM.
+
 ## Rollout and Rollback
 - Capability changes are published through AppConfig deployment workflows.
 - Validators should reject malformed capability documents before rollout.

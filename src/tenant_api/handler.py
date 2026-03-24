@@ -26,7 +26,14 @@ from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import ConditionBase, Key
 from botocore.exceptions import ClientError
 from data_access import TenantContext, TenantScopedDynamoDB, TenantScopedS3
-from data_access.models import AgentStatus, TenantStatus, TenantTier
+from data_access.models import (
+    AGENT_STATUS_TRANSITIONS,
+    REGISTERABLE_AGENT_STATUSES,
+    AgentStatus,
+    TenantStatus,
+    TenantTier,
+    normalize_agent_status,
+)
 
 logger = Logger(service="tenant-api")
 
@@ -43,13 +50,6 @@ _FAILOVER_LOCK_NAME_ENV = "FAILOVER_LOCK_NAME"
 _DELETE_RETENTION_DAYS = 30
 _ADMIN_ROLES = {"Platform.Admin"}
 _SELF_SERVICE_ADMIN_ROLES = {"Platform.Admin", "Platform.Operator", "SelfService.Admin"}
-_REGISTERABLE_AGENT_STATUSES = {AgentStatus.PENDING, AgentStatus.RELEASED}
-_ALLOWED_AGENT_STATUS_TRANSITIONS: dict[AgentStatus, set[AgentStatus]] = {
-    AgentStatus.PENDING: {AgentStatus.RELEASED, AgentStatus.ROLLBACK},
-    AgentStatus.RELEASED: {AgentStatus.ROLLBACK, AgentStatus.DEPRECATED},
-    AgentStatus.DEPRECATED: {AgentStatus.RELEASED, AgentStatus.ROLLBACK},
-    AgentStatus.ROLLBACK: set(),
-}
 _ALLOWED_TENANT_INVITE_ROLES = {"Agent.Invoke"}
 _INVITE_EXPIRY_DAYS = 7
 _AUDIT_EXPORT_PREFIX = "audit-exports"
@@ -527,20 +527,17 @@ def _normalize_status(value: Any) -> str:
 
 
 def _normalize_agent_status(value: Any) -> AgentStatus:
-    status_text = _str_or_none(value)
-    if status_text is None:
-        raise ValueError("status is required")
     try:
-        return AgentStatus(status_text.lower())
+        return normalize_agent_status(_str_or_none(value))
     except ValueError as exc:
         allowed = ", ".join(status.value for status in AgentStatus)
         raise ValueError(f"status must be one of: {allowed}") from exc
 
 
 def _agent_event_detail_type(status: AgentStatus) -> str | None:
-    if status is AgentStatus.RELEASED:
+    if status is AgentStatus.PROMOTED:
         return "platform.agent_version.promoted"
-    if status is AgentStatus.ROLLBACK:
+    if status is AgentStatus.ROLLED_BACK:
         return "platform.agent_version.rolled_back"
     return None
 
@@ -551,7 +548,7 @@ def _validate_agent_status_transition(
 ) -> None:
     if new_status == current_status:
         return
-    allowed = _ALLOWED_AGENT_STATUS_TRANSITIONS.get(current_status, set())
+    allowed = AGENT_STATUS_TRANSITIONS.get(current_status, frozenset())
     if new_status not in allowed:
         allowed_text = ", ".join(status.value for status in sorted(allowed, key=lambda s: s.value))
         raise ValueError(
@@ -2064,22 +2061,13 @@ def _handle_platform_register_agent(
     if not agent_name or not version:
         raise ValueError("agentName and version are required")
 
-    # In prod, new versions must be PENDING. In dev, they may default to RELEASED.
-    current_fn = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "platform-tenant-api-dev")
-    env = current_fn.split("-")[-1]
-
-    default_status = AgentStatus.PENDING if env == "prod" else AgentStatus.RELEASED
     status = (
-        default_status
+        AgentStatus.BUILT
         if body.get("status") is None
         else _normalize_agent_status(body.get("status"))
     )
-    if status not in _REGISTERABLE_AGENT_STATUSES:
-        raise ValueError("New agent versions may only be registered as pending or released")
-    if env == "prod" and status is not AgentStatus.PENDING:
-        raise ValueError("Production agent registration must start as pending")
-
-    approved_at = _iso(_now_utc())
+    if status not in REGISTERABLE_AGENT_STATUSES:
+        raise ValueError("New agent versions may only be registered as built")
 
     item = {
         "PK": f"AGENT#{agent_name}",
@@ -2099,10 +2087,13 @@ def _handle_platform_register_agent(
         "estimated_duration_seconds": _coerce_positive_int(
             body.get("estimatedDurationSeconds"), default=0
         ),
+        "commit_sha": _str_or_none(body.get("commitSha")),
+        "pipeline_url": _str_or_none(body.get("pipelineUrl")),
+        "job_id": _str_or_none(body.get("jobId")),
     }
-    if status is AgentStatus.RELEASED:
+    if status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         item["approved_by"] = caller.sub
-        item["approved_at"] = approved_at
+        item["approved_at"] = _iso(_now_utc())
     if body.get("releaseNotes"):
         item["release_notes"] = str(body["releaseNotes"])
 
@@ -2148,18 +2139,25 @@ def _handle_platform_update_agent_version(
     if not existing:
         return _error(404, "NOT_FOUND", f"Agent version {agent_name}:{version} not found")
 
-    current_status = AgentStatus(str(existing.get("status", AgentStatus.RELEASED.value)))
+    current_status = normalize_agent_status(existing.get("status"), default=AgentStatus.PROMOTED)
     _validate_agent_status_transition(current_status, new_agent_status)
 
     attrs: dict[str, Any] = {
         "status": new_agent_status.value,
         "updated_at": _iso(_now_utc()),
     }
-    if new_agent_status is AgentStatus.RELEASED:
+    if new_agent_status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         attrs["approved_by"] = caller.sub
         attrs["approved_at"] = _iso(_now_utc())
+    if new_agent_status is AgentStatus.ROLLED_BACK:
+        attrs["rolled_back_by"] = caller.sub
+        attrs["rolled_back_at"] = _iso(_now_utc())
     if body.get("releaseNotes") is not None:
         attrs["release_notes"] = str(body["releaseNotes"])
+    if body.get("evaluationScore") is not None:
+        attrs["evaluation_score"] = float(body["evaluationScore"])
+    if body.get("evaluationReportUrl") is not None:
+        attrs["evaluation_report_url"] = str(body["evaluationReportUrl"])
 
     update_expression, expr_names, expr_values = _build_update_expression(attrs)
     db.update_item(
@@ -2184,6 +2182,10 @@ def _handle_platform_update_agent_version(
                 "approvedBy": caller.sub,
                 "approvedAt": attrs.get("approved_at"),
                 "releaseNotes": attrs.get("release_notes"),
+                "evaluationScore": attrs.get("evaluation_score"),
+                "evaluationReportUrl": attrs.get("evaluation_report_url"),
+                "rolledBackBy": attrs.get("rolled_back_by"),
+                "rolledBackAt": attrs.get("rolled_back_at"),
             },
         )
 
