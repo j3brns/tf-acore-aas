@@ -282,9 +282,9 @@ class TestHandlerFormat:
         _write_manifest(
             tmp_path,
             "my-agent",
-            _MINIMAL_TOML.replace('handler = "handler:invoke"', 'handler = "handler_invoke"').format(
-                name="my-agent"
-            ),
+            _MINIMAL_TOML.replace(
+                'handler = "handler:invoke"', 'handler = "handler_invoke"'
+            ).format(name="my-agent"),
         )
         from scripts.agent_manifest import ManifestValidationError
 
@@ -327,7 +327,7 @@ class TestEstimatedDurationValidation:
 class TestLlmSectionValidation:
     def test_max_tokens_zero_rejected(self, tmp_path: Path) -> None:
         toml = _MINIMAL_TOML.format(name="my-agent") + (
-            "\n[tool.agentcore.llm]\nmodel_id = \"claude-3\"\nmax_tokens = 0\n"
+            '\n[tool.agentcore.llm]\nmodel_id = "claude-3"\nmax_tokens = 0\n'
         )
         _write_manifest(tmp_path, "my-agent", toml)
         from scripts.agent_manifest import ManifestValidationError
@@ -338,7 +338,7 @@ class TestLlmSectionValidation:
 
     def test_max_tokens_positive_accepted(self, tmp_path: Path) -> None:
         toml = _MINIMAL_TOML.format(name="my-agent") + (
-            "\n[tool.agentcore.llm]\nmodel_id = \"claude-3\"\nmax_tokens = 1024\n"
+            '\n[tool.agentcore.llm]\nmodel_id = "claude-3"\nmax_tokens = 1024\n'
         )
         _write_manifest(tmp_path, "my-agent", toml)
         manifest = load_agent_manifest("my-agent", tmp_path)
@@ -346,7 +346,7 @@ class TestLlmSectionValidation:
 
     def test_unknown_llm_key_is_rejected(self, tmp_path: Path) -> None:
         toml = _MINIMAL_TOML.format(name="my-agent") + (
-            "\n[tool.agentcore.llm]\nmodel_id = \"claude-3\"\ntemperature = 0.7\n"
+            '\n[tool.agentcore.llm]\nmodel_id = "claude-3"\ntemperature = 0.7\n'
         )
         _write_manifest(tmp_path, "my-agent", toml)
         from scripts.agent_manifest import ManifestValidationError

@@ -29,6 +29,8 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as sfn_tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import { Construct } from 'constructs';
@@ -476,7 +478,7 @@ export class PlatformStack extends cdk.Stack {
       assetPath: path.join(__dirname, '../../../src/tenant_provisioner'),
       handler: 'handler.lambda_handler',
       functionNameSuffix: 'tenant-provisioner',
-      timeout: cdk.Duration.minutes(11), // Must be > stack deployment poll (10m)
+      timeout: cdk.Duration.minutes(2), // Reduced since polling moved to Step Function
       memorySize: 512,
       environment: {
         POWERTOOLS_SERVICE_NAME: 'tenant-provisioner',
@@ -545,14 +547,100 @@ export class PlatformStack extends cdk.Stack {
       }),
     );
 
+    // --- Tenant Onboarding Workflow (Issue #311) ---
+
+    const startTask = new sfn_tasks.LambdaInvoke(this, 'StartProvisioning', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        operation: 'START',
+        tenantId: sfn.JsonPath.stringAt('$.detail.tenantId'),
+        tier: sfn.JsonPath.stringAt('$.detail.tier'),
+        accountId: sfn.JsonPath.stringAt('$.detail.accountId'),
+      }),
+      outputPath: '$.Payload',
+    });
+
+    const waitTask = new sfn.Wait(this, 'WaitForStack', {
+      time: sfn.WaitTime.duration(cdk.Duration.seconds(30)),
+    });
+
+    const getStatusTask = new sfn_tasks.CallAwsService(this, 'GetStackStatus', {
+      service: 'cloudformation',
+      action: 'describeStacks',
+      parameters: {
+        StackName: sfn.JsonPath.stringAt('$.stackName'),
+      },
+      iamResources: [`arn:aws:cloudformation:${this.region}:${this.account}:stack/platform-tenant-*/*`],
+    });
+
+    const completeTask = new sfn_tasks.LambdaInvoke(this, 'CompleteProvisioning', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        operation: 'COMPLETE',
+        tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+        stackName: sfn.JsonPath.stringAt('$.stackName'),
+      }),
+      outputPath: '$.Payload',
+    });
+
+    const failTask = new sfn_tasks.LambdaInvoke(this, 'FailProvisioning', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        operation: 'FAIL',
+        tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+        reason: sfn.JsonPath.stringAt('$.error'),
+      }),
+    });
+
+    const definition = startTask.next(
+      new sfn.Choice(this, 'SkipWait?')
+        .when(sfn.Condition.booleanEquals('$.skipWait', true), completeTask)
+        .otherwise(
+          waitTask.next(
+            getStatusTask.next(
+              new sfn.Choice(this, 'IsStackComplete?')
+                .when(
+                  sfn.Condition.stringMatches('$.Stacks[0].StackStatus', '*_COMPLETE'),
+                  completeTask,
+                )
+                .when(
+                  sfn.Condition.stringMatches('$.Stacks[0].StackStatus', '*_FAILED'),
+                  new sfn.Pass(this, 'CaptureFailure', {
+                    parameters: {
+                      tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+                      error: sfn.JsonPath.stringAt('$.Stacks[0].StackStatus'),
+                    },
+                  }).next(failTask),
+                )
+                .when(
+                  sfn.Condition.stringMatches('$.Stacks[0].StackStatus', 'ROLLBACK_*'),
+                  new sfn.Pass(this, 'CaptureRollback', {
+                    parameters: {
+                      tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+                      error: sfn.JsonPath.stringAt('$.Stacks[0].StackStatus'),
+                    },
+                  }).next(failTask),
+                )
+                .otherwise(waitTask),
+            ),
+          ),
+        ),
+    );
+
+    const onboardingStateMachine = new sfn.StateMachine(this, 'TenantOnboardingWorkflow', {
+      stateMachineName: `platform-tenant-onboarding-${env}`,
+      definitionBody: sfn.DefinitionBody.fromChainable(definition),
+      timeout: cdk.Duration.minutes(20),
+    });
+
     new events.Rule(this, 'TenantCreatedRule', {
       ruleName: `platform-tenant-created-${env}`,
-      description: 'Trigger tenant provisioning when a new tenant is created',
+      description: 'Trigger tenant provisioning workflow when a new tenant is created',
       eventPattern: {
         source: ['platform.tenant_api'],
         detailType: ['tenant.created'],
       },
-      targets: [new targets.LambdaFunction(tenantProvisionerFn)],
+      targets: [new targets.SfnStateMachine(onboardingStateMachine)],
     });
 
     this.toolsTable.grantReadData(this.requestInterceptorFn);

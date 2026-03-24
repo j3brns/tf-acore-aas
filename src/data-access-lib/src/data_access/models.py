@@ -48,9 +48,11 @@ class TenantTier(StrEnum):
 
 
 class TenantStatus(StrEnum):
+    PROVISIONING = "provisioning"
     ACTIVE = "active"
     SUSPENDED = "suspended"
     DELETED = "deleted"
+    FAILED = "failed"
 
 
 class InvocationMode(StrEnum):

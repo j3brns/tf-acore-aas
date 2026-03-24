@@ -571,6 +571,7 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     tenant = _body(response)["tenant"]
     assert tenant["tenantId"] == "t-001"
     assert tenant["tier"] == "standard"
+    assert tenant["status"] == "provisioning"
     assert tenant["apiKeySecretArn"].startswith("arn:aws:secretsmanager:")
     assert tenant["memoryStoreArn"].endswith("/t-001")
     assert fake_state["deps"].memory_provisioner.calls == [

@@ -434,7 +434,9 @@ def test_request_interceptor_non_tools_call_passes_through(
 
 
 @patch("gateway.interceptors.request_interceptor.get_jwk_client")
-def test_request_interceptor_expired_token_returns_401(mock_get_jwk_client, mock_env, lambda_context):
+def test_request_interceptor_expired_token_returns_401(
+    mock_get_jwk_client, mock_env, lambda_context
+):
     """An expired JWT → 401 with 'expired' message."""
     event = _base_event()
     mock_get_jwk_client.return_value = MagicMock(
@@ -483,7 +485,11 @@ def test_get_scoped_token_signing_key_prod_without_config_raises(mock_env):
     """In non-local PLATFORM_ENV, missing both signing key and ARN must raise RuntimeError."""
     with patch.dict(
         os.environ,
-        {"PLATFORM_ENV": "prod", "SCOPED_TOKEN_SIGNING_KEY": "", "SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN": ""},
+        {
+            "PLATFORM_ENV": "prod",
+            "SCOPED_TOKEN_SIGNING_KEY": "",
+            "SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN": "",
+        },
         clear=False,
     ):
         request_interceptor._scoped_token_signing_key_cache = None

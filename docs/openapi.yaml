@@ -1188,7 +1188,7 @@ components:
       enum: [basic, standard, premium]
     TenantStatus:
       type: string
-      enum: [active, suspended, deleted]
+      enum: [provisioning, active, suspended, deleted, failed]
     InvocationMode:
       type: string
       enum: [sync, streaming, async]

@@ -1,7 +1,7 @@
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -10,8 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "data-access-lib" / "src"))
 
 
-from src.bridge.handler import _send_streaming_response, handle_streaming_invocation, handler
 from data_access.models import AgentRecord, InvocationMode, TenantContext
+
+from src.bridge.handler import _send_streaming_response, handle_streaming_invocation, handler
 
 
 class FakeLambdaContext:
@@ -144,7 +145,9 @@ def test_handler_handles_streaming_agent_result_none(mock_invoke, mock_get_agent
 
 @patch("src.bridge.handler.log_invocation")
 @patch("src.bridge.handler.requests")
-def test_handle_streaming_invocation_streams_lines(mock_requests, mock_log, fake_agent, fake_tenant):
+def test_handle_streaming_invocation_streams_lines(
+    mock_requests, mock_log, fake_agent, fake_tenant
+):
     """Each non-empty SSE line from the runtime is forwarded to the response stream."""
     mock_stream = MagicMock()
     mock_response = MagicMock()
@@ -228,7 +231,9 @@ def test_handle_streaming_invocation_no_response_stream_returns_error(fake_agent
     assert result["statusCode"] == 500
     body = json.loads(result["body"])
     error = body.get("error", body)
-    assert "INTERNAL_ERROR" in error.get("code", "") or "streaming" in error.get("message", "").lower()
+    is_internal = "INTERNAL_ERROR" in error.get("code", "")
+    is_streaming = "streaming" in error.get("message", "").lower()
+    assert is_internal or is_streaming
 
 
 @patch("src.bridge.handler.log_invocation")
@@ -237,7 +242,6 @@ def test_handle_streaming_invocation_http_error_propagates(
     mock_requests, mock_log, fake_agent, fake_tenant
 ):
     """An HTTP error from the runtime (4xx/5xx) propagates as an exception."""
-    from unittest.mock import MagicMock as _MM
 
     http_error_cls = type("HTTPError", (Exception,), {})
     mock_response = MagicMock()

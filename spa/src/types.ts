@@ -1,5 +1,5 @@
 export type TenantTier = "basic" | "standard" | "premium";
-export type TenantStatus = "active" | "suspended" | "deleted";
+export type TenantStatus = "provisioning" | "active" | "suspended" | "deleted" | "failed";
 export type InvocationMode = "sync" | "streaming" | "async";
 export type InvocationStatus = "success" | "error" | "timeout" | "throttled";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
