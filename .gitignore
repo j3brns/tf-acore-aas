@@ -45,6 +45,7 @@ override.tf.json
 *_override.tf.json
 terraform/.terraform/
 infra/cdk/cdk.out/
+infra/cdk/generated/
 infra/cdk/dist/
 
 # Environment / secrets

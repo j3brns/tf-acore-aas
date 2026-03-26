@@ -826,7 +826,7 @@ paths:
       tags: [Platform]
       operationId: updateAgentVersion
       summary: Update agent version status
-      description: Advances a version through the canonical release lifecycle or marks the currently promoted version as `rolled_back`.
+      description: Advances a version through the canonical release lifecycle or marks the currently promoted version as `rolled_back`. Successful promotion and rollback transitions emit the `AgentReleaseLifecycleEvent` detail payload on the platform EventBridge bus using detail types `platform.agent_version.promoted` and `platform.agent_version.rolled_back`.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -1361,6 +1361,76 @@ components:
           type: string
         estimatedDurationSeconds:
           type: integer
+
+    AgentReleaseLifecycleEvent:
+      type: object
+      description: EventBridge detail payload emitted after a promotion or rollback status write succeeds in `platform-agents`.
+      required:
+        - schemaVersion
+        - operation
+        - occurredAt
+        - actorTenantId
+        - releaseId
+        - agentRecordPk
+        - agentRecordSk
+        - agentName
+        - version
+        - previousStatus
+        - status
+      properties:
+        schemaVersion:
+          type: integer
+          description: Detail payload schema version.
+        operation:
+          type: string
+          enum: [promotion, rollback]
+        occurredAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        actorTenantId:
+          type: string
+          description: Control-plane tenant context. Platform-operated release routes should emit `platform`.
+        actorAppId:
+          type: string
+        actorSub:
+          type: string
+        releaseId:
+          type: string
+          description: Stable immutable release identifier in `{agentName}:{version}` form.
+        agentRecordPk:
+          type: string
+          description: Stable DynamoDB partition key for the release record.
+        agentRecordSk:
+          type: string
+          description: Stable DynamoDB sort key for the release record.
+        agentName:
+          type: string
+        version:
+          type: string
+        previousStatus:
+          $ref: "#/components/schemas/AgentStatus"
+        status:
+          $ref: "#/components/schemas/AgentStatus"
+        approvedBy:
+          type: string
+          description: Approval identity already attached to the release record, when present.
+        approvedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        releaseNotes:
+          type: string
+          description: Operator-supplied evidence for promotion or rollback.
+        evaluationScore:
+          type: number
+          format: float
+          description: Evaluation score captured with promotion evidence, when supplied.
+        evaluationReportUrl:
+          type: string
+          format: uri
+          description: Evaluation report link captured with promotion evidence, when supplied.
+        rolledBackBy:
+          type: string
+          description: Actor identity that performed the rollback, when the transition is `rolled_back`.
+        rolledBackAt:
+          $ref: "#/components/schemas/UtcTimestamp"
 
     AgentInvokeRequest:
       type: object

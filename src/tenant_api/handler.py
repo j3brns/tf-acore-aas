@@ -542,6 +542,54 @@ def _agent_event_detail_type(status: AgentStatus) -> str | None:
     return None
 
 
+def _agent_release_operation(status: AgentStatus) -> str | None:
+    if status is AgentStatus.PROMOTED:
+        return "promotion"
+    if status is AgentStatus.ROLLED_BACK:
+        return "rollback"
+    return None
+
+
+def _build_agent_release_lifecycle_event_detail(
+    *,
+    caller: CallerIdentity,
+    agent_name: str,
+    version: str,
+    previous_status: AgentStatus,
+    new_status: AgentStatus,
+    occurred_at: str,
+    approved_by: str | None,
+    approved_at: str | None,
+    release_notes: str | None,
+    evaluation_score: float | None,
+    evaluation_report_url: str | None,
+    rolled_back_by: str | None,
+    rolled_back_at: str | None,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "operation": _agent_release_operation(new_status),
+        "occurredAt": occurred_at,
+        "actorTenantId": caller.tenant_id or "platform",
+        "actorAppId": caller.app_id,
+        "actorSub": caller.sub,
+        "releaseId": f"{agent_name}:{version}",
+        "agentRecordPk": f"AGENT#{agent_name}",
+        "agentRecordSk": f"VERSION#{version}",
+        "agentName": agent_name,
+        "version": version,
+        "previousStatus": previous_status.value,
+        "status": new_status.value,
+        "approvedBy": approved_by,
+        "approvedAt": approved_at,
+        "releaseNotes": release_notes,
+        "evaluationScore": evaluation_score,
+        "evaluationReportUrl": evaluation_report_url,
+        "rolledBackBy": rolled_back_by,
+        "rolledBackAt": rolled_back_at,
+    }
+
+
 def _validate_agent_status_transition(
     current_status: AgentStatus,
     new_status: AgentStatus,
@@ -2142,16 +2190,17 @@ def _handle_platform_update_agent_version(
     current_status = normalize_agent_status(existing.get("status"), default=AgentStatus.PROMOTED)
     _validate_agent_status_transition(current_status, new_agent_status)
 
+    updated_at = _iso(_now_utc())
     attrs: dict[str, Any] = {
         "status": new_agent_status.value,
-        "updated_at": _iso(_now_utc()),
+        "updated_at": updated_at,
     }
     if new_agent_status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         attrs["approved_by"] = caller.sub
-        attrs["approved_at"] = _iso(_now_utc())
+        attrs["approved_at"] = updated_at
     if new_agent_status is AgentStatus.ROLLED_BACK:
         attrs["rolled_back_by"] = caller.sub
-        attrs["rolled_back_at"] = _iso(_now_utc())
+        attrs["rolled_back_at"] = updated_at
     if body.get("releaseNotes") is not None:
         attrs["release_notes"] = str(body["releaseNotes"])
     if body.get("evaluationScore") is not None:
@@ -2171,22 +2220,32 @@ def _handle_platform_update_agent_version(
 
     detail_type = _agent_event_detail_type(new_agent_status)
     if detail_type is not None and new_agent_status != current_status:
+        approved_by = _str_or_none(attrs.get("approved_by") or existing.get("approved_by"))
+        approved_at = _str_or_none(attrs.get("approved_at") or existing.get("approved_at"))
+        release_notes = _str_or_none(attrs.get("release_notes"))
+        evaluation_score_raw = attrs.get("evaluation_score")
+        evaluation_score = float(evaluation_score_raw) if evaluation_score_raw is not None else None
+        evaluation_report_url = _str_or_none(attrs.get("evaluation_report_url"))
+        rolled_back_by = _str_or_none(attrs.get("rolled_back_by"))
+        rolled_back_at = _str_or_none(attrs.get("rolled_back_at"))
         _put_event(
             deps,
             detail_type=detail_type,
-            detail={
-                "agentName": agent_name,
-                "version": version,
-                "previousStatus": current_status.value,
-                "status": new_agent_status.value,
-                "approvedBy": caller.sub,
-                "approvedAt": attrs.get("approved_at"),
-                "releaseNotes": attrs.get("release_notes"),
-                "evaluationScore": attrs.get("evaluation_score"),
-                "evaluationReportUrl": attrs.get("evaluation_report_url"),
-                "rolledBackBy": attrs.get("rolled_back_by"),
-                "rolledBackAt": attrs.get("rolled_back_at"),
-            },
+            detail=_build_agent_release_lifecycle_event_detail(
+                caller=caller,
+                agent_name=agent_name,
+                version=version,
+                previous_status=current_status,
+                new_status=new_agent_status,
+                occurred_at=updated_at,
+                approved_by=approved_by,
+                approved_at=approved_at,
+                release_notes=release_notes,
+                evaluation_score=evaluation_score,
+                evaluation_report_url=evaluation_report_url,
+                rolled_back_by=rolled_back_by,
+                rolled_back_at=rolled_back_at,
+            ),
         )
 
     return _response(

@@ -21,7 +21,7 @@ make test-agent AGENT=my-agent               # Run unit + golden tests
 
 # 4. (Optional) Test platform integration locally (requires Docker)
 make dev                                    # Start local environment (LocalStack + mocks)
-make agent-invoke AGENT=my-agent ENV=local  # Invoke via local bridge (canned mock response)
+make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=local  # Invoke via local bridge
 
 # 5. Validate locally, then push to AWS dev (real compute)
 make agent-push AGENT=my-agent ENV=dev      # Package, run agent tests, deploy to Runtime, and register
@@ -72,7 +72,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
+https://github.com/j3brns/tf-acore-aas/pull/330/conflict?name=docs%252Fdevelopment%252FAGENT-DEVELOPER-GUIDE.md&ancestor_oid=dc566f919ca5fc5b5e3dea61ba6a13e53045a4a6&base_oid=61bf5a8f2a40927646c23893ec3cd6619a0f96ba&head_oid=c605d2c7cbc3a6696f08db638e21143baa050ecadev = [
     "bedrock-agentcore-starter-toolkit>=0.2.5",
     "pytest>=8.0.0",
 ]
@@ -227,7 +227,7 @@ This dataset is used by the evaluation gate during pipeline promotion.
   "sync": [
     {
       "id": "basic-greeting",
-      "input": {"prompt": "Hello", "tenantId": "t-test-001"},
+      "input": {"prompt": "Hello", "tenantId": "t-basic-001"},
       "expected": {"result": "Hello back"}
     }
   ]

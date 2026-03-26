@@ -56,7 +56,7 @@ def test_parse_args_matches_makefile_contract() -> None:
             "--agent",
             "echo-agent",
             "--tenant",
-            "t-test-001",
+            "t-basic-001",
             "--jwt",
             "jwt-token",
             "--prompt",
@@ -67,7 +67,7 @@ def test_parse_args_matches_makefile_contract() -> None:
     )
 
     assert args.agent == "echo-agent"
-    assert args.tenant == "t-test-001"
+    assert args.tenant == "t-basic-001"
     assert args.token == "jwt-token"
     assert args.prompt == "Hello from local environment"
     assert args.mode == "sync"
@@ -80,7 +80,7 @@ def test_build_request_includes_contract_headers_and_payload() -> None:
             "--agent",
             "echo-agent",
             "--tenant",
-            "t-test-001",
+            "t-basic-001",
             "--prompt",
             "Hello",
             "--mode",
@@ -103,7 +103,7 @@ def test_build_request_includes_contract_headers_and_payload() -> None:
     assert request.get_header("Authorization") == "Bearer jwt-token"
     assert request.get_header("Accept") == "text/event-stream"
     headers = {key.lower(): value for key, value in request.header_items()}
-    assert headers["x-tenant-id"] == "t-test-001"
+    assert headers["x-tenant-id"] == "t-basic-001"
     assert json.loads(request.data.decode("utf-8")) == {
         "input": "Hello",
         "sessionId": "session-123",
@@ -111,13 +111,15 @@ def test_build_request_includes_contract_headers_and_payload() -> None:
     }
 
 
-def test_resolve_token_uses_env_test_fixture_for_known_tenant(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_token_uses_bootstrap_fixture_aliases_for_known_tenant(
+    monkeypatch, tmp_path: Path
+) -> None:
     env_test = tmp_path / ".env.test"
     env_test.write_text(
         "\n".join(
             [
-                "BASIC_TENANT_ID=t-test-001",
-                "BASIC_TENANT_JWT=fixture-basic-token",  # pragma: allowlist secret
+                "BASIC_TENANT_ID=t-basic-001",
+                "TEST_JWT_BASIC=fixture-basic-token",  # pragma: allowlist secret
             ]
         )
         + "\n",
@@ -125,7 +127,7 @@ def test_resolve_token_uses_env_test_fixture_for_known_tenant(monkeypatch, tmp_p
     )
     monkeypatch.setattr(dev_invoke, "_repo_root", lambda: tmp_path)
 
-    token = dev_invoke._resolve_token(None, "t-test-001", "local")
+    token = dev_invoke._resolve_token(None, "t-basic-001", "local")
 
     assert token == "fixture-basic-token"
 
@@ -137,7 +139,7 @@ def test_main_documented_dev_invoke_path_uses_local_defaults(
     env_test.write_text(
         "\n".join(
             [
-                "BASIC_TENANT_ID=t-test-001",
+                "BASIC_TENANT_ID=t-basic-001",
                 "BASIC_TENANT_JWT=fixture-basic-token",  # pragma: allowlist secret
             ]
         )
@@ -166,7 +168,7 @@ def test_main_documented_dev_invoke_path_uses_local_defaults(
             "--agent",
             "echo-agent",
             "--tenant",
-            "t-test-001",
+            "t-basic-001",
             "--prompt",
             "Hello from local environment",
             "--mode",
@@ -182,6 +184,21 @@ def test_main_documented_dev_invoke_path_uses_local_defaults(
     assert seen["body"] == {"input": "Hello from local environment"}
     captured = capsys.readouterr()
     assert "Echo: Hello from local environment" in captured.out
+
+
+def test_resolve_token_supports_direct_bootstrap_alias_without_tenant_id_mapping(
+    monkeypatch, tmp_path: Path
+) -> None:
+    env_test = tmp_path / ".env.test"
+    env_test.write_text(
+        "TEST_JWT_PREMIUM=fixture-premium-token\n",  # pragma: allowlist secret
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dev_invoke, "_repo_root", lambda: tmp_path)
+
+    token = dev_invoke._resolve_token(None, "t-premium-001", "local")
+
+    assert token == "fixture-premium-token"
 
 
 def test_main_fails_cleanly_when_token_cannot_be_resolved(

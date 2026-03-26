@@ -108,18 +108,25 @@ def _resolve_api_base_url(explicit: str | None, env_name: str) -> str:
 
 def _tenant_token_from_env_test(tenant_id: str, dotenv_values: dict[str, str]) -> str | None:
     mappings = (
-        ("BASIC_TENANT_ID", "BASIC_TENANT_JWT"),
-        ("PREMIUM_TENANT_ID", "PREMIUM_TENANT_JWT"),
-        ("ADMIN_TENANT_ID", "ADMIN_JWT"),
+        ("BASIC_TENANT_ID", ("BASIC_TENANT_JWT", "TEST_JWT_BASIC")),
+        ("PREMIUM_TENANT_ID", ("PREMIUM_TENANT_JWT", "TEST_JWT_PREMIUM")),
+        ("ADMIN_TENANT_ID", ("ADMIN_JWT", "TEST_JWT_ADMIN")),
     )
-    for tenant_key, token_key in mappings:
+    for tenant_key, token_keys in mappings:
         if dotenv_values.get(tenant_key, "").strip() == tenant_id:
-            token = dotenv_values.get(token_key, "").strip()
-            return token or None
+            for token_key in token_keys:
+                token = dotenv_values.get(token_key, "").strip()
+                if token:
+                    return token
 
-    if tenant_id == "admin-001":
-        token = dotenv_values.get("ADMIN_JWT", "").strip()
-        return token or None
+    direct_aliases = {
+        "t-basic-001": ("BASIC_TENANT_JWT", "TEST_JWT_BASIC"),
+        "t-premium-001": ("PREMIUM_TENANT_JWT", "TEST_JWT_PREMIUM"),
+    }
+    for token_key in direct_aliases.get(tenant_id, ()):
+        token = dotenv_values.get(token_key, "").strip()
+        if token:
+            return token
     return None
 
 

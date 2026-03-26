@@ -247,6 +247,10 @@ def release_lock(lock_name: str, lock_id: str) -> bool:
         )
         return True
     except Exception:
+        logger.warning(
+            "Failed to release ops lock; will expire via TTL",
+            extra={"lock_name": lock_name},
+        )
         return False
 
 

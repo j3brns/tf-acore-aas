@@ -32,9 +32,14 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
+import { Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
+import * as fs from 'fs';
 import * as path from 'path';
 import { resolveEntraConfiguration } from './entra-config';
+import { TenantStack } from './tenant-stack';
+
+const TENANT_AUTHORIZED_RUNTIME_REGIONS = ['eu-west-1', 'eu-central-1'] as const;
 
 type PythonLambdaProps = {
   assetPath: string;
@@ -60,6 +65,44 @@ export interface PlatformStackProps extends cdk.StackProps {
   readonly vpc: ec2.IVpc;
   readonly tenantDataKey: kms.IKey;
   readonly platformConfigKey: kms.IKey;
+}
+
+function ensureTenantStubTemplate(
+  env: string,
+  stackEnv: cdk.Environment,
+  authorizedRuntimeRegions: readonly string[],
+): string {
+  const generatedDir = path.join(__dirname, '../generated');
+  const stackId = `platform-tenant-stub-${env}`;
+  const templatePath = path.join(generatedDir, `${stackId}.template.json`);
+
+  if (fs.existsSync(templatePath)) {
+    return templatePath;
+  }
+
+  fs.mkdirSync(generatedDir, { recursive: true });
+
+  const tempApp = new cdk.App({
+    outdir: generatedDir,
+    context: {
+      env,
+    },
+  });
+
+  const tenantStubStack = new TenantStack(tempApp, stackId, {
+    env: stackEnv,
+    description: `Platform per-tenant resources stub — ${env}`,
+    authorizedRuntimeRegions,
+  });
+
+  const tenantTemplate = Template.fromStack(tenantStubStack).toJSON();
+  fs.writeFileSync(templatePath, JSON.stringify(tenantTemplate, null, 2));
+
+  if (!fs.existsSync(templatePath)) {
+    throw new Error(`Failed to synthesize tenant stub template at ${templatePath}`);
+  }
+
+  return templatePath;
 }
 
 export class PlatformStack extends cdk.Stack {
@@ -411,6 +454,7 @@ export class PlatformStack extends cdk.Stack {
       environment: {
         POWERTOOLS_SERVICE_NAME: 'webhook-delivery',
         JOBS_TABLE: this.jobsTable.tableName,
+        TENANTS_TABLE: this.tenantsTable.tableName,
         WEBHOOK_RETRY_QUEUE_URL: webhookDeliveryRetryQueue.queueUrl,
         WEBHOOK_DLQ_URL: webhookDeliveryRetryDlq.queueUrl,
         WEBHOOK_MAX_RETRY_ATTEMPTS: '3',
@@ -482,6 +526,7 @@ export class PlatformStack extends cdk.Stack {
         ],
       }),
     );
+    this.tenantsTable.grantReadData(this.webhookDeliveryFn);
     this.jobsTable.grantReadWriteData(this.webhookDeliveryFn);
     this.webhookDeliveryFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -591,8 +636,13 @@ export class PlatformStack extends cdk.Stack {
     // The TenantStack template is synthesized during 'cdk synth' and needs to be
     // available to the provisioner Lambda via S3.
     // NOTE: This assumes 'cdk synth' has run and populated cdk.out.
+    const tenantStackTemplatePath = ensureTenantStubTemplate(
+      env,
+      this.env,
+      TENANT_AUTHORIZED_RUNTIME_REGIONS,
+    );
     const tenantStackTemplateAsset = new s3assets.Asset(this, 'TenantStackTemplateAsset', {
-      path: path.join(__dirname, `../cdk.out/platform-tenant-stub-${env}.template.json`),
+      path: tenantStackTemplatePath,
     });
 
     const tenantProvisionerFn = this.createPythonLambda({

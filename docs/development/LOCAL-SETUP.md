@@ -58,20 +58,11 @@ After `make dev`, two test tenants are available. Their tenant IDs and JWTs are 
 
 | Variable              | Value      | Purpose  |
 |-----------------------|------------|----------|
-| BASIC_TENANT_ID       | t-test-001 | Local basic tenant ID |
-| BASIC_TENANT_JWT      | JWT        | Basic tenant bearer token |
-| PREMIUM_TENANT_ID     | t-test-002 | Local premium tenant ID |
-| PREMIUM_TENANT_JWT    | JWT        | Premium tenant bearer token |
-| ADMIN_TENANT_ID       | admin-001  | Platform admin tenant ID |
-| ADMIN_JWT             | JWT        | Platform.Admin bearer token |
+| BASIC_TENANT_JWT      | t-basic-001 | basic    |
+| PREMIUM_TENANT_JWT    | t-premium-001 | premium  |
+| ADMIN_JWT             | t-basic-001 | Platform.Admin |
 
-To refresh the local JWT fixtures without rerunning bootstrap, keep the dev services up and run:
-
-```bash
-uv run python scripts/dev-bootstrap.py
-```
-
-Use these with `make agent-invoke AGENT=echo-agent TENANT=t-test-001` or in your tests via `conftest.py`.
+Use these with `make agent-invoke AGENT=echo-agent TENANT=t-basic-001 ENV=local` or in your tests via `conftest.py`.
 
 ## Running Tests
 

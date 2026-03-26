@@ -225,6 +225,21 @@ when available, otherwise fall back to an empty policy that enables nothing.
 Kill switches override all rollout rules. Rollback of capability changes uses
 AppConfig version history rather than ad hoc DynamoDB edits.
 
+### Safe Defaults And Fallbacks
+
+- **AppConfig** is fail-closed for tenant capabilities. If a fetch fails, use the
+  last known good cached document; if none exists, use an empty policy that
+  enables nothing. Control-plane code must not reconstruct capability policy
+  from DynamoDB or SSM.
+- **SSM Parameter Store** is for operational inputs only. Missing or invalid SSM
+  values must never widen tenant capability access. Where a runtime-safe default
+  exists in code, it must be an explicitly approved operational default inside
+  the ADR-defined region policy, not an inferred tenant-policy value.
+- **DynamoDB** remains authoritative for tenant metadata and transactional state.
+  If required tenant or resource records are absent, handlers fail the specific
+  operation rather than rebuilding tenant state from AppConfig documents or SSM
+  parameters.
+
 ## Entity Lifecycle
 
 ![Entity state diagram: tenant, agent, invocation, job, and session lifecycle states and transitions](images/tf_acore_aas_entities_state_diagram.drawio.png)
@@ -272,6 +287,42 @@ Only `promoted` versions are tenant-invokable. The Bridge resolves the active
 version as the highest semver record for an agent where `status=promoted`.
 Rollback is a forward metadata transition on the bad version; the Bridge then
 falls back to the next-highest promoted version without rebuilding artifacts.
+
+### Release Lifecycle Audit Events
+
+Promotion and rollback are control-plane mutations owned by `tenant-api`. After
+the `platform-agents` record is updated successfully, `tenant-api` emits one
+EventBridge event on the platform event bus with detail type:
+
+- `platform.agent_version.promoted`
+- `platform.agent_version.rolled_back`
+
+Event detail schema:
+
+| Field | Meaning |
+|-------|---------|
+| `schemaVersion` | Payload schema version for downstream consumers |
+| `operation` | `promotion` or `rollback` |
+| `occurredAt` | ISO 8601 UTC timestamp for the persisted transition |
+| `actorTenantId` / `actorAppId` / `actorSub` | Control-plane actor identity; platform-operated routes should carry `tenantid=platform` |
+| `releaseId` | Stable immutable release identifier: `{agentName}:{version}` |
+| `agentRecordPk` / `agentRecordSk` | Stable DynamoDB identifiers for the release record |
+| `agentName` / `version` | Human-readable release identifiers |
+| `previousStatus` / `status` | Canonical lifecycle transition |
+| `approvedBy` / `approvedAt` | Approval evidence attached to the release, when present |
+| `releaseNotes` | Operator-supplied promotion or rollback evidence |
+| `evaluationScore` / `evaluationReportUrl` | Evaluation evidence recorded on promotion, when supplied |
+| `rolledBackBy` / `rolledBackAt` | Rollback actor and timestamp, when the transition is `rolled_back` |
+
+Semantics:
+- emitted only for the auditable terminal control-plane transitions covered by ADR-015: `approved -> promoted` and `promoted -> rolled_back`
+- emitted after the DynamoDB update succeeds, so consumers never observe a promotion or rollback that failed persistence
+- one event per successful transition; consumers should treat `releaseId` plus `status` as the stable release transition identity and may also use the EventBridge envelope `id` for delivery-level deduplication
+
+Operational consumers:
+- operator-facing release dashboards and timelines
+- compliance/audit export pipelines that need immutable release history
+- downstream release automation that reacts to confirmed promotion or rollback state changes
 
 **platform-invocations** — invocation audit log
 - PK: `TENANT#{tenantId}`, SK: `INV#{timestamp}#{invocationId}`
