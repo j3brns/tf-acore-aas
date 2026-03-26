@@ -19,7 +19,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EVALUATION_REGION = "eu-central-1"
 VALID_DEPLOYMENT_TYPES = frozenset({"zip", "container"})
 
-_PROJECT_KEYS = frozenset({"name", "version"})
 _MANIFEST_KEYS = frozenset(
     {
         "name",
@@ -103,7 +102,6 @@ def load_agent_manifest(agent_name: str, repo_root: Path | None = None) -> Agent
 
     project_name = _required_string(project_raw, "name", errors, table="[project]")
     version = _required_string(project_raw, "version", errors, table="[project]")
-    _check_unknown_keys(project_raw, _PROJECT_KEYS, errors, table="[project]")
     _check_unknown_keys(manifest_raw, _MANIFEST_KEYS, errors, table="[tool.agentcore]")
 
     name = _required_string(manifest_raw, "name", errors, table="[tool.agentcore]")
