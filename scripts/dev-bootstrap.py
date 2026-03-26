@@ -147,6 +147,22 @@ TABLE_DEFINITIONS: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 TENANT_FIXTURES: list[dict[str, Any]] = [
     {
+        "PK": "TENANT#platform",
+        "SK": "METADATA",
+        "tenant_id": "platform",
+        "app_id": "platform-local",
+        "display_name": "Reserved Platform Tenant",
+        "tier": "premium",
+        "status": "active",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "owner_email": "platform@example.local",
+        "owner_team": "platform",
+        "account_id": "000000000000",
+        "execution_role_arn": "arn:aws:iam::000000000000:role/platform-internal-execution-role",
+        "monthly_budget_usd": Decimal("100000"),
+    },
+    {
         "PK": "TENANT#t-test-001",
         "SK": "METADATA",
         "tenant_id": "t-test-001",
@@ -366,9 +382,6 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
             f"BASIC_TENANT_JWT={tokens.get('basic', '')}",
             f"PREMIUM_TENANT_JWT={tokens.get('premium', '')}",
             f"ADMIN_JWT={tokens.get('admin', '')}",
-            f"TEST_JWT_BASIC={tokens.get('basic', '')}",
-            f"TEST_JWT_PREMIUM={tokens.get('premium', '')}",
-            f"TEST_JWT_ADMIN={tokens.get('admin', '')}",
         ]
     else:
         lines += [
@@ -376,9 +389,6 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
             "BASIC_TENANT_JWT=",
             "PREMIUM_TENANT_JWT=",
             "ADMIN_JWT=",
-            "TEST_JWT_BASIC=",
-            "TEST_JWT_PREMIUM=",
-            "TEST_JWT_ADMIN=",
         ]
     env_test_path.write_text("\n".join(lines) + "\n")
     logger.info("Written %s", env_test_path)

@@ -582,6 +582,40 @@ def step_post_deploy(ctx: BootstrapContext) -> dict[str, Any]:
     tenants_table = ddb_resource.Table("platform-tenants")
     tenants_table.put_item(
         Item={
+            "PK": "TENANT#platform",
+            "SK": "METADATA",
+            "tenant_id": "platform",
+            "tenantId": "platform",
+            "app_id": app_id,
+            "appId": app_id,
+            "display_name": "Reserved Platform Tenant",
+            "displayName": "Reserved Platform Tenant",
+            "tier": "premium",
+            "status": "active",
+            "created_at": now,
+            "createdAt": now,
+            "updated_at": now,
+            "updatedAt": now,
+            "owner_email": owner_email,
+            "ownerEmail": owner_email,
+            "owner_team": owner_team,
+            "ownerTeam": owner_team,
+            "account_id": ctx.account_id,
+            "accountId": ctx.account_id,
+            "runtime_region": ctx.runtime_region,
+            "runtimeRegion": ctx.runtime_region,
+            "fallback_region": ctx.fallback_region,
+            "fallbackRegion": ctx.fallback_region,
+            "executionRoleArn": (
+                f"arn:aws:iam::{ctx.account_id}:role/platform-internal-execution-role"
+            ),
+            "monthly_budget_usd": Decimal("100000"),
+            "monthlyBudgetUsd": Decimal("100000"),
+        }
+    )
+
+    tenants_table.put_item(
+        Item={
             "PK": f"TENANT#{admin_tenant_id}",
             "SK": "METADATA",
             "tenant_id": admin_tenant_id,

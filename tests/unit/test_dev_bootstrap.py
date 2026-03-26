@@ -95,7 +95,7 @@ def test_seed_tenants_creates_two_records() -> None:
     bootstrap.ensure_tables(ddb_client)  # type: ignore[attr-defined]
     bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
     items = _scan_table(ddb_resource, "platform-tenants")
-    assert len(items) == 2
+    assert len(items) == 3
 
 
 @mock_aws
@@ -125,7 +125,7 @@ def test_seed_tenants_idempotent_no_duplicates() -> None:
     bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
     bootstrap.seed_tenants(ddb_resource)  # type: ignore[attr-defined]
     items = _scan_table(ddb_resource, "platform-tenants")
-    assert len(items) == 2
+    assert len(items) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +299,6 @@ def test_write_env_test_with_tokens(tmp_path: Path) -> None:
     assert "BASIC_TENANT_JWT=jwt-basic" in content
     assert "PREMIUM_TENANT_JWT=jwt-premium" in content
     assert "ADMIN_JWT=jwt-admin" in content
-    assert "TEST_JWT_BASIC=jwt-basic" in content
-    assert "TEST_JWT_PREMIUM=jwt-premium" in content
-    assert "TEST_JWT_ADMIN=jwt-admin" in content
     assert "AWS_REGION=eu-west-2" in content
     assert "LOCALSTACK_ENDPOINT=http://localhost:4566" in content
 
@@ -312,8 +309,6 @@ def test_write_env_test_without_tokens_writes_empty_values(tmp_path: Path) -> No
     content = env_test_path.read_text()
     assert "BASIC_TENANT_JWT=" in content
     assert "PREMIUM_TENANT_JWT=" in content
-    assert "TEST_JWT_BASIC=" in content
-    assert "TEST_JWT_PREMIUM=" in content
     assert "mock-jwks service was not running" in content
 
 
@@ -355,7 +350,7 @@ def test_run_bootstrap_full_first_run(tmp_path: Path) -> None:
             env_test_path=env_test_path,
         )
 
-    assert len(_scan_table(ddb_resource, "platform-tenants")) == 2
+    assert len(_scan_table(ddb_resource, "platform-tenants")) == 3
     assert len(_scan_table(ddb_resource, "platform-agents")) == 1
     assert len(_scan_table(ddb_resource, "platform-tools")) == 1
     assert env_test_path.exists()
@@ -397,6 +392,6 @@ def test_run_bootstrap_twice_no_duplicate_records(tmp_path: Path) -> None:
         }
 
     assert counts_after_second == counts_after_first
-    assert counts_after_second["tenants"] == 2
+    assert counts_after_second["tenants"] == 3
     assert counts_after_second["agents"] == 1
     assert counts_after_second["tools"] == 1

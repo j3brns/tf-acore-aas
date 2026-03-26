@@ -119,7 +119,7 @@ def test_resolve_token_uses_bootstrap_fixture_aliases_for_known_tenant(
         "\n".join(
             [
                 "BASIC_TENANT_ID=t-basic-001",
-                "TEST_JWT_BASIC=fixture-basic-token",  # pragma: allowlist secret
+                "BASIC_TENANT_JWT=fixture-basic-token",  # pragma: allowlist secret
             ]
         )
         + "\n",

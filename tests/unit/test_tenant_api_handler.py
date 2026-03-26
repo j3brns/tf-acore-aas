@@ -617,6 +617,7 @@ def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, A
         ("tenant--one", "tenantId must not contain consecutive hyphens"),
         ("tenant_one", "tenantId must match ^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$"),
         ("stub", "tenantId is reserved"),
+        ("platform", "tenantId is reserved"),
     ],
 )
 def test_create_tenant_rejects_invalid_tenant_id_values(
