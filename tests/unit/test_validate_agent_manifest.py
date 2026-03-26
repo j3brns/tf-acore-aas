@@ -219,6 +219,33 @@ class TestRequiredFields:
         with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
             assert validate_manifest("test-agent") is False
 
+    def test_project_packaging_metadata_is_allowed(self, tmp_path: Path) -> None:
+        _write_manifest(
+            tmp_path,
+            "test-agent",
+            """\
+            [project]
+            name = "test-agent"
+            version = "1.0.0"
+            description = "Example agent"
+            requires-python = ">=3.12"
+            dependencies = ["boto3>=1.37.0"]
+
+            [dependency-groups]
+            dev = ["pytest>=8.0.0"]
+
+            [tool.agentcore]
+            name = "test-agent"
+            owner_team = "team-test"
+            tier_minimum = "basic"
+            handler = "handler:invoke"
+            invocation_mode = "sync"
+        """,
+        )
+
+        with patch("scripts.validate_agent_manifest.REPO_ROOT", tmp_path):
+            assert validate_manifest("test-agent") is True
+
     def test_loader_reads_optional_sections(self, tmp_path: Path) -> None:
         _write_manifest(
             tmp_path,
@@ -279,12 +306,14 @@ invocation_mode = "sync"
 
 class TestHandlerFormat:
     def test_handler_without_colon_is_rejected(self, tmp_path: Path) -> None:
+        invalid_handler_toml = _MINIMAL_TOML.replace(
+            'handler = "handler:invoke"',
+            'handler = "handler_invoke"',
+        )
         _write_manifest(
             tmp_path,
             "my-agent",
-            _MINIMAL_TOML.replace(
-                'handler = "handler:invoke"', 'handler = "handler_invoke"'
-            ).format(name="my-agent"),
+            invalid_handler_toml.format(name="my-agent"),
         )
         from scripts.agent_manifest import ManifestValidationError
 

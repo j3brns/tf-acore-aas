@@ -72,7 +72,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-https://github.com/j3brns/tf-acore-aas/pull/330/conflict?name=docs%252Fdevelopment%252FAGENT-DEVELOPER-GUIDE.md&ancestor_oid=dc566f919ca5fc5b5e3dea61ba6a13e53045a4a6&base_oid=61bf5a8f2a40927646c23893ec3cd6619a0f96ba&head_oid=c605d2c7cbc3a6696f08db638e21143baa050ecadev = [
+dev = [
     "bedrock-agentcore-starter-toolkit>=0.2.5",
     "pytest>=8.0.0",
 ]
@@ -97,7 +97,7 @@ type = "zip"                   # zip (default) | container
 
 | Table | Fields | Required |
 |-------|--------|----------|
-| `[project]` | `name`, `version` | yes |
+| `[project]` | Platform validates `name`, `version`; standard packaging keys such as `description`, `requires-python`, `dependencies`, and dependency groups remain allowed and agent-owned | yes |
 | `[tool.agentcore]` | `name`, `owner_team`, `tier_minimum`, `handler`, `invocation_mode` | yes |
 | `[tool.agentcore]` | `streaming_enabled`, `estimated_duration_seconds` | no |
 | `[tool.agentcore.llm]` | `model_id`, `max_tokens` | no |
@@ -106,6 +106,7 @@ type = "zip"                   # zip (default) | container
 
 Validation rules:
 - `project.name`, `tool.agentcore.name`, and the agent directory name must match.
+- The platform does not reject additional agent-owned packaging keys outside the platform-owned `tool.agentcore` tables.
 - `handler` must use `module:function` form.
 - `tier_minimum` must be `basic`, `standard`, or `premium`.
 - `invocation_mode` must be `sync`, `streaming`, or `async`.
