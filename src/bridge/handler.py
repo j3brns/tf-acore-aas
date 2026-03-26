@@ -30,7 +30,7 @@ from botocore.exceptions import (
     EndpointConnectionError,
     ReadTimeoutError,
 )
-from data_access import TenantScopedDynamoDB, TenantScopedS3
+from data_access import TenantCapabilityClient, TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AgentRecord,
     AgentStatus,
@@ -93,6 +93,7 @@ _ssm_client = None
 _sts_client = None
 _dynamodb_resource = None
 _cloudwatch_client = None
+_capability_client = None
 
 # Cache for SSM parameters (60s TTL as per ARCHITECTURE.md)
 _config_cache: dict[str, Any] = {}
@@ -101,6 +102,13 @@ _config_cache_expiry: float = 0
 
 def _aws_region() -> str:
     return os.environ["AWS_REGION"]
+
+
+def get_capability_client():
+    global _capability_client
+    if _capability_client is None:
+        _capability_client = TenantCapabilityClient()
+    return _capability_client
 
 
 def get_ssm():
@@ -846,6 +854,31 @@ def _handler_core(
         )
         return error_response(
             403, "FORBIDDEN", "Tenant tier insufficient for this agent", request_id
+        )
+
+    # 6.5. Validate Capability (ADR-017)
+    capability_client = get_capability_client()
+    policy = capability_client.fetch_policy()
+
+    # Generic invocation capability (e.g. kill switch)
+    if not policy.is_enabled("agents.invoke", tenant_id=tenant_id, tenant_tier=tenant_tier):
+        logger.warning(
+            "Agent invocation capability disabled",
+            extra={"tenant_id": tenant_id, "capability": "agents.invoke"},
+        )
+        return error_response(403, "FORBIDDEN", "Agent invocation capability disabled", request_id)
+
+    # Specific agent capability rollout
+    if not policy.is_enabled(f"agents.{agent_name}", tenant_id=tenant_id, tenant_tier=tenant_tier):
+        logger.warning(
+            "Specific agent capability disabled",
+            extra={"tenant_id": tenant_id, "capability": f"agents.{agent_name}"},
+        )
+        return error_response(
+            403,
+            "FORBIDDEN",
+            f"Access to agent '{agent_name}' is not enabled for this tenant",
+            request_id,
         )
 
     # 7. Invoke Agent (with failover/retry logic)

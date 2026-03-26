@@ -19,6 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "data-acces
 from src.bridge.handler import handler
 
 
+@pytest.fixture(autouse=True)
+def mock_capabilities():
+    """Mock TenantCapabilityClient to allow all agents for testing."""
+    with patch("src.bridge.handler.get_capability_client") as mock:
+        mock_client = MagicMock()
+        mock.return_value = mock_client
+
+        # Policy that allows everything by default for tests
+        policy = MagicMock()
+        policy.is_enabled.return_value = True
+        mock_client.fetch_policy.return_value = policy
+        yield mock
+
+
 class FakeLambdaContext:
     function_name = "bridge"
     memory_limit_in_mb = 256

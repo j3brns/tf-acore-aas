@@ -33,6 +33,12 @@ from aws_lambda_powertools.utilities.idempotency import (
 from aws_lambda_powertools.utilities.parameters import get_secret
 from jwt import PyJWKClient
 
+try:
+    from data_access import TenantCapabilityClient
+except ImportError:
+    # Fallback for environments where data-access-lib is not yet bundled
+    TenantCapabilityClient = None
+
 logger = Logger(service="gateway-request-interceptor")
 tracer = Tracer()
 
@@ -45,6 +51,17 @@ SCOPED_TOKEN_ISSUER = os.environ.get("SCOPED_TOKEN_ISSUER", "platform-gateway")
 _TIER_ORDER = {"basic": 0, "standard": 1, "premium": 2}
 _jwk_client: PyJWKClient | None = None
 _dynamodb_resource: Any | None = None
+_capability_client: Any | None = None
+
+
+def get_capability_client():
+    """Lazy initialization of TenantCapabilityClient."""
+    global _capability_client
+    if _capability_client is None and TenantCapabilityClient:
+        _capability_client = TenantCapabilityClient()
+    return _capability_client
+
+
 _warned_fallback_signing_key = False
 _idempotency_handler: Callable[..., dict[str, Any]] | None = None
 _idempotency_handler_table: str | None = None
@@ -446,6 +463,23 @@ def _process_request(event: dict[str, Any]) -> dict[str, Any]:
                 code=-32003,
                 message="Tool is unavailable for this tenant",
             )
+
+        # 6. Validate Capability (ADR-017)
+        capability_client = get_capability_client()
+        if capability_client:
+            policy = capability_client.fetch_policy()
+            if not policy.is_enabled(f"tools.{tool_name}", tenant_id=tenant_id, tenant_tier=tier):
+                logger.warning(
+                    "Tool capability disabled",
+                    extra={"tenant_id": tenant_id, "capability": f"tools.{tool_name}"},
+                )
+                return _error_response(
+                    gateway_request=gateway_request,
+                    request_id=jsonrpc_id,
+                    status_code=403,
+                    code=-32003,
+                    message=f"Tool '{tool_name}' is not enabled for this tenant",
+                )
 
         minimum_tier = _extract_minimum_tier(tool_record)
         if not _is_tier_allowed(tier, minimum_tier):

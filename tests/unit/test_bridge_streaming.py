@@ -21,6 +21,20 @@ class FakeLambdaContext:
         self.invoked_function_arn = "arn:aws:lambda:eu-west-2:123456789012:function:test-function"
 
 
+@pytest.fixture(autouse=True)
+def mock_capabilities():
+    """Mock TenantCapabilityClient to allow all agents for testing."""
+    with patch("src.bridge.handler.get_capability_client") as mock:
+        mock_client = MagicMock()
+        mock.return_value = mock_client
+
+        # Policy that allows everything by default for tests
+        policy = MagicMock()
+        policy.is_enabled.return_value = True
+        mock_client.fetch_policy.return_value = policy
+        yield mock
+
+
 @pytest.fixture
 def authorizer_event():
     return {

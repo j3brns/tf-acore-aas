@@ -14,6 +14,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as appconfig from 'aws-cdk-lib/aws-appconfig';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as codedeploy from 'aws-cdk-lib/aws-codedeploy';
@@ -218,6 +219,89 @@ export class PlatformStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // --- AppConfig (ADR-017) ---
+
+    const appconfigApp = new appconfig.CfnApplication(this, 'AppConfigApplication', {
+      name: `platform-config-${env}`,
+    });
+
+    const appconfigEnv = new appconfig.CfnEnvironment(this, 'AppConfigEnvironment', {
+      applicationId: appconfigApp.ref,
+      name: env,
+    });
+
+    const capabilityProfile = new appconfig.CfnConfigurationProfile(this, 'CapabilityProfile', {
+      applicationId: appconfigApp.ref,
+      locationUri: 'hosted',
+      name: 'tenant-capabilities',
+      validators: [
+        {
+          type: 'JSON_SCHEMA',
+          content: JSON.stringify({
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            type: 'object',
+            properties: {
+              schema_version: { type: 'string' },
+              capabilities: {
+                type: 'object',
+                additionalProperties: {
+                  type: 'object',
+                  properties: {
+                    enabled: { type: 'boolean' },
+                    rollout_percentage: { type: 'integer', minimum: 0, maximum: 100 },
+                    tier_allow_list: { type: 'array', items: { enum: ['basic', 'standard', 'premium'] } },
+                    tenant_allow_list: { type: 'array', items: { type: 'string' } },
+                  },
+                  required: ['enabled'],
+                },
+              },
+              killed_capabilities: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['schema_version'],
+          }),
+        },
+      ],
+    });
+
+    // SSM parameters for AppConfig bootstrap (ADR-017)
+    new ssm.StringParameter(this, 'AppConfigAppIdParam', {
+      parameterName: `/platform/${env}/config/appconfig-app-id`,
+      stringValue: appconfigApp.ref,
+    });
+
+    new ssm.StringParameter(this, 'AppConfigEnvIdParam', {
+      parameterName: `/platform/${env}/config/appconfig-env-id`,
+      stringValue: appconfigEnv.ref,
+    });
+
+    new ssm.StringParameter(this, 'AppConfigCapabilityProfileIdParam', {
+      parameterName: `/platform/${env}/config/appconfig-capability-profile-id`,
+      stringValue: capabilityProfile.ref,
+    });
+
+    // Default configuration document (ADR-017 bootstrap)
+    new appconfig.CfnHostedConfigurationVersion(this, 'DefaultCapabilityConfiguration', {
+      applicationId: appconfigApp.ref,
+      configurationProfileId: capabilityProfile.ref,
+      contentType: 'application/json',
+      content: JSON.stringify({
+        schema_version: '2026-03-21',
+        capabilities: {
+          'agents.invoke': {
+            enabled: true,
+            rollout_percentage: 100,
+            tier_allow_list: ['basic', 'standard', 'premium'],
+          },
+          'tools.browser': {
+            enabled: true,
+            rollout_percentage: 100,
+            tier_allow_list: ['standard', 'premium'],
+          },
+        },
+        killed_capabilities: [],
+      }),
+    });
+
     // --- Lambdas ---
 
     this.tenantApiFn = this.createPythonLambda({
@@ -281,6 +365,9 @@ export class PlatformStack extends cdk.Stack {
         INVOCATIONS_TABLE: this.invocationsTable.tableName,
         JOBS_TABLE: this.jobsTable.tableName,
         TENANTS_TABLE: this.tenantsTable.tableName,
+        APPCONFIG_APPLICATION_ID: appconfigApp.ref,
+        APPCONFIG_ENVIRONMENT_ID: appconfigEnv.ref,
+        APPCONFIG_PROFILE_ID: capabilityProfile.ref,
       },
     });
 
@@ -288,6 +375,16 @@ export class PlatformStack extends cdk.Stack {
     this.agentsTable.grantReadData(this.bridgeFn);
     this.invocationsTable.grantReadWriteData(this.bridgeFn);
     this.jobsTable.grantReadWriteData(this.bridgeFn);
+    this.bridgeFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['appconfig:GetLatestConfiguration', 'appconfig:StartConfigurationSession'],
+        resources: [
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}`,
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}/environment/${appconfigEnv.ref}`,
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}/configurationprofile/${capabilityProfile.ref}`,
+        ],
+      }),
+    );
 
     const webhookDeliveryRetryDlq = new sqs.Queue(this, 'webhookDeliveryRetryDlq', {
       encryption: sqs.QueueEncryption.SQS_MANAGED,
@@ -368,10 +465,23 @@ export class PlatformStack extends cdk.Stack {
         ENTRA_AUDIENCE: entra.audience,
         ENTRA_ISSUER: entra.issuer,
         TENANTS_TABLE: this.tenantsTable.tableName,
+        APPCONFIG_APPLICATION_ID: appconfigApp.ref,
+        APPCONFIG_ENVIRONMENT_ID: appconfigEnv.ref,
+        APPCONFIG_PROFILE_ID: capabilityProfile.ref,
       },
     });
 
     this.tenantsTable.grantReadData(this.authoriserFn);
+    this.authoriserFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['appconfig:GetLatestConfiguration', 'appconfig:StartConfigurationSession'],
+        resources: [
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}`,
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}/environment/${appconfigEnv.ref}`,
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}/configurationprofile/${capabilityProfile.ref}`,
+        ],
+      }),
+    );
     this.jobsTable.grantReadWriteData(this.webhookDeliveryFn);
     this.webhookDeliveryFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -404,10 +514,23 @@ export class PlatformStack extends cdk.Stack {
         IDEMPOTENCY_TABLE: this.gatewayIdempotencyTable.tableName,
         SCOPED_TOKEN_SIGNING_KEY_SECRET_ARN: scopedTokenSigningKeySecret.secretArn,
         PLATFORM_ENV: env,
+        APPCONFIG_APPLICATION_ID: appconfigApp.ref,
+        APPCONFIG_ENVIRONMENT_ID: appconfigEnv.ref,
+        APPCONFIG_PROFILE_ID: capabilityProfile.ref,
       },
     });
 
     scopedTokenSigningKeySecret.grantRead(this.requestInterceptorFn);
+    this.requestInterceptorFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['appconfig:GetLatestConfiguration', 'appconfig:StartConfigurationSession'],
+        resources: [
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}`,
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}/environment/${appconfigEnv.ref}`,
+          `arn:aws:appconfig:${this.region}:${this.account}:application/${appconfigApp.ref}/configurationprofile/${capabilityProfile.ref}`,
+        ],
+      }),
+    );
 
     this.responseInterceptorFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../gateway/interceptors'),

@@ -46,7 +46,22 @@ def reset_globals():
     request_interceptor._idempotency_handler = None
     request_interceptor._idempotency_handler_table = None
     request_interceptor._warned_fallback_signing_key = False
+    request_interceptor._capability_client = None
     yield
+
+
+@pytest.fixture(autouse=True)
+def mock_capabilities():
+    """Mock TenantCapabilityClient to allow all tools for testing."""
+    with patch("gateway.interceptors.request_interceptor.get_capability_client") as mock:
+        mock_client = MagicMock()
+        mock.return_value = mock_client
+
+        # Policy that allows everything by default for tests
+        policy = MagicMock()
+        policy.is_enabled.return_value = True
+        mock_client.fetch_policy.return_value = policy
+        yield mock
 
 
 class MockContext:

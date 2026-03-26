@@ -23,10 +23,17 @@ from typing import Any
 
 import boto3
 from aws_lambda_powertools import Logger
+from aws_lambda_powertools.utilities.parameters import AppConfigProvider
 from boto3.dynamodb.conditions import ConditionBase, Key
 
 from data_access.exceptions import TenantAccessViolation
-from data_access.models import PaginatedItems, TenantContext
+from data_access.models import (
+    CapabilityRollout,
+    PaginatedItems,
+    TenantCapabilityPolicy,
+    TenantContext,
+    TenantTier,
+)
 
 logger = Logger(service="data-access-lib")
 
@@ -463,3 +470,92 @@ class TenantScopedS3:
             Params={"Bucket": bucket, "Key": key},
             ExpiresIn=expires_in,
         )
+
+
+# ---------------------------------------------------------------------------
+# TenantCapabilityClient (ADR-017)
+# ---------------------------------------------------------------------------
+
+
+class TenantCapabilityClient:
+    """
+    Client for fetching and evaluating tenant capability policy from AppConfig.
+
+    Implements ADR-017: AppConfig owns dynamic tenant capability policy only.
+    evaluates it with deny-by-default fallback semantics: use the last known
+    good cached document when available; otherwise fall back to empty policy.
+    """
+
+    def __init__(
+        self,
+        application: str | None = None,
+        environment: str | None = None,
+        profile: str | None = None,
+        *,
+        provider: AppConfigProvider | None = None,
+    ) -> None:
+        self._application = application or os.environ.get("APPCONFIG_APPLICATION_ID")
+        self._environment = environment or os.environ.get("APPCONFIG_ENVIRONMENT_ID")
+        self._profile = profile or os.environ.get("APPCONFIG_PROFILE_ID")
+
+        self._provider = provider or (
+            AppConfigProvider(application=self._application, environment=self._environment)
+            if self._application and self._environment
+            else None
+        )
+
+    def fetch_policy(self) -> TenantCapabilityPolicy:
+        """Fetch the active capability policy from AppConfig.
+
+        Returns TenantCapabilityPolicy.safe_fallback() on any error.
+        Policy is cached for 60 seconds (max_age) to minimize AppConfig calls.
+        """
+        if not self._provider or not self._profile:
+            logger.warning("AppConfig provider or profile not configured; using fallback policy")
+            return TenantCapabilityPolicy.safe_fallback()
+
+        try:
+            # get() returns a dict if the profile is JSON and parsed by AppConfig.
+            # Local caching and session state handled by Powertools AppConfigProvider.
+            raw_policy = self._provider.get(self._profile, max_age=60)
+            if not isinstance(raw_policy, dict):
+                logger.error(
+                    "AppConfig policy is not a JSON object",
+                    extra={"type": str(type(raw_policy)), "profile": self._profile},
+                )
+                return TenantCapabilityPolicy.safe_fallback()
+
+            # Map raw dict to TenantCapabilityPolicy dataclass
+            # NOTE: Any malformed field will result in fallback for that specific rollout.
+            capabilities = {}
+            for cap_name, rollout_dict in raw_policy.get("capabilities", {}).items():
+                if not isinstance(rollout_dict, dict):
+                    logger.error(
+                        "Capability rollout must be a JSON object; skipping",
+                        extra={"capability": cap_name, "type": str(type(rollout_dict))},
+                    )
+                    continue
+
+                try:
+                    capabilities[cap_name] = CapabilityRollout(
+                        enabled=rollout_dict.get("enabled", False),
+                        rollout_percentage=rollout_dict.get("rollout_percentage", 100),
+                        tier_allow_list=frozenset(
+                            TenantTier(t) for t in rollout_dict.get("tier_allow_list", [])
+                        ),
+                        tenant_allow_list=frozenset(rollout_dict.get("tenant_allow_list", [])),
+                    )
+                except (ValueError, TypeError):
+                    logger.error(
+                        "Malformed capability rollout in policy; skipping",
+                        extra={"capability": cap_name, "rollout_dict": rollout_dict},
+                    )
+
+            return TenantCapabilityPolicy(
+                schema_version=str(raw_policy.get("schema_version", "unknown")),
+                capabilities=capabilities,
+                killed_capabilities=frozenset(raw_policy.get("killed_capabilities", [])),
+            )
+        except Exception:
+            logger.exception("Failed to fetch AppConfig capability policy; using fallback")
+            return TenantCapabilityPolicy.safe_fallback()
