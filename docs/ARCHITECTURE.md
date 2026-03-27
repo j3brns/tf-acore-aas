@@ -142,6 +142,39 @@ background work, then `app.complete_async_task` when done. Client polls
 `GET /v1/jobs/{jobId}` or registers a webhook. No standalone async-runner Lambda;
 no SQS routing for invocation execution. See [ADR-010](decisions/ADR-010-async-agentcore-native.md).
 
+## Interactive AG-UI Path (Proposed)
+
+The current approved northbound invoke path remains the REST control plane:
+CloudFront → REST API Gateway → Authoriser Lambda → Bridge Lambda →
+AgentCore Runtime.
+
+AgentCore AG-UI is a proposed additive path for human interactive experiences in
+the SPA. It is not a replacement for the REST bridge and is not the canonical
+public API for B2B tenant integrations.
+
+Proposed AG-UI shape:
+
+```text
+SPA
+  → Platform bootstrap endpoint
+      Validates Entra identity and tenant context
+      Confirms agent is AG-UI-capable
+      Records audit/session metadata
+      Returns constrained AG-UI connection details
+  → Per-agent AgentCore AG-UI runtime
+      SSE or WebSocket interactive session
+      Human-facing real-time interaction only
+```
+
+Design constraints:
+- REST remains the supported machine/API invocation path
+- AG-UI is per-agent, not a shared runtime
+- No Cognito is introduced; any AG-UI auth flow must remain compatible with the
+  Entra-first identity model
+- Platform bootstrap remains the policy and audit boundary for AG-UI sessions
+
+See [ADR-018](decisions/ADR-018-agentcore-ag-ui-integration.md).
+
 ## Tenant Isolation Model
 
 Isolation enforced at four independent layers. A single-layer breach does not
