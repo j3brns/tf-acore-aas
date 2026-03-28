@@ -5,8 +5,10 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 try:
+    import agent_registry
     import handler as shared
 except ImportError:  # pragma: no cover - local package import path
+    from src.tenant_api import agent_registry
     from src.tenant_api import handler as shared
 
 
@@ -24,7 +26,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             appid=caller.app_id or "unknown",
             tenantid=caller.tenant_id or "unknown",
         )
-        response = shared._dispatch_platform_routes(path, method, event, caller, deps)
+        response = agent_registry.dispatch_routes(path, method, event, caller, deps)
         if response:
             return response
         return shared._error(405, "METHOD_NOT_ALLOWED", "Unsupported agent registry route")
