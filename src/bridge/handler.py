@@ -45,6 +45,9 @@ from data_access.models import (
     normalize_agent_status,
 )
 
+from .config_provider import ConfigProvider
+from .runtime_invoker import RuntimeInvoker
+
 logger = Logger(service="bridge")
 tracer = Tracer()
 
@@ -98,6 +101,7 @@ _capability_client = None
 # Cache for SSM parameters (60s TTL as per ARCHITECTURE.md)
 _config_cache: dict[str, Any] = {}
 _config_cache_expiry: float = 0
+_config_provider: ConfigProvider | None = None
 
 
 def _aws_region() -> str:
@@ -165,20 +169,10 @@ def get_runtime_client(region: str, credentials: dict[str, Any] | None = None) -
     return session.client(**client_kwargs)
 
 
-def get_config(force_refresh: bool = False) -> dict[str, Any]:
-    """Fetch and cache configuration from SSM.
-
-    Args:
-        force_refresh: If True, bypass cache and fetch fresh from SSM.
-    """
-    global _config_cache, _config_cache_expiry
-    now = time.time()
-    if not force_refresh and now < _config_cache_expiry:
-        return _config_cache
-
+def _fetch_ssm_config() -> dict[str, Any]:
+    """Fetch Bridge runtime configuration from SSM."""
     try:
         ssm = get_ssm()
-        # Fetch both runtime region and mock URL
         names = [RUNTIME_REGION_PARAM, MOCK_RUNTIME_URL_PARAM]
         response = ssm.get_parameters(Names=names)
 
@@ -192,14 +186,35 @@ def get_config(force_refresh: bool = False) -> dict[str, Any]:
             "runtime_region": params.get(RUNTIME_REGION_PARAM, "eu-west-1"),
             "mock_runtime_url": params.get(MOCK_RUNTIME_URL_PARAM),
         }
-        _config_cache_expiry = now + 60  # 60s cache TTL
         return _config_cache
     except Exception:
         logger.exception("Failed to fetch config from SSM")
-        # Return stale cache if available, else defaults
-        if _config_cache:
-            return _config_cache
-        return {"runtime_region": "eu-west-1", "mock_runtime_url": None}
+        raise
+
+
+def _config_defaults() -> dict[str, Any]:
+    return {"runtime_region": "eu-west-1", "mock_runtime_url": None}
+
+
+def _get_config_provider() -> ConfigProvider:
+    global _config_provider
+    if _config_provider is None:
+        _config_provider = ConfigProvider(
+            fetcher=_fetch_ssm_config,
+            fallback_factory=_config_defaults,
+            ttl_seconds=60,
+        )
+    return _config_provider
+
+
+def get_config(force_refresh: bool = False) -> dict[str, Any]:
+    """Fetch and cache configuration from SSM."""
+    global _config_cache, _config_cache_expiry
+    provider = _get_config_provider()
+    config = provider.get(force_refresh=force_refresh)
+    _config_cache = dict(config)
+    _config_cache_expiry = provider.expires_at
+    return config
 
 
 def acquire_lock(lock_name: str, identity: str, ttl_seconds: int = 300) -> str | None:
@@ -1189,6 +1204,19 @@ def get_webhook_registration(
     return record
 
 
+def _runtime_invoker() -> RuntimeInvoker:
+    return RuntimeInvoker(
+        get_config=get_config,
+        invoke_mock_runtime=invoke_mock_runtime,
+        invoke_real_runtime=invoke_real_runtime,
+        is_runtime_unavailable_error=_is_runtime_unavailable_error,
+        trigger_failover=trigger_failover,
+        runtime_failure_response=_runtime_failure_response,
+        log_warning=logger.warning,
+        log_exception=logger.exception,
+    )
+
+
 def invoke_agent(
     agent: AgentRecord,
     tenant_context: TenantContext,
@@ -1198,99 +1226,16 @@ def invoke_agent(
     request_id: str,
     response_stream: Any,
 ) -> Any:
-    """Invoke the agent with failover and retry logic."""
-    config = get_config()
-    mock_url = config.get("mock_runtime_url")
-    invocation_id = str(uuid.uuid4())
-    start_time = time.time()
-
-    try:
-        if mock_url:
-            return invoke_mock_runtime(
-                mock_url,
-                agent,
-                tenant_context,
-                prompt,
-                session_id,
-                webhook_id,
-                request_id,
-                response_stream,
-                invocation_id,
-                start_time,
-            )
-        else:
-            return invoke_real_runtime(
-                config["runtime_region"],
-                agent,
-                tenant_context,
-                prompt,
-                session_id,
-                webhook_id,
-                request_id,
-                response_stream,
-                invocation_id,
-                start_time,
-            )
-    except Exception as e:
-        if _is_runtime_unavailable_error(e):
-            logger.warning("Runtime unavailable, attempting failover")
-            new_region = trigger_failover(config["runtime_region"])
-            # Update config for retry
-            config = get_config(force_refresh=True)
-            mock_url = config.get("mock_runtime_url")
-
-            try:
-                if mock_url:
-                    return invoke_mock_runtime(
-                        mock_url,
-                        agent,
-                        tenant_context,
-                        prompt,
-                        session_id,
-                        webhook_id,
-                        request_id,
-                        response_stream,
-                        invocation_id,
-                        start_time,
-                    )
-                return invoke_real_runtime(
-                    new_region,
-                    agent,
-                    tenant_context,
-                    prompt,
-                    session_id,
-                    webhook_id,
-                    request_id,
-                    response_stream,
-                    invocation_id,
-                    start_time,
-                )
-            except Exception as retry_exc:
-                logger.exception("Invocation failed after failover retry")
-                return _runtime_failure_response(
-                    tenant_context,
-                    agent,
-                    invocation_id,
-                    start_time,
-                    agent.invocation_mode,
-                    new_region,
-                    request_id,
-                    retry_exc,
-                    session_id=session_id,
-                )
-
-        logger.exception("Invocation failed")
-        return _runtime_failure_response(
-            tenant_context,
-            agent,
-            invocation_id,
-            start_time,
-            agent.invocation_mode,
-            config["runtime_region"],
-            request_id,
-            e,
-            session_id=session_id,
-        )
+    """Invoke the agent with runtime selection and failover policy."""
+    return _runtime_invoker().invoke(
+        agent=agent,
+        tenant_context=tenant_context,
+        prompt=prompt,
+        session_id=session_id,
+        webhook_id=webhook_id,
+        request_id=request_id,
+        response_stream=response_stream,
+    )
 
 
 def invoke_real_runtime(
