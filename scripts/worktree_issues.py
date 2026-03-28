@@ -44,6 +44,7 @@ WORKTREE_CLOSEOUT_DIR = ".build/worktree-closeouts"
 WORKTREE_RUNS_DIR = ".build/worktree-runs"
 WORKTREE_AGENT_RUN_DIR = ".build/agent-run"
 WORKTREE_STATE_DIR = ".build/worktree-state"
+VALIDATION_RECEIPTS_DIR = ".build/validation-receipts"
 DETACHED_STARTUP_PROBE_SECONDS = 0.5
 DETACHED_STARTUP_PROBE_INTERVAL_SECONDS = 0.1
 AGENT_CAPABILITIES: dict[str, dict[str, bool]] = {
@@ -1270,6 +1271,14 @@ def issue_state_path(root: Path, issue_number: int) -> Path:
     return worktree_state_root(root) / f"issue-{issue_number}.json"
 
 
+def validation_receipts_root(root: Path) -> Path:
+    return root / VALIDATION_RECEIPTS_DIR
+
+
+def validation_receipt_path(root: Path, issue_number: int, head_sha: str) -> Path:
+    return validation_receipts_root(root) / f"issue-{issue_number}-{head_sha[:12]}.json"
+
+
 def worktree_agent_run_dir(path: Path) -> Path:
     return path / WORKTREE_AGENT_RUN_DIR
 
@@ -1284,6 +1293,113 @@ def read_json_file(path: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def find_latest_validation_receipt(root: Path, issue_id: int) -> Path | None:
+    receipts_root = validation_receipts_root(root)
+    if not receipts_root.exists():
+        return None
+    matches = sorted(
+        receipts_root.glob(f"issue-{issue_id}-*.json"),
+        key=lambda candidate: candidate.stat().st_mtime,
+    )
+    return matches[-1] if matches else None
+
+
+def git_issue_branches(root: Path, issue_id: int) -> dict[str, list[str]]:
+    def _list_branches(pattern: str, *, remote: bool) -> list[str]:
+        cmd = ["git", "branch"]
+        if remote:
+            cmd.append("-r")
+        cmd.extend(["--format=%(refname:short)", "--list", pattern])
+        output = run(cmd, cwd=root, check=False).stdout
+        return [line.strip() for line in output.splitlines() if line.strip()]
+
+    return {
+        "local": _list_branches(f"wt/*/{issue_id}-*", remote=False),
+        "remote": _list_branches(f"origin/wt/*/{issue_id}-*", remote=True),
+    }
+
+
+def git_log_issue_matches(root: Path, issue_id: int, *, limit: int = 5) -> list[dict[str, str]]:
+    output = run(
+        [
+            "git",
+            "log",
+            "--all",
+            "--extended-regexp",
+            f"-n{limit}",
+            "--pretty=format:%H%x09%cI%x09%s",
+            "--grep",
+            rf"#{issue_id}\b",
+            "--grep",
+            rf"issue[- ]{issue_id}\b",
+        ],
+        cwd=root,
+        check=False,
+    ).stdout.strip()
+    matches: list[dict[str, str]] = []
+    if not output:
+        return matches
+    for line in output.splitlines():
+        sha, ts, subject = (line.split("\t", 2) + ["", ""])[:3]
+        matches.append({"sha": sha, "timestamp": ts, "subject": subject})
+    return matches
+
+
+def historical_issue_evidence(root: Path, issue_id: int) -> dict[str, object] | None:
+    branches = git_issue_branches(root, issue_id)
+    preferred_branch = next(iter(branches["local"]), None) or next(iter(branches["remote"]), None)
+    branch_tip: dict[str, str] | None = None
+    divergence: dict[str, int] | None = None
+    if preferred_branch:
+        tip = run(
+            ["git", "log", "-1", "--format=%H%x09%cI%x09%s", preferred_branch],
+            cwd=root,
+            check=False,
+        ).stdout.strip()
+        if tip:
+            sha, ts, subject = (tip.split("\t", 2) + ["", ""])[:3]
+            branch_tip = {"sha": sha, "timestamp": ts, "subject": subject}
+        counts = run(
+            ["git", "rev-list", "--left-right", "--count", f"origin/main...{preferred_branch}"],
+            cwd=root,
+            check=False,
+        ).stdout.strip()
+        if counts:
+            behind, ahead = [int(part) for part in counts.split()]
+            divergence = {"behind": behind, "ahead": ahead}
+    log_matches = git_log_issue_matches(root, issue_id)
+    if preferred_branch is None and not log_matches:
+        return None
+    return {
+        "branches": branches,
+        "preferred_branch": preferred_branch,
+        "branch_tip": branch_tip,
+        "divergence_vs_origin_main": divergence,
+        "log_matches": log_matches,
+    }
+
+
+def write_validation_receipt(
+    root: Path,
+    *,
+    issue_id: int,
+    worktree_path: Path,
+    branch: str | None,
+    check_name: str,
+) -> Path:
+    head_sha = run(["git", "rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
+    payload = {
+        "issue_number": issue_id,
+        "branch": branch,
+        "worktree_path": str(worktree_path),
+        "check": check_name,
+        "result": "pass",
+        "head_sha": head_sha,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    return write_json_file(validation_receipt_path(root, issue_id, head_sha), payload)
 
 
 def record_issue_handoff_event(
@@ -2509,14 +2625,30 @@ def issue_evidence_summary(root: Path, issue_id: int) -> dict[str, object]:
     state = read_json_file(state_path) if state_path.exists() else None
     closeout_path = find_latest_closeout_report(root, issue_id)
     closeout = read_closeout_report(closeout_path) if closeout_path else None
+    validation_path = find_latest_validation_receipt(root, issue_id)
+    validation_receipt = read_json_file(validation_path) if validation_path else None
+    has_local_evidence = any(
+        (
+            linked is not None,
+            state_path.exists(),
+            closeout_path is not None,
+            validation_path is not None,
+        )
+    )
+    historical = None if has_local_evidence else historical_issue_evidence(root, issue_id)
+    evidence_source = "local" if has_local_evidence else ("historical" if historical else "none")
     return {
         "issue_number": issue_id,
+        "evidence_source": evidence_source,
         "linked_worktree": str(linked.path) if linked is not None else None,
         "linked_branch": linked.branch if linked is not None else None,
         "state_path": str(state_path) if state_path.exists() else None,
         "state": state,
         "closeout_path": str(closeout_path) if closeout_path is not None else None,
         "closeout": closeout,
+        "validation_receipt_path": str(validation_path) if validation_path is not None else None,
+        "validation_receipt": validation_receipt,
+        "historical": historical,
     }
 
 
@@ -3083,6 +3215,7 @@ def cmd_issue_evidence(args: argparse.Namespace) -> int:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
     print(f"Issue evidence: #{issue_id}")
+    print(f"  evidence_source: {summary['evidence_source']}")
     print(f"  linked_worktree: {summary['linked_worktree'] or '-'}")
     print(f"  linked_branch:   {summary['linked_branch'] or '-'}")
     print(f"  state_path:      {summary['state_path'] or '-'}")
@@ -3100,6 +3233,42 @@ def cmd_issue_evidence(args: argparse.Namespace) -> int:
         print(f"  cleanup_verified:{closeout.get('cleanup_verified', '-')}")
     else:
         print("  closeout_stage:  -")
+    print(f"  validation_path: {summary['validation_receipt_path'] or '-'}")
+    validation_receipt = summary.get("validation_receipt")
+    if isinstance(validation_receipt, dict):
+        print(f"  validation:      {validation_receipt.get('check', '-')}:pass")
+        print(f"  validated_head:  {validation_receipt.get('head_sha', '-')}")
+    historical = summary.get("historical")
+    if isinstance(historical, dict):
+        print(f"  historical_ref:  {historical.get('preferred_branch') or '-'}")
+        branch_tip = historical.get("branch_tip")
+        if isinstance(branch_tip, dict):
+            print(
+                f"  historical_tip:  {branch_tip.get('timestamp', '-')} "
+                f"{branch_tip.get('subject', '-')}"
+            )
+        log_matches = historical.get("log_matches")
+        if isinstance(log_matches, list):
+            print(f"  log_matches:     {len(log_matches)}")
+    return 0
+
+
+def cmd_write_validation_receipt(args: argparse.Namespace) -> int:
+    root = repo_root()
+    target_path = Path(args.path).resolve() if args.path else current_path()
+    issue_id = args.issue if args.issue is not None else worktree_issue_id(target_path)
+    if issue_id is None:
+        print("Validation receipt: skipped (not in issue worktree)")
+        return 0
+    branch = run(["git", "branch", "--show-current"], cwd=target_path).stdout.strip() or None
+    receipt_path = write_validation_receipt(
+        root,
+        issue_id=issue_id,
+        worktree_path=target_path,
+        branch=branch,
+        check_name=args.check,
+    )
+    print(f"Validation receipt: {receipt_path}")
     return 0
 
 
@@ -4039,6 +4208,20 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--path", help="Path to infer issue number from (default: current path)")
     ev.add_argument("--json", action="store_true", help="Emit JSON output")
     ev.set_defaults(func=cmd_issue_evidence)
+
+    vr = sub.add_parser(
+        "write-validation-receipt",
+        parents=[common_repo],
+        help="Write a local validation receipt for the current issue worktree",
+    )
+    vr.add_argument("--issue", type=int, help="Issue number (default: infer from current worktree)")
+    vr.add_argument("--path", help="Path to infer issue number from (default: current path)")
+    vr.add_argument(
+        "--check",
+        default="validate-pre-push",
+        help="Validation check name to record (default: validate-pre-push)",
+    )
+    vr.set_defaults(func=cmd_write_validation_receipt)
 
     aud = sub.add_parser(
         "issues-audit",

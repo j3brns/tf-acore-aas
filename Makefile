@@ -203,6 +203,7 @@ validate-pre-push: validate-local-prereqs
 	@$(MAKE) --no-print-directory validate-python
 	@$(MAKE) --no-print-directory validate-cdk-ts-push
 	@$(MAKE) --no-print-directory validate-secrets-push
+	@uv run python scripts/worktree_issues.py write-validation-receipt --check validate-pre-push >/dev/null
 	@echo "==> Pre-push validation passed"
 
 ## validate-local-prereqs: Minimal local tool checks (no auto-install)

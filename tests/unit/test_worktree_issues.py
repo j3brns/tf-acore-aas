@@ -347,10 +347,74 @@ def test_issue_evidence_summary_reports_state_and_closeout(tmp_path, monkeypatch
     summary = worktree_issues.issue_evidence_summary(root, 33)
 
     assert summary["linked_worktree"] == str(wt)
+    assert summary["evidence_source"] == "local"
     assert summary["state_path"] == str(state_path)
     assert summary["closeout_path"] == str(closeout_path)
     assert summary["state"]["last_event_type"] == "handback-complete"
     assert summary["closeout"]["cleanup_verified"] is True
+
+
+def test_issue_evidence_summary_falls_back_to_historical_when_local_evidence_missing(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "historical_issue_evidence",
+        lambda *_args: {
+            "preferred_branch": "wt/task/33-test",
+            "branch_tip": {
+                "sha": "abc123",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "subject": "feat: test",
+            },
+            "log_matches": [
+                {"sha": "abc123", "timestamp": "2026-01-01T00:00:00Z", "subject": "feat: test"}
+            ],
+        },
+    )
+
+    summary = worktree_issues.issue_evidence_summary(root, 33)
+
+    assert summary["evidence_source"] == "historical"
+    assert summary["historical"]["preferred_branch"] == "wt/task/33-test"
+    assert summary["state"] is None
+    assert summary["validation_receipt"] is None
+
+
+def test_write_validation_receipt_writes_issue_scoped_receipt(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    wt = root / "worktrees" / "wt33"
+    wt.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *, cwd=None, **_kwargs):
+        joined = " ".join(cmd)
+        if joined == "git rev-parse HEAD":
+            return subprocess.CompletedProcess(cmd, 0, stdout="abc123def456\n", stderr="")
+        raise AssertionError(f"unexpected command: {joined}")
+
+    original_run = worktree_issues.run
+    worktree_issues.run = fake_run
+    try:
+        receipt_path = worktree_issues.write_validation_receipt(
+            root,
+            issue_id=33,
+            worktree_path=wt,
+            branch="wt/task/33-test",
+            check_name="validate-pre-push",
+        )
+    finally:
+        worktree_issues.run = original_run
+
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert payload["issue_number"] == 33
+    assert payload["branch"] == "wt/task/33-test"
+    assert payload["head_sha"] == "abc123def456"
+    assert payload["check"] == "validate-pre-push"
+    assert payload["result"] == "pass"
 
 
 def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(monkeypatch):
