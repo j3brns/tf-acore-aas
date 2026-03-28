@@ -1,18 +1,14 @@
 /**
- * IdentityStack — GitLab OIDC WIF provider, pipeline roles, and the tenant memory KMS key.
+ * IdentityStack — GitLab OIDC WIF provider and pipeline roles.
  *
  * Creates least-privilege pipeline roles (one per stage).
- * Retains a single customer-managed KMS key for the AgentCore tenant memory path.
- * No wildcard principals in KMS key policies.
  *
  * Implemented in TASK-022.
  * ADRs: ADR-002
  */
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -29,8 +25,6 @@ interface PipelineRoleDefinition {
 }
 
 export class IdentityStack extends cdk.Stack {
-  public readonly tenantDataKey: kms.IKey;
-
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
@@ -119,12 +113,6 @@ export class IdentityStack extends cdk.Stack {
       jwksUrl: entra.jwksUrl,
     });
 
-    this.tenantDataKey = this.createPlatformKey({
-      id: 'TenantDataKey',
-      aliasName: `alias/platform-tenant-data-${envName}`,
-      description: `Platform tenant memory KMS key (${envName})`,
-    });
-
     new cdk.CfnOutput(this, 'GitLabOidcProviderArn', {
       description: 'IAM OIDC provider ARN for GitLab WIF',
       value: gitlabOidcProvider.openIdConnectProviderArn,
@@ -152,15 +140,6 @@ export class IdentityStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'EntraJwksUrl', {
       description: 'Resolved Entra JWKS URL baked into the Lambda layer',
       value: entra.jwksUrl,
-    });
-    new cdk.CfnOutput(this, 'TenantDataKmsKeyArn', {
-      value: this.tenantDataKey.keyArn,
-    });
-
-    new ssm.StringParameter(this, 'TenantDataKmsKeyArnParam', {
-      parameterName: `/platform/identity/${envName}/tenant-data-kms-key-arn`,
-      stringValue: this.tenantDataKey.keyArn,
-      description: 'KMS key ARN for tenant AgentCore memory encryption',
     });
   }
 
@@ -244,21 +223,5 @@ export class IdentityStack extends cdk.Stack {
       code: lambda.Code.fromAsset(assetDir),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
     });
-  }
-
-  private createPlatformKey(args: { id: string; aliasName: string; description: string }): kms.Key {
-    const key = new kms.Key(this, args.id, {
-      description: args.description,
-      enableKeyRotation: true,
-      pendingWindow: cdk.Duration.days(30),
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    new kms.Alias(this, `${args.id}Alias`, {
-      aliasName: args.aliasName,
-      targetKey: key,
-    });
-
-    return key;
   }
 }

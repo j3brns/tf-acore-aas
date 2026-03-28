@@ -85,10 +85,6 @@ export class TenantStack extends cdk.Stack {
     );
 
     // 1. Look up shared resources from SSM
-    const tenantDataKeyArn = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/platform/identity/${env}/tenant-data-kms-key-arn`,
-    );
     const restApiId = ssm.StringParameter.valueForStringParameter(
       this,
       `/platform/core/${env}/rest-api-id`,
@@ -167,18 +163,6 @@ export class TenantStack extends cdk.Stack {
     );
 
     // 3. AgentCore Memory Store (Provisioned per-tenant)
-    // Memory store requires its own service role for consolidation.
-    const memoryServiceRole = new iam.Role(this, 'MemoryServiceRole', {
-      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
-      description: `Service role for tenant ${tenantId} memory store`,
-    });
-    // Add required permissions for memory consolidation (placeholder until exact actions confirmed)
-    memoryServiceRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
-        resources: [tenantDataKeyArn],
-      }),
-    );
     const tenantMemory = resolveTenantMemoryProperties(tenantId);
 
     const memoryStore = new cdk.CfnResource(this, 'TenantMemoryStore', {
@@ -186,9 +170,7 @@ export class TenantStack extends cdk.Stack {
       properties: {
         Name: `platform-memory-${tenantId}`,
         Description: tenantMemory.description,
-        EncryptionKeyArn: tenantDataKeyArn,
         EventExpiryDuration: tenantMemory.eventExpiryDuration,
-        MemoryExecutionRoleArn: memoryServiceRole.roleArn,
         MemoryStrategies: tenantMemory.memoryStrategies,
         Tags: {
           TenantId: tenantId,

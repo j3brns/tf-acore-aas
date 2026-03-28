@@ -85,9 +85,7 @@ describe('TenantStack (TASK-025)', () => {
     template.hasResourceProperties('AWS::BedrockAgentCore::Memory', {
       Name: 'platform-memory-t-test123',
       Description: 'Per-tenant AgentCore memory for t-test123',
-      EncryptionKeyArn: Match.anyValue(),
       EventExpiryDuration: DEFAULT_AGENTCORE_TENANT_MEMORY_TEMPLATE.eventExpiryDurationDays,
-      MemoryExecutionRoleArn: Match.anyValue(),
       MemoryStrategies: [
         Match.objectLike({
           SemanticMemoryStrategy: Match.objectLike({
@@ -99,20 +97,18 @@ describe('TenantStack (TASK-025)', () => {
         }),
       ],
     });
+  });
 
-    template.hasResourceProperties('AWS::IAM::Role', {
-      Description: 'Service role for tenant t-test123 memory store',
-      AssumeRolePolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: 'sts:AssumeRole',
-            Principal: {
-              Service: 'bedrock-agentcore.amazonaws.com',
-            },
-          }),
-        ]),
-      }),
-    });
+  test('uses AgentCore Memory default encryption and service-managed execution defaults', () => {
+    const template = synthTemplate(defaultContext);
+    const resources = template.findResources('AWS::BedrockAgentCore::Memory') as Record<
+      string,
+      { Properties?: Record<string, unknown> }
+    >;
+    expect(Object.keys(resources)).toHaveLength(1);
+    const [memory] = Object.values(resources);
+    expect(memory.Properties).not.toHaveProperty('EncryptionKeyArn');
+    expect(memory.Properties).not.toHaveProperty('MemoryExecutionRoleArn');
   });
 
   test('creates API key and associates it with usage plan', () => {

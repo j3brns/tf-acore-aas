@@ -6,7 +6,7 @@
  *
  * Stack order:
  *   1. NetworkStack    — VPC, subnets, endpoints         (TASK-021)
- *   2. IdentityStack   — OIDC, tenant memory KMS key     (TASK-022)
+ *   2. IdentityStack   — OIDC, pipeline roles, Entra JWKS (TASK-022)
  *   3. PlatformStack   — REST API, WAF, Lambdas, Gateway  (TASK-023)
  *   4. TenantStack     — per-tenant (EventBridge-triggered) (TASK-025)
  *   5. ObservabilityStack — dashboards, alarms            (TASK-026)
@@ -51,7 +51,7 @@ const networkStack = new NetworkStack(app, `platform-network-${env}`, {
 // 2. IdentityStack
 const identityStack = new IdentityStack(app, `platform-identity-${env}`, {
   env: awsEnv,
-  description: `Platform identity and tenant memory KMS key — ${env}`,
+  description: `Platform identity and pipeline roles — ${env}`,
 });
 
 // 3. PlatformStack

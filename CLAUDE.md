@@ -70,6 +70,11 @@ Before marking any task complete:
 
 When uncertain about a security decision — stop and ask. Do not guess.
 
+When changing AWS infrastructure or service configuration, verify service-specific
+assumptions against current AWS documentation before shipping. Do not infer
+required properties, encryption behavior, IAM actions, or regional support from
+old code or memory.
+
 ### Execution Loop (Drive To Completion)
 
 The agent should drive the task to completion without stopping at the first error.

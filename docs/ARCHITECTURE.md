@@ -38,7 +38,7 @@ eu-west-2 London (HOME — owns everything)
 ├── Tenant API Lambda
 ├── BFF Lambda
 ├── CloudWatch (aggregated)
-└── Tenant memory KMS key
+└── Platform identity and shared config
 
 eu-west-1 Dublin (COMPUTE — current primary runtime region by platform policy)
 ├── AgentCore Runtime (arm64 Firecracker microVM)
@@ -466,7 +466,7 @@ See [ADR-007](decisions/ADR-007-cdk-terraform.md) for the CDK vs Terraform split
 | Order | Stack | Region | Resources |
 |-------|-------|--------|-----------|
 | 1 | NetworkStack | eu-west-2 | VPC, subnets, VPC endpoints, security groups |
-| 2 | IdentityStack | eu-west-2 | GitLab OIDC WIF roles, Entra JWKS layer, tenant memory KMS key |
+| 2 | IdentityStack | eu-west-2 | GitLab OIDC WIF roles, Entra JWKS layer |
 | 3 | PlatformStack | eu-west-2 | REST API, WAF, CloudFront, Bridge, BFF, Authoriser, Gateway |
 | 4 | TenantStack | eu-west-2 | Per-tenant Memory store, execution role, usage plan key, SSM |
 | 5 | ObservabilityStack | eu-west-2 | Dashboards, alarms, monitoring-account OAM sink only |

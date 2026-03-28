@@ -106,34 +106,8 @@ describe('IdentityStack', () => {
     });
   });
 
-  test('creates one tenant memory KMS key and key policy does not use wildcard principals', () => {
-    template.resourceCountIs('AWS::KMS::Key', 1);
-    template.resourceCountIs('AWS::KMS::Alias', 1);
-    template.hasResourceProperties('AWS::KMS::Alias', {
-      AliasName: 'alias/platform-tenant-data-dev',
-    });
-
-    const keys = template.findResources('AWS::KMS::Key');
-    for (const resource of Object.values(keys)) {
-      const statements = (resource.Properties?.KeyPolicy?.Statement ?? []) as Array<{
-        Principal?: unknown;
-      }>;
-
-      for (const statement of statements) {
-        const principal = statement.Principal;
-        expect(principal).not.toBe('*');
-
-        if (!principal || typeof principal !== 'object') {
-          continue;
-        }
-
-        const awsPrincipal = (principal as Record<string, unknown>)['AWS'];
-        if (Array.isArray(awsPrincipal)) {
-          expect(awsPrincipal).not.toContain('*');
-        } else {
-          expect(awsPrincipal).not.toBe('*');
-        }
-      }
-    }
+  test('does not create platform-managed KMS keys', () => {
+    template.resourceCountIs('AWS::KMS::Key', 0);
+    template.resourceCountIs('AWS::KMS::Alias', 0);
   });
 });
