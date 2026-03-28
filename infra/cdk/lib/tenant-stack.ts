@@ -155,7 +155,7 @@ export class TenantStack extends cdk.Stack {
       new iam.PolicyStatement({
         sid: 'AgentCoreRuntimeAccess',
         effect: iam.Effect.ALLOW,
-        actions: ['bedrock-agentcore:InvokeRuntime'],
+        actions: ['bedrock-agentcore:InvokeAgentRuntime'],
         resources: authorizedRuntimeRegions.map(
           (region) => `arn:aws:bedrock-agentcore:${region}:${accountId}:runtime/*`,
         ),

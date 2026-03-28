@@ -149,7 +149,7 @@ describe('TenantStack (TASK-025)', () => {
     const template = synthTemplate(defaultContext);
     const statement = runtimeAccessStatement(template);
 
-    expect(asArray(statement.Action)).toEqual(['bedrock-agentcore:InvokeRuntime']);
+    expect(asArray(statement.Action)).toEqual(['bedrock-agentcore:InvokeAgentRuntime']);
     expect(asArray(statement.Resource)).toEqual([
       'arn:aws:bedrock-agentcore:eu-west-1:123456789012:runtime/*',
       'arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/*',

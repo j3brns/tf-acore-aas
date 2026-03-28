@@ -71,9 +71,14 @@ Before marking any task complete:
 When uncertain about a security decision — stop and ask. Do not guess.
 
 When changing AWS infrastructure or service configuration, verify service-specific
-assumptions against current AWS documentation before shipping. Do not infer
-required properties, encryption behavior, IAM actions, or regional support from
-old code or memory.
+assumptions against current AWS documentation before shipping. Use the
+`aws-knowledge-mcp-server` tools first for AWS service details, parameters,
+permissions, and regional support. Use web search only as a last resort when the
+AWS MCP tools do not provide the required detail. Do not infer required
+properties, encryption behavior, IAM actions, or regional support from old code
+or memory. Record the specific AWS doc URL(s) used in the issue, review notes,
+or commit/PR narrative whenever the assumption affects resource shape,
+permissions, encryption, or region policy.
 
 ### Execution Loop (Drive To Completion)
 
