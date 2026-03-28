@@ -135,7 +135,7 @@ validate-pipeline-policy:
 test-unit:
   extends: .test_job_base
   script:
-    - make test-unit PYTEST_ARGS="--junitxml=junit-report.xml"
+    - make test-unit PYTEST_ARGS="--junitxml=junit-report.xml -n auto --dist loadfile"
   artifacts:
     when: always
     reports:

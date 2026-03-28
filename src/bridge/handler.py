@@ -46,7 +46,21 @@ from data_access.models import (
 )
 
 from .config_provider import ConfigProvider
+from .discovery_service import (
+    _agent_record_sort_key,
+)
+from .discovery_service import (
+    get_agent_detail as discovery_get_agent_detail,
+)
+from .discovery_service import (
+    get_job_status as discovery_get_job_status,
+)
+from .discovery_service import (
+    list_agents as discovery_list_agents,
+)
+from .invocation_engine import handle_invoke_request
 from .runtime_invoker import RuntimeInvoker
+from .runtime_orchestrator import build_runtime_orchestrator
 
 logger = Logger(service="bridge")
 tracer = Tracer()
@@ -848,83 +862,53 @@ def _handler_core(
     if method == "GET" and job_id:
         if path and not _is_jobs_contract_path(path, job_id):
             return error_response(404, "NOT_FOUND", "Route not found", request_id)
-        return get_job_status(tenant_context, path_params, request_id)
+        return discovery_get_job_status(
+            tenant_context,
+            path_params,
+            request_id,
+            jobs_table=JOBS_TABLE,
+            job_results_bucket=JOB_RESULTS_BUCKET,
+            job_result_url_expiry_seconds=JOB_RESULT_URL_EXPIRY_SECONDS,
+            error_response=error_response,
+            db_factory=TenantScopedDynamoDB,
+        )
     if method == "GET" and path.endswith("/v1/agents"):
-        return list_agents(tenant_context)
+        return discovery_list_agents(
+            tenant_context,
+            agents_table=AGENTS_TABLE,
+            db_factory=TenantScopedDynamoDB,
+        )
     if (
         method == "GET"
         and _coerce_optional_string(path_params.get("agentName"))
         and not path.endswith("/invoke")
     ):
-        return get_agent_detail(path_params, request_id)
+        return discovery_get_agent_detail(
+            path_params,
+            request_id,
+            agents_table=AGENTS_TABLE,
+            get_dynamodb=get_dynamodb,
+            error_response=error_response,
+        )
 
     # 3. Contracted invoke route: POST /v1/agents/{agentName}/invoke.
     if method != "POST":
         return error_response(404, "NOT_FOUND", "Route not found", request_id)
 
-    agent_name = _coerce_optional_string(path_params.get("agentName"))
-    if path and not _is_invoke_contract_path(path, agent_name):
-        return error_response(404, "NOT_FOUND", "Route not found", request_id)
-    if not agent_name:
-        return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
-
-    # 4. Parse Request Body
-    try:
-        body = _parse_body(event)
-    except ValueError:
-        return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
-
-    prompt = _coerce_optional_string(body.get("input"))
-    if not prompt:
-        return error_response(400, "INVALID_REQUEST", "Missing 'input' in request body", request_id)
-
-    session_id = _coerce_optional_string(body.get("sessionId"))
-    webhook_id = _coerce_optional_string(body.get("webhookId"))
-
-    # 5. Lookup Agent
-    agent = get_agent_record(agent_name)
-    if not agent:
-        return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
-
-    # 6. Validate Tier
-    tier_order = {TenantTier.BASIC: 0, TenantTier.STANDARD: 1, TenantTier.PREMIUM: 2}
-    if tier_order[tenant_tier] < tier_order[agent.tier_minimum]:
-        logger.warning(
-            "Tier insufficient",
-            extra={"tenant_tier": tenant_tier, "tier_minimum": agent.tier_minimum},
-        )
-        return error_response(
-            403, "FORBIDDEN", "Tenant tier insufficient for this agent", request_id
-        )
-
-    # 6.5. Validate Capability (ADR-017)
-    capability_client = get_capability_client()
-    policy = capability_client.fetch_policy()
-
-    # Generic invocation capability (e.g. kill switch)
-    if not policy.is_enabled("agents.invoke", tenant_id=tenant_id, tenant_tier=tenant_tier):
-        logger.warning(
-            "Agent invocation capability disabled",
-            extra={"tenant_id": tenant_id, "capability": "agents.invoke"},
-        )
-        return error_response(403, "FORBIDDEN", "Agent invocation capability disabled", request_id)
-
-    # Specific agent capability rollout
-    if not policy.is_enabled(f"agents.{agent_name}", tenant_id=tenant_id, tenant_tier=tenant_tier):
-        logger.warning(
-            "Specific agent capability disabled",
-            extra={"tenant_id": tenant_id, "capability": f"agents.{agent_name}"},
-        )
-        return error_response(
-            403,
-            "FORBIDDEN",
-            f"Access to agent '{agent_name}' is not enabled for this tenant",
-            request_id,
-        )
-
-    # 7. Invoke Agent (with failover/retry logic)
-    return invoke_agent(
-        agent, tenant_context, prompt, session_id, webhook_id, request_id, response_stream
+    return handle_invoke_request(
+        event=event,
+        request_id=request_id,
+        tenant_context=tenant_context,
+        path=path,
+        path_params=path_params,
+        response_stream=response_stream,
+        error_response=error_response,
+        parse_body=_parse_body,
+        coerce_optional_string=_coerce_optional_string,
+        is_invoke_contract_path=_is_invoke_contract_path,
+        get_agent_record=get_agent_record,
+        get_capability_client=get_capability_client,
+        invoke_agent=invoke_agent,
     )
 
 
@@ -1023,192 +1007,8 @@ def _coerce_optional_string(value: Any) -> str | None:
     return text
 
 
-def _job_key(tenant_id: str, job_id: str) -> dict[str, str]:
-    return {"PK": f"TENANT#{tenant_id}", "SK": f"JOB#{job_id}"}
-
-
 def _webhook_key(tenant_id: str, webhook_id: str) -> dict[str, str]:
     return {"PK": f"TENANT#{tenant_id}", "SK": f"WEBHOOK#{webhook_id}"}
-
-
-def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "agentName": str(item.get("agent_name", "")),
-        "latestVersion": str(item.get("version", "")),
-        "tierMinimum": str(item.get("tier_minimum", TenantTier.BASIC.value)),
-        "invocationMode": str(item.get("invocation_mode", InvocationMode.SYNC.value)),
-        "streamingEnabled": bool(item.get("streaming_enabled", False)),
-        "estimatedDurationSeconds": item.get("estimated_duration_seconds"),
-        "ownerTeam": str(item.get("owner_team", "")),
-    }
-
-
-def _is_newer_agent_record(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
-    return _agent_record_sort_key(candidate) > _agent_record_sort_key(current)
-
-
-def _semver_sort_key(version: str) -> tuple[int, ...]:
-    parts = version.split(".")
-    key: list[int] = []
-    for part in parts:
-        digits = "".join(ch for ch in part if ch.isdigit())
-        key.append(int(digits) if digits else 0)
-    return tuple(key)
-
-
-def _agent_record_sort_key(item: dict[str, Any]) -> tuple[tuple[int, ...], str]:
-    return (
-        _semver_sort_key(str(item.get("version", ""))),
-        str(item.get("deployed_at", "")),
-    )
-
-
-def list_agents(tenant_context: TenantContext) -> dict[str, Any]:
-    db = TenantScopedDynamoDB(tenant_context)
-    items = db.scan_all(AGENTS_TABLE)
-
-    latest_by_name: dict[str, dict[str, Any]] = {}
-    for item in items:
-        # Filter: only promoted agents are visible/invokable.
-        if not is_invokable_agent_status(_coerce_optional_string(item.get("status"))):
-            continue
-
-        agent_name = _coerce_optional_string(item.get("agent_name"))
-        if agent_name is None:
-            continue
-        existing = latest_by_name.get(agent_name)
-        if existing is None or _is_newer_agent_record(item, existing):
-            latest_by_name[agent_name] = item
-
-    tier_order = {TenantTier.BASIC: 0, TenantTier.STANDARD: 1, TenantTier.PREMIUM: 2}
-    caller_tier_rank = tier_order.get(tenant_context.tier, 0)
-
-    summaries: list[dict[str, Any]] = []
-    for item in latest_by_name.values():
-        tier_minimum_text = str(item.get("tier_minimum", TenantTier.BASIC.value)).lower()
-        try:
-            tier_minimum = TenantTier(tier_minimum_text)
-        except ValueError:
-            tier_minimum = TenantTier.BASIC
-        if caller_tier_rank < tier_order[tier_minimum]:
-            continue
-        summaries.append(_agent_summary_from_item(item))
-
-    summaries.sort(key=lambda summary: str(summary["agentName"]))
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps({"items": summaries}),
-    }
-
-
-def get_agent_detail(path_params: dict[str, Any], request_id: str) -> dict[str, Any]:
-    agent_name = _coerce_optional_string(path_params.get("agentName"))
-    if not agent_name:
-        return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
-
-    ddb = get_dynamodb()
-    table = ddb.Table(AGENTS_TABLE)
-    response = table.query(KeyConditionExpression=Key("PK").eq(f"AGENT#{agent_name}"))
-    items = response.get("Items", [])
-
-    # Filter: only promoted versions are visible to tenants.
-    promoted_items = [
-        i for i in items if is_invokable_agent_status(_coerce_optional_string(i.get("status")))
-    ]
-    if not promoted_items:
-        return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
-
-    sorted_items = sorted(promoted_items, key=_agent_record_sort_key, reverse=True)
-    latest = sorted_items[0]
-    detail = _agent_summary_from_item(latest)
-    detail["versions"] = [
-        {
-            "version": str(item.get("version", "")),
-            "deployedAt": str(item.get("deployed_at", "")),
-            "invocationMode": str(item.get("invocation_mode", InvocationMode.SYNC.value)),
-            "streamingEnabled": bool(item.get("streaming_enabled", False)),
-        }
-        for item in sorted_items
-    ]
-
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(detail),
-    }
-
-
-def get_job_status(
-    tenant_context: TenantContext, path_params: dict[str, Any], request_id: str
-) -> dict[str, Any]:
-    job_id = _coerce_optional_string(path_params.get("jobId"))
-    if not job_id:
-        return error_response(400, "INVALID_REQUEST", "Missing jobId in path", request_id)
-
-    db = TenantScopedDynamoDB(tenant_context)
-    record = db.get_item(JOBS_TABLE, _job_key(tenant_context.tenant_id, job_id))
-
-    if record is None:
-        return error_response(404, "NOT_FOUND", f"Job '{job_id}' not found", request_id)
-
-    result_url: str | None = None
-    status = str(record.get("status", JobStatus.PENDING))
-    result_key = _coerce_optional_string(record.get("result_s3_key"))
-    if status == str(JobStatus.COMPLETED) and result_key:
-        try:
-            result_url = _presigned_result_url(tenant_context, result_key)
-        except ValueError as exc:
-            return error_response(500, "INTERNAL_ERROR", str(exc), request_id)
-        except Exception:
-            logger.exception(
-                "Failed to generate job result presigned URL",
-                extra={"job_id": job_id},
-            )
-            return error_response(
-                500, "INTERNAL_ERROR", "Failed to generate result URL", request_id
-            )
-
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(
-            {
-                "jobId": str(record.get("job_id", job_id)),
-                "tenantId": str(record.get("tenant_id", tenant_context.tenant_id)),
-                "agentName": str(record.get("agent_name", "")),
-                "status": status,
-                "createdAt": str(record.get("created_at", "")),
-                "startedAt": _coerce_optional_string(record.get("started_at")),
-                "completedAt": _coerce_optional_string(record.get("completed_at")),
-                "resultUrl": result_url,
-                "errorMessage": _coerce_optional_string(record.get("error_message")),
-                "webhookDelivered": bool(record.get("webhook_delivered", False)),
-                "webhookUrl": _coerce_optional_string(record.get("webhook_url")),
-                "webhookDeliveryStatus": _coerce_optional_string(
-                    record.get("webhook_delivery_status")
-                ),
-                "webhookDeliveryAttempts": int(record.get("webhook_delivery_attempts", 0)),
-                "webhookDeliveryError": _coerce_optional_string(
-                    record.get("webhook_delivery_error")
-                ),
-            }
-        ),
-    }
-
-
-def _presigned_result_url(tenant_context: TenantContext, result_s3_key: str) -> str:
-    bucket = _coerce_optional_string(JOB_RESULTS_BUCKET)
-    if bucket is None:
-        raise ValueError("JOB_RESULTS_BUCKET is not configured")
-
-    expires_in = max(1, JOB_RESULT_URL_EXPIRY_SECONDS)
-    tenant_s3 = TenantScopedS3(tenant_context)
-    return tenant_s3.generate_presigned_url(
-        bucket,
-        result_s3_key,
-        expires_in=expires_in,
-    )
 
 
 def get_webhook_registration(
@@ -1227,7 +1027,7 @@ def get_webhook_registration(
 
 
 def _runtime_invoker() -> RuntimeInvoker:
-    return RuntimeInvoker(
+    return build_runtime_orchestrator(
         get_config=get_config,
         invoke_mock_runtime=invoke_mock_runtime,
         invoke_real_runtime=invoke_real_runtime,

@@ -121,6 +121,12 @@ Client
   → Response stream back through bridge → API Gateway → client
 ```
 
+Implementation note: the Bridge still deploys as one Lambda, but the package is
+now split internally into `config_provider`, `discovery_service`,
+`invocation_engine`, `runtime_orchestrator`, and `runtime_invoker` so routing,
+discovery, and failover logic can evolve independently without changing the
+public invoke contract.
+
 Current SPA edge exception: the public SPA distribution does not yet have its own
 CloudFront-scope WebACL. That is intentional for now, not an undocumented omission.
 The current approved region topology in [ADR-009](decisions/ADR-009-region-zigzag.md)
@@ -492,6 +498,11 @@ workflow, which is started by EventBridge `platform.tenant.created` and
 completes by emitting `platform.tenant_provisioner` completion events back to
 the control plane. It is **not** deployed by the platform pipeline.
 Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
+
+Implementation note: `PlatformStack` still deploys as one stack, but the CDK
+code now synthesizes its storage/AppConfig resources and compute/orchestration
+resources through separate helper modules. That keeps deployment semantics
+stable while reducing edit risk inside the stack definition.
 
 ObservabilityStack currently provisions the eu-west-2 monitoring-account OAM sink only.
 No regional OAM member links are deployed yet, so the cross-region observability path
