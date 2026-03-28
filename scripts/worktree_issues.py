@@ -574,7 +574,9 @@ def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
                 AuditFinding(
                     severity="error",
                     issue_number=issue.number,
-                    message="parent CR issue must not carry type:task; only child issues are queueable",
+                    message=(
+                        "parent CR issue must not carry type:task; only child issues are queueable"
+                    ),
                 )
             )
         parent_statuses = status_labels(issue) if issue.is_parent_cr else []
@@ -584,7 +586,8 @@ def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
                     severity="error",
                     issue_number=issue.number,
                     message=(
-                        "parent CR issue must not carry status:in-progress; WIP is tracked on child task issues"
+                        "parent CR issue must not carry status:in-progress; "
+                        "WIP is tracked on child task issues"
                     ),
                 )
             )
@@ -603,7 +606,10 @@ def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
                 AuditFinding(
                     severity="warning",
                     issue_number=issue.number,
-                    message="parent CR issue should not carry Seq; ordering belongs on child task issues",
+                    message=(
+                        "parent CR issue should not carry Seq; "
+                        "ordering belongs on child task issues"
+                    ),
                 )
             )
         if issue.is_parent_cr and issue.depends_on:
@@ -611,7 +617,10 @@ def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
                 AuditFinding(
                     severity="warning",
                     issue_number=issue.number,
-                    message="parent CR issue should not carry Depends on; dependency gating belongs on child task issues",
+                    message=(
+                        "parent CR issue should not carry Depends on; "
+                        "dependency gating belongs on child task issues"
+                    ),
                 )
             )
 
@@ -1319,12 +1328,12 @@ def record_issue_handoff_event(
         "state": state,
         "repo": repo,
         "issue_number": resolved_issue_number,
-        "issue_title": issue.title if issue is not None else (issue_title or existing.get("issue_title")),
+        "issue_title": (
+            issue.title if issue is not None else (issue_title or existing.get("issue_title"))
+        ),
         "branch": branch or existing.get("branch"),
         "worktree_path": (
-            str(worktree_path)
-            if worktree_path is not None
-            else existing.get("worktree_path")
+            str(worktree_path) if worktree_path is not None else existing.get("worktree_path")
         ),
         "details": details or {},
     }
@@ -1340,13 +1349,13 @@ def record_issue_handoff_event(
 
     payload: dict[str, object] = {
         "issue_number": resolved_issue_number,
-        "issue_title": issue.title if issue is not None else (issue_title or existing.get("issue_title")),
+        "issue_title": (
+            issue.title if issue is not None else (issue_title or existing.get("issue_title"))
+        ),
         "repo": repo or existing.get("repo"),
         "branch": branch or existing.get("branch"),
         "worktree_path": (
-            str(worktree_path)
-            if worktree_path is not None
-            else existing.get("worktree_path")
+            str(worktree_path) if worktree_path is not None else existing.get("worktree_path")
         ),
         "state": state,
         "last_event_type": event_type,
@@ -1397,7 +1406,9 @@ def audit_issue_handoff_evidence(
     if "closeout-started" not in event_types:
         raise CliError("Issue state evidence is missing closeout-started")
     if event_types[-1] != "closeout-complete":
-        raise CliError(f"Final issue state event must be closeout-complete (found {event_types[-1]})")
+        raise CliError(
+            f"Final issue state event must be closeout-complete (found {event_types[-1]})"
+        )
 
     summary_payload: dict[str, object] = {
         "issue_number": issue_id,
@@ -1847,18 +1858,30 @@ def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) ->
     labels_clause = issue_labels or "-"
     return "\n".join(
         [
-            f"Context: issue {issue_ref}; repo {repo or '(origin unavailable)'}; branch {branch}; worktree {path}; labels {labels_clause}.",
-            "Read: CLAUDE.md; docs/ARCHITECTURE.md; issue-linked ADRs if easy to identify from repo or issue context.",
+            (
+                f"Context: issue {issue_ref}; repo {repo or '(origin unavailable)'}; "
+                f"branch {branch}; worktree {path}; labels {labels_clause}."
+            ),
+            (
+                "Read: CLAUDE.md; docs/ARCHITECTURE.md; "
+                "issue-linked ADRs if easy to identify from repo or issue context."
+            ),
             "Scope: only this issue. Do not broaden scope.",
             (
-                "Use: prefer GitNexus when available. Query unfamiliar flows. Use context/impact before editing shared symbols. "
-                "Run detect_changes before commit. If GitNexus is unavailable, use rg and direct file reads."
+                "Use: prefer GitNexus when available. Query unfamiliar flows. "
+                "Use context/impact before editing shared symbols. "
+                "Run detect_changes before commit. "
+                "If GitNexus is unavailable, use rg and direct file reads."
             ),
             "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done.",
             "Push gate: make pre-validate-session must pass before push.",
-            "Done: merged PR; closed issue; cleaned worktree and branch; validation evidence recorded; make finish-worktree-close completed.",
             (
-                "Pause only if: explicit policy or security blocker; missing required permission; external decision cannot be inferred safely. "
+                "Done: merged PR; closed issue; cleaned worktree and branch; "
+                "validation evidence recorded; make finish-worktree-close completed."
+            ),
+            (
+                "Pause only if: explicit policy or security blocker; "
+                "missing required permission; external decision cannot be inferred safely. "
                 "If blocked, report the blocker and the exact next command."
             ),
         ]
@@ -2844,7 +2867,12 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
             },
             idempotency_key=f"handback-audited:{issue_id}:{handback_summary['evidence_hash']}",
         )
-        append_issue_handback_comment(root=root, repo=repo, issue_id=issue_id, summary=handback_summary)
+        append_issue_handback_comment(
+            root=root,
+            repo=repo,
+            issue_id=issue_id,
+            summary=handback_summary,
+        )
         record_issue_handoff_event(
             root=root,
             repo=repo,
@@ -3195,7 +3223,10 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
             root=root,
             repo=repo,
             issue=issue,
-            branch=f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}",
+            branch=(
+                f"wt/{args.scope or infer_scope(issue)}/"
+                f"{issue.number}-{args.slug or slugify_text(issue.title)}"
+            ),
             worktree_path=wt_path,
             event_type="shell-opened",
             state="shell-active",
@@ -3210,7 +3241,10 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
             root=root,
             repo=repo,
             issue=issue,
-            branch=f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}",
+            branch=(
+                f"wt/{args.scope or infer_scope(issue)}/"
+                f"{issue.number}-{args.slug or slugify_text(issue.title)}"
+            ),
             worktree_path=wt_path,
             event_type="agent-launch-requested",
             state="agent-launching",
@@ -3222,8 +3256,7 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
                 "mux": mux,
             },
             idempotency_key=(
-                f"agent:{issue.number}:{wt_path}:"
-                f"{agent}:{agent_mode}:{handoff}:{mux}"
+                f"agent:{issue.number}:{wt_path}:{agent}:{agent_mode}:{handoff}:{mux}"
             ),
         )
         handoff_to_agent_or_shell(
@@ -3293,8 +3326,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
                     "mux": mux,
                 },
                 idempotency_key=(
-                    f"agent:{issue.number}:{existing_wt.path}:"
-                    f"{agent}:{agent_mode}:{handoff}:{mux}"
+                    f"agent:{issue.number}:{existing_wt.path}:{agent}:{agent_mode}:{handoff}:{mux}"
                 ),
             )
             handoff_to_agent_or_shell(
@@ -3337,7 +3369,10 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     if args.open_shell and not args.dry_run:
-        branch = f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}"
+        branch = (
+            f"wt/{args.scope or infer_scope(issue)}/"
+            f"{issue.number}-{args.slug or slugify_text(issue.title)}"
+        )
         record_issue_handoff_event(
             root=root,
             repo=repo,
@@ -3352,7 +3387,10 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
         open_shell(wt_path)
         return 0
     if wants_agent_launch(args) and not args.dry_run:
-        branch = f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}"
+        branch = (
+            f"wt/{args.scope or infer_scope(issue)}/"
+            f"{issue.number}-{args.slug or slugify_text(issue.title)}"
+        )
         agent, agent_mode, handoff, mux = resolve_launch_request(args)
         record_issue_handoff_event(
             root=root,
@@ -3370,8 +3408,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
                 "mux": mux,
             },
             idempotency_key=(
-                f"agent:{issue.number}:{wt_path}:"
-                f"{agent}:{agent_mode}:{handoff}:{mux}"
+                f"agent:{issue.number}:{wt_path}:{agent}:{agent_mode}:{handoff}:{mux}"
             ),
         )
         handoff_to_agent_or_shell(
@@ -3534,9 +3571,7 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
             "handoff": handoff,
             "mux": mux,
         },
-        idempotency_key=(
-            f"agent:{issue_id}:{target_path}:{agent}:{agent_mode}:{handoff}:{mux}"
-        ),
+        idempotency_key=(f"agent:{issue_id}:{target_path}:{agent}:{agent_mode}:{handoff}:{mux}"),
     )
     handoff_to_agent_or_shell(
         path=target_path,

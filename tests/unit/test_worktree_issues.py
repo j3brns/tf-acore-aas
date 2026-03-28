@@ -716,10 +716,16 @@ def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requ
     assert "context/impact before editing shared symbols" in prompt
     assert "detect_changes before commit" in prompt
     assert "If GitNexus is unavailable, use rg and direct file reads." in prompt
-    assert "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done." in prompt
+    assert (
+        "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done."
+        in prompt
+    )
     assert "make preflight-session" in prompt
     assert "Push gate: make pre-validate-session must pass before push." in prompt
-    assert "Done: merged PR; closed issue; cleaned worktree and branch; validation evidence recorded; make finish-worktree-close completed." in prompt
+    assert (
+        "Done: merged PR; closed issue; cleaned worktree and branch; "
+        "validation evidence recorded; make finish-worktree-close completed." in prompt
+    )
     assert "Pause only if:" in prompt
     assert "report the blocker" in prompt
 
@@ -1814,7 +1820,11 @@ def test_append_issue_handback_comment_skips_existing_hash(monkeypatch):
             "comments": [{"body": "Execution evidence: PASS\nEvidence hash: abc123"}]
         },
     )
-    monkeypatch.setattr(worktree_issues, "gh_text", lambda args, **kwargs: posted.append(args) or "")
+    monkeypatch.setattr(
+        worktree_issues,
+        "gh_text",
+        lambda args, **kwargs: posted.append(args) or "",
+    )
 
     worktree_issues.append_issue_handback_comment(
         root=Path("/tmp/repo"),
