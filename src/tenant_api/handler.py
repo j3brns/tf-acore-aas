@@ -68,6 +68,7 @@ _AGENTCORE_QUOTA_NAME = "Active session workloads per account"
 _AGENTCORE_CONCURRENT_SESSIONS_NAMESPACE = "AgentCore"
 _AGENTCORE_CONCURRENT_SESSIONS_METRIC = "ConcurrentSessions"
 _AGENTCORE_QUOTA_LOOKBACK_MINUTES = 5
+_TENANT_PROVISIONING_STATUSES = frozenset({"pending", "provisioning", "ready", "failed"})
 
 
 @dataclass(frozen=True)
@@ -743,6 +744,9 @@ def _serialize_tenant(item: dict[str, Any]) -> dict[str, Any]:
         "memoryStoreArn",
         "runtimeRegion",
         "fallbackRegion",
+        "provisioningStatus",
+        "provisioningUpdatedAt",
+        "provisioningError",
         "apiKeySecretArn",
         "monthlyBudgetUsd",
         "deletedAt",
@@ -785,6 +789,8 @@ def _handle_create(
         "status": TenantStatus.ACTIVE.value,
         "createdAt": _iso(now),
         "updatedAt": _iso(now),
+        "provisioningStatus": "pending",
+        "provisioningUpdatedAt": _iso(now),
         "ownerEmail": str(body["ownerEmail"]).strip(),
         "ownerTeam": str(body["ownerTeam"]).strip(),
         "accountId": str(body["accountId"]).strip(),
@@ -834,6 +840,84 @@ def _handle_create(
         },
     )
     return _response(201, {"tenant": _serialize_tenant(item)})
+
+
+def _system_caller_for_tenant(tenant_id: str, app_id: str | None) -> CallerIdentity:
+    return CallerIdentity(
+        tenant_id=tenant_id,
+        app_id=app_id or "platform-provisioner",
+        tier=TenantTier.STANDARD.value,
+        sub="platform-provisioner",
+        roles=frozenset(_ADMIN_ROLES),
+        usage_identifier_key=None,
+    )
+
+
+def _handle_tenant_provisioning_event(
+    event: dict[str, Any],
+    deps: TenantApiDependencies,
+) -> dict[str, Any]:
+    detail_type = _str_or_none(event.get("detail-type")) or ""
+    detail = event.get("detail") or {}
+    if not isinstance(detail, dict):
+        raise ValueError("Event detail must be an object")
+
+    tenant_id = _canonical_tenant_id(detail.get("tenantId"))
+    app_id = _str_or_none(detail.get("appId"))
+    caller = _system_caller_for_tenant(tenant_id, app_id)
+    existing = _read_tenant_record(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    if existing is None:
+        logger.warning("Provisioning event for unknown tenant", extra={"tenant_id": tenant_id})
+        return {"statusCode": 200, "body": json.dumps({"status": "IGNORED", "tenantId": tenant_id})}
+
+    now = _iso(_now_utc())
+    attrs: dict[str, Any] = {
+        "updatedAt": now,
+        "provisioningUpdatedAt": now,
+    }
+    if detail_type == "tenant.provisioned":
+        attrs["provisioningStatus"] = "ready"
+        field_aliases = {
+            "executionRoleArn": ("executionRoleArn", "ExecutionRoleArn"),
+            "memoryStoreArn": ("memoryStoreArn", "MemoryStoreArn"),
+            "runtimeRegion": ("runtimeRegion", "RuntimeRegion"),
+            "fallbackRegion": ("fallbackRegion", "FallbackRegion"),
+        }
+        for target_field, aliases in field_aliases.items():
+            text = None
+            for alias in aliases:
+                text = _str_or_none(detail.get(alias))
+                if text is not None:
+                    break
+            if text is not None:
+                attrs[target_field] = text
+        attrs["provisioningError"] = None
+    elif detail_type == "tenant.provisioning_failed":
+        attrs["provisioningStatus"] = "failed"
+        attrs["provisioningError"] = _str_or_none(
+            detail.get("reason") or detail.get("stackStatus") or detail.get("error")
+        )
+    else:
+        return _response(200, {"status": "IGNORED", "detailType": detail_type})
+
+    update_expression, expr_names, expr_values = _build_update_expression(attrs)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    response = db.update_item(
+        _tenants_table_name(),
+        key=_tenant_key(tenant_id),
+        update_expression=update_expression,
+        expression_attribute_values=expr_values,
+        expression_attribute_names=expr_names,
+        condition_expression="attribute_exists(PK) AND attribute_exists(SK)",
+    )
+    item = response.get("Attributes", {})
+    return _response(
+        200,
+        {
+            "tenant": _serialize_tenant(item),
+            "eventType": detail_type,
+        },
+    )
 
 
 def _usage_summary(
@@ -2439,8 +2523,24 @@ def _dispatch_tenant_routes(
 
 @logger.inject_lambda_context(clear_state=True, log_event=False)
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    caller = _caller_identity(event)
     deps = _dependencies()
+    detail_type = _str_or_none(event.get("detail-type"))
+    source = _str_or_none(event.get("source"))
+    if detail_type and source == "platform.tenant_provisioner":
+        detail = event.get("detail") or {}
+        tenant_id = _str_or_none(detail.get("tenantId")) if isinstance(detail, dict) else None
+        app_id = _str_or_none(detail.get("appId")) if isinstance(detail, dict) else None
+        logger.append_keys(appid=app_id or "unknown", tenantid=tenant_id or "unknown")
+        try:
+            return _handle_tenant_provisioning_event(event, deps)
+        except ValueError as exc:
+            return _error(400, "BAD_REQUEST", str(exc))
+        except ClientError as exc:
+            logger.exception("AWS client error in tenant provisioning event handler")
+            error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+            return _error(502, "AWS_CLIENT_ERROR", error_code)
+
+    caller = _caller_identity(event)
     logger.append_keys(appid=caller.app_id or "unknown", tenantid=caller.tenant_id or "unknown")
 
     method = _http_method(event)

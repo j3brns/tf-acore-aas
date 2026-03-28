@@ -284,7 +284,8 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
 **platform-tenants** — tenant registry
 - PK: `TENANT#{tenantId}`, SK: `METADATA`
 - Attributes: tenantId, appId, displayName, tier, status, createdAt, updatedAt,
-  ownerEmail, ownerTeam, memoryStoreArn, runtimeRegion, fallbackRegion,
+  provisioningStatus, provisioningUpdatedAt, provisioningError, ownerEmail,
+  ownerTeam, executionRoleArn, memoryStoreArn, runtimeRegion, fallbackRegion,
   apiKeySecretArn, monthlyBudgetUsd, accountId
 - Excludes dynamic capability policy. Capability flags, kill switches, and
   rollout-managed model/tool availability live in AppConfig, not in this table.
@@ -418,9 +419,11 @@ tenant-scoped even when initiated by platform-owned automation.
 flowchart LR
   subgraph P["Platform Account (home/control plane)"]
     Admin["Platform Admin / Tenant API\nCREATE tenant"]
-    Tenants["DynamoDB: platform-tenants\n(tenant registry + accountId + resource refs)"]
+    Tenants["DynamoDB: platform-tenants\n(tenant registry + accountId + provisioning state + resource refs)"]
     EB["EventBridge\nplatform.tenant.created"]
+    Sfn["Step Functions\nTenant provisioning workflow"]
     Prov["Tenant Provisioner\n(CDK TenantStack runner)"]
+    EB2["EventBridge\nplatform.tenant_provisioner.*"]
     Bridge["Bridge Lambda\ninvocation path"]
     STS["AWS STS"]
   end
@@ -433,10 +436,13 @@ flowchart LR
 
   Admin -->|conditional write + metadata| Tenants
   Admin -->|publish tenant.created| EB
-  EB --> Prov
+  EB --> Sfn
+  Sfn -->|start/poll/emit-result| Prov
   Prov -->|deploy TenantStack with tenantId/tier/accountId| Role
   Prov -->|provision/update| TenantRes
-  Prov -->|write resource ARNs/refs| Tenants
+  Prov -->|emit tenant.provisioned / tenant.provisioning_failed| EB2
+  EB2 -->|invoke control-plane listener| Admin
+  Admin -->|update provisioning state + resource refs| Tenants
 
   Bridge -->|lookup tenant + accountId/role refs| Tenants
   Bridge -->|AssumeRole| STS
@@ -466,8 +472,10 @@ See [ADR-007](decisions/ADR-007-cdk-terraform.md) for the CDK vs Terraform split
 | 5 | ObservabilityStack | eu-west-2 | Dashboards, alarms, monitoring-account OAM sink only |
 | 6 | AgentCoreStack | eu-west-1 | Runtime config, metric stream to eu-west-2 observability |
 
-TenantStack deploys per-tenant on EventBridge `platform.tenant.created` event.
-It is **not** deployed by the platform pipeline — only triggered by tenant provisioning.
+TenantStack deploys per-tenant through the tenant provisioning Step Functions
+workflow, which is started by EventBridge `platform.tenant.created` and
+completes by emitting `platform.tenant_provisioner` completion events back to
+the control plane. It is **not** deployed by the platform pipeline.
 Existing tenants are migrated/verified with `make ops-backfill-tenant-role-arn [APPLY=1]`.
 
 ObservabilityStack currently provisions the eu-west-2 monitoring-account OAM sink only.

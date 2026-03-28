@@ -176,8 +176,10 @@ paths:
       operationId: createTenant
       summary: Create tenant
       description: >
-        Creates a tenant registry record and starts downstream provisioning
-        workflow. Admin/operator route.
+        Creates a tenant registry record and starts the downstream provisioning
+        workflow. The initial response may return `provisioningStatus=pending`
+        before tenant infrastructure outputs such as `executionRoleArn` and
+        `memoryStoreArn` are available. Admin/operator route.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -1189,6 +1191,9 @@ components:
     TenantStatus:
       type: string
       enum: [active, suspended, deleted]
+    TenantProvisioningStatus:
+      type: string
+      enum: [pending, provisioning, ready, failed]
     InvocationMode:
       type: string
       enum: [sync, streaming, async]
@@ -1540,6 +1545,8 @@ components:
         - status
         - createdAt
         - updatedAt
+        - provisioningStatus
+        - provisioningUpdatedAt
         - ownerEmail
         - ownerTeam
         - accountId
@@ -1561,6 +1568,14 @@ components:
           $ref: "#/components/schemas/UtcTimestamp"
         updatedAt:
           $ref: "#/components/schemas/UtcTimestamp"
+        provisioningStatus:
+          $ref: "#/components/schemas/TenantProvisioningStatus"
+        provisioningUpdatedAt:
+          oneOf:
+            - $ref: "#/components/schemas/UtcTimestamp"
+            - type: "null"
+        provisioningError:
+          type: [string, "null"]
         ownerEmail:
           type: string
           format: email
@@ -1569,6 +1584,8 @@ components:
         accountId:
           type: string
           pattern: "^[0-9]{12}$"
+        executionRoleArn:
+          type: [string, "null"]
         memoryStoreArn:
           type: [string, "null"]
         runtimeRegion:

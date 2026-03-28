@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -571,6 +572,7 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     tenant = _body(response)["tenant"]
     assert tenant["tenantId"] == "t-001"
     assert tenant["tier"] == "standard"
+    assert tenant["provisioningStatus"] == "pending"
     assert tenant["apiKeySecretArn"].startswith("arn:aws:secretsmanager:")
     assert tenant["memoryStoreArn"].endswith("/t-001")
     assert fake_state["deps"].memory_provisioner.calls == [
@@ -583,6 +585,90 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
     assert detail["appId"] == "app-001"
     assert detail["tier"] == "standard"
     assert detail["accountId"] == "123456789012"
+
+
+def test_tenant_provisioned_event_updates_tenant_record(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-prov-001", "METADATA")] = {
+        "PK": "TENANT#t-prov-001",
+        "SK": "METADATA",
+        "tenantId": "t-prov-001",
+        "appId": "app-001",
+        "displayName": "Acme Ltd",
+        "tier": "standard",
+        "status": "active",
+        "provisioningStatus": "pending",
+        "createdAt": "2026-03-28T12:00:00Z",
+        "updatedAt": "2026-03-28T12:00:00Z",
+        "ownerEmail": "owner@example.com",
+        "ownerTeam": "team-acme",
+        "accountId": "123456789012",
+    }
+
+    context = MagicMock()
+    context.function_name = "tenant-api"
+    context.memory_limit_in_mb = 512
+    context.invoked_function_arn = "arn:aws:lambda:eu-west-2:123456789012:function:tenant-api"
+    context.aws_request_id = "req-1"
+    response = tenant_api_handler.lambda_handler(
+        {
+            "source": "platform.tenant_provisioner",
+            "detail-type": "tenant.provisioned",
+            "detail": {
+                "tenantId": "t-prov-001",
+                "appId": "app-001",
+                "ExecutionRoleArn": "arn:role",
+                "MemoryStoreArn": "arn:mem",
+            },
+        },
+        context,
+    )
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["provisioningStatus"] == "ready"
+    assert tenant["executionRoleArn"] == "arn:role"
+    assert tenant["memoryStoreArn"] == "arn:mem"
+
+
+def test_tenant_provisioning_failed_event_updates_tenant_record(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#t-prov-002", "METADATA")] = {
+        "PK": "TENANT#t-prov-002",
+        "SK": "METADATA",
+        "tenantId": "t-prov-002",
+        "appId": "app-002",
+        "displayName": "Beta Ltd",
+        "tier": "standard",
+        "status": "active",
+        "provisioningStatus": "pending",
+        "createdAt": "2026-03-28T12:00:00Z",
+        "updatedAt": "2026-03-28T12:00:00Z",
+        "ownerEmail": "owner@example.com",
+        "ownerTeam": "team-beta",
+        "accountId": "123456789012",
+    }
+
+    context = MagicMock()
+    context.function_name = "tenant-api"
+    context.memory_limit_in_mb = 512
+    context.invoked_function_arn = "arn:aws:lambda:eu-west-2:123456789012:function:tenant-api"
+    context.aws_request_id = "req-2"
+    response = tenant_api_handler.lambda_handler(
+        {
+            "source": "platform.tenant_provisioner",
+            "detail-type": "tenant.provisioning_failed",
+            "detail": {
+                "tenantId": "t-prov-002",
+                "appId": "app-002",
+                "reason": "ROLLBACK_COMPLETE",
+            },
+        },
+        context,
+    )
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["provisioningStatus"] == "failed"
+    assert tenant["provisioningError"] == "ROLLBACK_COMPLETE"
 
 
 def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, Any]) -> None:

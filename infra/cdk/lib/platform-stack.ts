@@ -30,6 +30,8 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -654,12 +656,11 @@ export class PlatformStack extends cdk.Stack {
       environment: {
         POWERTOOLS_SERVICE_NAME: 'tenant-provisioner',
         PLATFORM_ENV: env,
-        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
         TENANT_STACK_TEMPLATE_URL: tenantStackTemplateAsset.bucket.s3UrlForObject(tenantStackTemplateAsset.s3ObjectKey),
+        EVENT_BUS_NAME: 'default',
       },
     });
 
-    this.tenantsTable.grantReadWriteData(tenantProvisionerFn);
     tenantStackTemplateAsset.grantRead(tenantProvisionerFn);
 
     tenantProvisionerFn.addToRolePolicy(
@@ -718,6 +719,107 @@ export class PlatformStack extends cdk.Stack {
       }),
     );
 
+    tenantProvisionerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TenantProvisionerEventBridgeAccess',
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+
+    const startTenantProvisioning = new tasks.LambdaInvoke(this, 'StartTenantProvisioning', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        action: 'start',
+        detail: sfn.JsonPath.objectAt('$.detail'),
+      }),
+      payloadResponseOnly: true,
+    });
+
+    const waitForTenantProvisioning = new sfn.Wait(this, 'WaitForTenantProvisioning', {
+      time: sfn.WaitTime.duration(cdk.Duration.seconds(10)),
+    });
+
+    const pollTenantProvisioning = new tasks.LambdaInvoke(this, 'PollTenantProvisioning', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        action: 'poll',
+        tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+        appId: sfn.JsonPath.stringAt('$.appId'),
+        tier: sfn.JsonPath.stringAt('$.tier'),
+        accountId: sfn.JsonPath.stringAt('$.accountId'),
+        stackName: sfn.JsonPath.stringAt('$.stackName'),
+      }),
+      payloadResponseOnly: true,
+    });
+
+    const emitTenantProvisioned = new tasks.LambdaInvoke(this, 'EmitTenantProvisioned', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        action: 'emit-result',
+        resultType: 'provisioned',
+        tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+        appId: sfn.JsonPath.stringAt('$.appId'),
+        tier: sfn.JsonPath.stringAt('$.tier'),
+        accountId: sfn.JsonPath.stringAt('$.accountId'),
+        stackName: sfn.JsonPath.stringAt('$.stackName'),
+        stackStatus: sfn.JsonPath.stringAt('$.stackStatus'),
+        outputs: sfn.JsonPath.objectAt('$.outputs'),
+      }),
+      payloadResponseOnly: true,
+    });
+
+    const emitTenantProvisioningFailed = new tasks.LambdaInvoke(this, 'EmitTenantProvisioningFailed', {
+      lambdaFunction: tenantProvisionerFn,
+      payload: sfn.TaskInput.fromObject({
+        action: 'emit-result',
+        resultType: 'failed',
+        tenantId: sfn.JsonPath.stringAt('$.tenantId'),
+        appId: sfn.JsonPath.stringAt('$.appId'),
+        tier: sfn.JsonPath.stringAt('$.tier'),
+        accountId: sfn.JsonPath.stringAt('$.accountId'),
+        stackName: sfn.JsonPath.stringAt('$.stackName'),
+        stackStatus: sfn.JsonPath.stringAt('$.stackStatus'),
+        reason: sfn.JsonPath.stringAt('$.reason'),
+        outputs: sfn.JsonPath.objectAt('$.outputs'),
+      }),
+      payloadResponseOnly: true,
+    });
+
+    const tenantProvisioningStateMachine = new sfn.StateMachine(this, 'TenantProvisioningStateMachine', {
+      stateMachineName: `platform-tenant-provisioning-${env}`,
+      timeout: cdk.Duration.minutes(30),
+      definitionBody: sfn.DefinitionBody.fromChainable(
+        startTenantProvisioning.next(
+          new sfn.Choice(this, 'TenantProvisioningStarted?')
+            .when(
+              sfn.Condition.stringEquals('$.provisioningState', 'READY'),
+              emitTenantProvisioned,
+            )
+            .when(
+              sfn.Condition.stringEquals('$.provisioningState', 'FAILED'),
+              emitTenantProvisioningFailed,
+            )
+            .otherwise(
+              waitForTenantProvisioning.next(
+                pollTenantProvisioning.next(
+                  new sfn.Choice(this, 'TenantProvisioningComplete?')
+                    .when(
+                      sfn.Condition.stringEquals('$.provisioningState', 'READY'),
+                      emitTenantProvisioned,
+                    )
+                    .when(
+                      sfn.Condition.stringEquals('$.provisioningState', 'FAILED'),
+                      emitTenantProvisioningFailed,
+                    )
+                    .otherwise(waitForTenantProvisioning),
+                ),
+              ),
+            ),
+        ),
+      ),
+    });
+
     new events.Rule(this, 'TenantCreatedRule', {
       ruleName: `platform-tenant-created-${env}`,
       description: 'Trigger tenant provisioning when a new tenant is created',
@@ -725,7 +827,17 @@ export class PlatformStack extends cdk.Stack {
         source: ['platform.tenant_api'],
         detailType: ['tenant.created'],
       },
-      targets: [new targets.LambdaFunction(tenantProvisionerFn)],
+      targets: [new targets.SfnStateMachine(tenantProvisioningStateMachine)],
+    });
+
+    new events.Rule(this, 'TenantProvisioningCompletedRule', {
+      ruleName: `platform-tenant-provisioning-completed-${env}`,
+      description: 'Update tenant metadata when tenant provisioning completes',
+      eventPattern: {
+        source: ['platform.tenant_provisioner'],
+        detailType: ['tenant.provisioned', 'tenant.provisioning_failed'],
+      },
+      targets: [new targets.LambdaFunction(this.tenantApiFn)],
     });
 
     this.toolsTable.grantReadData(this.requestInterceptorFn);
