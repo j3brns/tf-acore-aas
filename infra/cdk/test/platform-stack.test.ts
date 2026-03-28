@@ -440,6 +440,54 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('splits tenant control-plane routes across dedicated service lambdas', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-tenant-mgmt',
+      Handler: 'tenant_mgmt_handler.lambda_handler',
+      Environment: {
+        Variables: Match.objectLike({
+          POWERTOOLS_SERVICE_NAME: 'tenant-mgmt-service',
+          TENANTS_TABLE_NAME: Match.anyValue(),
+          INVOCATIONS_TABLE_NAME: Match.anyValue(),
+        }),
+      },
+    });
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-webhook-registry',
+      Handler: 'webhook_registry_handler.lambda_handler',
+      Environment: {
+        Variables: Match.objectLike({
+          POWERTOOLS_SERVICE_NAME: 'webhook-registry-service',
+          TENANTS_TABLE_NAME: Match.anyValue(),
+        }),
+      },
+    });
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-agent-registry',
+      Handler: 'agent_registry_handler.lambda_handler',
+      Environment: {
+        Variables: Match.objectLike({
+          POWERTOOLS_SERVICE_NAME: 'agent-registry-service',
+          AGENTS_TABLE_NAME: Match.anyValue(),
+        }),
+      },
+    });
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-admin-ops',
+      Handler: 'admin_ops_handler.lambda_handler',
+      Environment: {
+        Variables: Match.objectLike({
+          POWERTOOLS_SERVICE_NAME: 'admin-ops-service',
+          TENANTS_TABLE_NAME: Match.anyValue(),
+          OPS_LOCKS_TABLE: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
   test('configures the BFF lambda with canonical Entra config and secret references', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'platform-core-dev-bff',

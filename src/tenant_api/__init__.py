@@ -1,1 +1,1 @@
-"""tenant_api — Tenant management REST API Lambda package."""
+"""tenant_api — tenant management, webhook, agent registry, and admin ops services."""

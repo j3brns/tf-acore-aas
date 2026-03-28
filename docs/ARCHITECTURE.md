@@ -35,7 +35,10 @@ eu-west-2 London (HOME — owns everything)
 ├── SQS (webhook delivery retry queue only, not async invocation routing)
 ├── Bridge Lambda
 ├── Authoriser Lambda
-├── Tenant API Lambda
+├── Tenant management service Lambda
+├── Webhook registry service Lambda
+├── Agent registry service Lambda
+├── Admin ops service Lambda
 ├── BFF Lambda
 ├── CloudWatch (aggregated)
 └── Platform identity and shared config
@@ -326,8 +329,9 @@ falls back to the next-highest promoted version without rebuilding artifacts.
 
 ### Release Lifecycle Audit Events
 
-Promotion and rollback are control-plane mutations owned by `tenant-api`. After
-the `platform-agents` record is updated successfully, `tenant-api` emits one
+Promotion and rollback are control-plane mutations owned by the agent registry
+service. After the `platform-agents` record is updated successfully, the agent
+registry service emits one
 EventBridge event on the platform event bus with detail type:
 
 - `platform.agent_version.promoted`
@@ -423,7 +427,7 @@ tenant-scoped even when initiated by platform-owned automation.
 ```mermaid
 flowchart LR
   subgraph P["Platform Account (home/control plane)"]
-    Admin["Platform Admin / Tenant API\nCREATE tenant"]
+    Admin["Platform Admin / Tenant mgmt service\nCREATE tenant"]
     Tenants["DynamoDB: platform-tenants\n(tenant registry + accountId + provisioning state + resource refs)"]
     EB["EventBridge\nplatform.tenant.created"]
     Sfn["Step Functions\nTenant provisioning workflow"]

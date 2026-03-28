@@ -119,7 +119,10 @@ export class PlatformStack extends cdk.Stack {
   public readonly bridgeFn: lambda.Function;
   public readonly bffFn: lambda.Function;
   public readonly authoriserFn: lambda.Function;
-  public readonly tenantApiFn: lambda.Function;
+  public readonly tenantMgmtFn: lambda.Function;
+  public readonly webhookRegistryFn: lambda.Function;
+  public readonly agentRegistryFn: lambda.Function;
+  public readonly adminOpsFn: lambda.Function;
   public readonly webhookDeliveryFn: lambda.Function;
   public readonly requestInterceptorFn: lambda.Function;
   public readonly responseInterceptorFn: lambda.Function;
@@ -338,22 +341,24 @@ export class PlatformStack extends cdk.Stack {
 
     // --- Lambdas ---
 
-    this.tenantApiFn = this.createPythonLambda({
+    this.tenantMgmtFn = this.createPythonLambda({
       assetPath: path.join(__dirname, '../../../src/tenant_api'),
-      handler: 'handler.lambda_handler',
-      functionNameSuffix: 'tenant-api',
+      handler: 'tenant_mgmt_handler.lambda_handler',
+      functionNameSuffix: 'tenant-mgmt',
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
       environment: {
-        POWERTOOLS_SERVICE_NAME: 'tenant-api',
+        POWERTOOLS_SERVICE_NAME: 'tenant-mgmt-service',
         TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        INVOCATIONS_TABLE_NAME: this.invocationsTable.tableName,
         EVENT_BUS_NAME: 'default',
         TENANT_API_KEY_SECRET_PREFIX: 'platform/tenants', // pragma: allowlist secret
       },
     });
 
-    this.tenantsTable.grantReadWriteData(this.tenantApiFn);
-    this.tenantApiFn.addToRolePolicy(
+    this.tenantsTable.grantReadWriteData(this.tenantMgmtFn);
+    this.invocationsTable.grantReadData(this.tenantMgmtFn);
+    this.tenantMgmtFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'secretsmanager:CreateSecret',
@@ -365,14 +370,109 @@ export class PlatformStack extends cdk.Stack {
         ],
       }),
     );
-    this.tenantApiFn.addToRolePolicy(
+    this.tenantMgmtFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+    this.tenantMgmtFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/platform/config/runtime-region`],
+      }),
+    );
+
+    this.webhookRegistryFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/tenant_api'),
+      handler: 'webhook_registry_handler.lambda_handler',
+      functionNameSuffix: 'webhook-registry',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'webhook-registry-service',
+        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        EVENT_BUS_NAME: 'default',
+      },
+    });
+
+    this.tenantsTable.grantReadWriteData(this.webhookRegistryFn);
+    this.webhookRegistryFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['events:PutEvents'],
         resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
       }),
     );
 
-    this.tenantApiFn.addToRolePolicy(
+    this.agentRegistryFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/tenant_api'),
+      handler: 'agent_registry_handler.lambda_handler',
+      functionNameSuffix: 'agent-registry',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'agent-registry-service',
+        AGENTS_TABLE_NAME: this.agentsTable.tableName,
+        EVENT_BUS_NAME: 'default',
+      },
+    });
+
+    this.agentsTable.grantReadWriteData(this.agentRegistryFn);
+    this.agentRegistryFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['events:PutEvents'],
+        resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+      }),
+    );
+
+    this.agentRegistryFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'lambda:ListVersionsByFunction',
+          'lambda:UpdateAlias',
+          'lambda:GetAlias',
+          'lambda:GetFunctionConfiguration',
+        ],
+        resources: [
+          `arn:aws:lambda:${this.region}:${this.account}:function:platform-*-${env}`,
+          `arn:aws:lambda:${this.region}:${this.account}:function:platform-*-${env}:*`,
+        ],
+      }),
+    );
+
+    this.adminOpsFn = this.createPythonLambda({
+      assetPath: path.join(__dirname, '../../../src/tenant_api'),
+      handler: 'admin_ops_handler.lambda_handler',
+      functionNameSuffix: 'admin-ops',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        POWERTOOLS_SERVICE_NAME: 'admin-ops-service',
+        TENANTS_TABLE_NAME: this.tenantsTable.tableName,
+        OPS_LOCKS_TABLE: this.opsLocksTable.tableName,
+        RUNTIME_REGION_PARAM: '/platform/config/runtime-region',
+        FALLBACK_REGION_PARAM: '/platform/config/fallback-region',
+      },
+    });
+
+    this.tenantsTable.grantReadWriteData(this.adminOpsFn);
+    this.opsLocksTable.grantReadData(this.adminOpsFn);
+    this.adminOpsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter', 'ssm:PutParameter'],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/platform/config/runtime-region`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/platform/config/fallback-region`,
+        ],
+      }),
+    );
+    this.adminOpsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['servicequotas:ListServiceQuotas', 'cloudwatch:GetMetricStatistics'],
+        resources: ['*'],
+      }),
+    );
+    this.adminOpsFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'lambda:ListVersionsByFunction',
@@ -826,7 +926,7 @@ export class PlatformStack extends cdk.Stack {
         source: ['platform.tenant_provisioner'],
         detailType: ['tenant.provisioned', 'tenant.provisioning_failed'],
       },
-      targets: [new targets.LambdaFunction(this.tenantApiFn)],
+      targets: [new targets.LambdaFunction(this.tenantMgmtFn)],
     });
 
     this.toolsTable.grantReadData(this.requestInterceptorFn);
@@ -1289,40 +1389,60 @@ export class PlatformStack extends cdk.Stack {
       apiKeyRequired: true,
     };
 
-    const tenantApiIntegration = new apigateway.LambdaIntegration(this.tenantApiFn, { proxy: true });
+    const tenantMgmtIntegration = new apigateway.LambdaIntegration(this.tenantMgmtFn, { proxy: true });
+    const webhookRegistryIntegration = new apigateway.LambdaIntegration(this.webhookRegistryFn, {
+      proxy: true,
+    });
+    const agentRegistryIntegration = new apigateway.LambdaIntegration(this.agentRegistryFn, {
+      proxy: true,
+    });
+    const adminOpsIntegration = new apigateway.LambdaIntegration(this.adminOpsFn, { proxy: true });
     const bridgeIntegration = new apigateway.LambdaIntegration(bridgeAlias, { proxy: true });
     const bridgeStreamingIntegration = new apigateway.LambdaIntegration(bridgeAlias, {
       proxy: true,
       responseTransferMode: apigateway.ResponseTransferMode.STREAM,
     });
 
-    health.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    sessions.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    tenants.addMethod('POST', tenantApiIntegration, securedMethodOptions);
-    tenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    health.addMethod('GET', tenantMgmtIntegration, securedMethodOptions);
+    sessions.addMethod('GET', tenantMgmtIntegration, securedMethodOptions);
+    tenants.addMethod('POST', tenantMgmtIntegration, securedMethodOptions);
+    tenants.addMethod('GET', tenantMgmtIntegration, securedMethodOptions);
 
-    tenantById.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    tenantById.addMethod('PATCH', tenantApiIntegration, securedMethodOptions);
-    tenantById.addMethod('DELETE', tenantApiIntegration, securedMethodOptions);
+    tenantById.addMethod('GET', tenantMgmtIntegration, securedMethodOptions);
+    tenantById.addMethod('PATCH', tenantMgmtIntegration, securedMethodOptions);
+    tenantById.addMethod('DELETE', tenantMgmtIntegration, securedMethodOptions);
 
-    auditExport.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    tenantApiKeyRotate.addMethod('POST', tenantApiIntegration, securedMethodOptions);
-    tenantUsersInvite.addMethod('POST', tenantApiIntegration, securedMethodOptions);
+    auditExport.addMethod('GET', tenantMgmtIntegration, securedMethodOptions);
+    tenantApiKeyRotate.addMethod('POST', tenantMgmtIntegration, securedMethodOptions);
+    tenantUsersInvite.addMethod('POST', tenantMgmtIntegration, securedMethodOptions);
 
-    failover.addMethod('POST', tenantApiIntegration, securedMethodOptions);
-    quota.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    splitAccounts.addMethod('POST', tenantApiIntegration, securedMethodOptions);
-    serviceHealth.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    billingStatus.addMethod('GET', tenantApiIntegration, securedMethodOptions);
+    failover.addMethod('POST', adminOpsIntegration, securedMethodOptions);
+    quota.addMethod('GET', adminOpsIntegration, securedMethodOptions);
+    splitAccounts.addMethod('POST', adminOpsIntegration, securedMethodOptions);
+    serviceHealth.addMethod('GET', adminOpsIntegration, securedMethodOptions);
+    billingStatus.addMethod('GET', adminOpsIntegration, securedMethodOptions);
 
     // Wire all ops routes
-    opsTopTenants.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    opsSecurityEvents.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    opsErrorRate.addMethod('GET', tenantApiIntegration, securedMethodOptions);
-    opsSecurityPage.addMethod('POST', tenantApiIntegration, securedMethodOptions);
-    opsDlqByName.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
-    opsTenantById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
-    opsJobById.addMethod('ANY', tenantApiIntegration, securedMethodOptions);
+    opsTopTenants.addMethod('GET', adminOpsIntegration, securedMethodOptions);
+    opsSecurityEvents.addMethod('GET', adminOpsIntegration, securedMethodOptions);
+    opsErrorRate.addMethod('GET', adminOpsIntegration, securedMethodOptions);
+    opsSecurityPage.addMethod('POST', adminOpsIntegration, securedMethodOptions);
+    opsDlqByName.addMethod('ANY', adminOpsIntegration, securedMethodOptions);
+    opsTenantById.addMethod('ANY', adminOpsIntegration, securedMethodOptions);
+    opsJobById.addMethod('ANY', adminOpsIntegration, securedMethodOptions);
+
+    webhooks.addMethod('GET', webhookRegistryIntegration, securedMethodOptions);
+    webhooks.addMethod('POST', webhookRegistryIntegration, securedMethodOptions);
+    webhookById.addMethod('DELETE', webhookRegistryIntegration, securedMethodOptions);
+
+    const platformAgents = platform.addResource('agents');
+    const platformAgentByName = platformAgents.addResource('{agentName}');
+    const platformAgentVersions = platformAgentByName.addResource('versions');
+    const platformAgentVersion = platformAgentVersions.addResource('{version}');
+
+    platformAgents.addMethod('GET', agentRegistryIntegration, securedMethodOptions);
+    platformAgents.addMethod('POST', agentRegistryIntegration, securedMethodOptions);
+    platformAgentVersion.addMethod('PATCH', agentRegistryIntegration, securedMethodOptions);
 
     agents.addMethod('GET', bridgeIntegration, securedMethodOptions);
     agentByName.addMethod('GET', bridgeIntegration, securedMethodOptions);
@@ -1330,21 +1450,6 @@ export class PlatformStack extends cdk.Stack {
     jobById.addMethod(
       'GET',
       bridgeIntegration,
-      securedMethodOptions,
-    );
-    webhooks.addMethod(
-      'GET',
-      tenantApiIntegration,
-      securedMethodOptions,
-    );
-    webhooks.addMethod(
-      'POST',
-      tenantApiIntegration,
-      securedMethodOptions,
-    );
-    webhookById.addMethod(
-      'DELETE',
-      tenantApiIntegration,
       securedMethodOptions,
     );
     tokenRefresh.addMethod(
