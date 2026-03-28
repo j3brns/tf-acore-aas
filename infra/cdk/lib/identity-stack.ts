@@ -1,8 +1,8 @@
 /**
- * IdentityStack — GitLab OIDC WIF provider, pipeline roles, KMS keys.
+ * IdentityStack — GitLab OIDC WIF provider, pipeline roles, and the tenant memory KMS key.
  *
  * Creates least-privilege pipeline roles (one per stage).
- * Creates KMS keys: one per data classification (tenant-data, platform-config, logs).
+ * Retains a single customer-managed KMS key for the AgentCore tenant memory path.
  * No wildcard principals in KMS key policies.
  *
  * Implemented in TASK-022.
@@ -30,8 +30,6 @@ interface PipelineRoleDefinition {
 
 export class IdentityStack extends cdk.Stack {
   public readonly tenantDataKey: kms.IKey;
-  public readonly platformConfigKey: kms.IKey;
-  public readonly logsKey: kms.IKey;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -124,17 +122,7 @@ export class IdentityStack extends cdk.Stack {
     this.tenantDataKey = this.createPlatformKey({
       id: 'TenantDataKey',
       aliasName: `alias/platform-tenant-data-${envName}`,
-      description: `Platform tenant data KMS key (${envName})`,
-    });
-    this.platformConfigKey = this.createPlatformKey({
-      id: 'PlatformConfigKey',
-      aliasName: `alias/platform-config-${envName}`,
-      description: `Platform config KMS key (${envName})`,
-    });
-    this.logsKey = this.createPlatformKey({
-      id: 'LogsKey',
-      aliasName: `alias/platform-logs-${envName}`,
-      description: `Platform logs KMS key (${envName})`,
+      description: `Platform tenant memory KMS key (${envName})`,
     });
 
     new cdk.CfnOutput(this, 'GitLabOidcProviderArn', {
@@ -168,23 +156,11 @@ export class IdentityStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'TenantDataKmsKeyArn', {
       value: this.tenantDataKey.keyArn,
     });
-    new cdk.CfnOutput(this, 'PlatformConfigKmsKeyArn', {
-      value: this.platformConfigKey.keyArn,
-    });
-    new cdk.CfnOutput(this, 'LogsKmsKeyArn', {
-      value: this.logsKey.keyArn,
-    });
 
     new ssm.StringParameter(this, 'TenantDataKmsKeyArnParam', {
       parameterName: `/platform/identity/${envName}/tenant-data-kms-key-arn`,
       stringValue: this.tenantDataKey.keyArn,
-      description: 'KMS key ARN for tenant data encryption',
-    });
-
-    new ssm.StringParameter(this, 'PlatformConfigKmsKeyArnParam', {
-      parameterName: `/platform/identity/${envName}/platform-config-kms-key-arn`,
-      stringValue: this.platformConfigKey.keyArn,
-      description: 'KMS key ARN for platform configuration encryption',
+      description: 'KMS key ARN for tenant AgentCore memory encryption',
     });
   }
 

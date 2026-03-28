@@ -23,7 +23,6 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -65,8 +64,6 @@ type GatewayPolicyConfiguration = {
 
 export interface PlatformStackProps extends cdk.StackProps {
   readonly vpc: ec2.IVpc;
-  readonly tenantDataKey: kms.IKey;
-  readonly platformConfigKey: kms.IKey;
 }
 
 function ensureTenantStubTemplate(
@@ -162,8 +159,7 @@ export class PlatformStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PROVISIONED,
       readCapacity: 5,
       writeCapacity: 5,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.platformConfigKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       pointInTimeRecovery: true,
       deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -176,8 +172,7 @@ export class PlatformStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PROVISIONED,
       readCapacity: 5,
       writeCapacity: 5,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.platformConfigKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       pointInTimeRecovery: true,
       deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -190,8 +185,7 @@ export class PlatformStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PROVISIONED,
       readCapacity: 5,
       writeCapacity: 5,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.platformConfigKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       pointInTimeRecovery: true,
       deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -204,8 +198,7 @@ export class PlatformStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PROVISIONED,
       readCapacity: 1,
       writeCapacity: 1,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.platformConfigKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
       deletionProtection: true,
@@ -216,8 +209,7 @@ export class PlatformStack extends cdk.Stack {
       tableName: 'platform-gateway-idempotency',
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.platformConfigKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: 'expiration',
       pointInTimeRecovery: true,
       deletionProtection: true,
@@ -229,8 +221,7 @@ export class PlatformStack extends cdk.Stack {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.tenantDataKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
       deletionProtection: true,
@@ -242,8 +233,7 @@ export class PlatformStack extends cdk.Stack {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.tenantDataKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: 'ttl',
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
       pointInTimeRecovery: true,
@@ -256,8 +246,7 @@ export class PlatformStack extends cdk.Stack {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: props.tenantDataKey,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecovery: true,
       deletionProtection: true,

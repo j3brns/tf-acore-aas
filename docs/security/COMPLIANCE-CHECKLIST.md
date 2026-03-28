@@ -12,7 +12,7 @@
 | Data residency (UK/EU)                    | eu-west-2 home region, EU-only regions     | Implemented|
 | Breach notification (72h to ICO)          | RUNBOOK-003 triggers investigation         | Procedural|
 | DPA with AWS                              | Covered by AWS Data Processing Agreement   | Document |
-| Encryption at rest                        | KMS on all DynamoDB and S3                 | Implemented|
+| Encryption at rest                        | AWS-managed encryption on DynamoDB and S3; CMK retained only for AgentCore tenant memory | Implemented|
 | Encryption in transit                     | TLS 1.2+ everywhere                        | Implemented|
 | Audit logging                             | CloudTrail + platform invocation logs 7yr  | Implemented|
 
@@ -22,7 +22,7 @@
 |------------------------|--------------------------------------------|
 | Access control         | Entra RBAC, least-privilege IAM            |
 | Logical separation     | Four-layer tenant isolation                |
-| Encryption             | KMS at rest, TLS in transit                |
+| Encryption             | AWS-managed at rest, TLS in transit; CMK only where the service requires explicit key selection |
 | Availability           | Multi-region failover, usage plans         |
 | Change management      | Two-reviewer approval, pipeline validation |
 | Incident response      | Runbooks, PagerDuty integration            |

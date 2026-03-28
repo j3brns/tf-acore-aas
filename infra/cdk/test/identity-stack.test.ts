@@ -106,17 +106,11 @@ describe('IdentityStack', () => {
     });
   });
 
-  test('creates three KMS keys and key policies do not use wildcard principals', () => {
-    template.resourceCountIs('AWS::KMS::Key', 3);
-    template.resourceCountIs('AWS::KMS::Alias', 3);
+  test('creates one tenant memory KMS key and key policy does not use wildcard principals', () => {
+    template.resourceCountIs('AWS::KMS::Key', 1);
+    template.resourceCountIs('AWS::KMS::Alias', 1);
     template.hasResourceProperties('AWS::KMS::Alias', {
       AliasName: 'alias/platform-tenant-data-dev',
-    });
-    template.hasResourceProperties('AWS::KMS::Alias', {
-      AliasName: 'alias/platform-config-dev',
-    });
-    template.hasResourceProperties('AWS::KMS::Alias', {
-      AliasName: 'alias/platform-logs-dev',
     });
 
     const keys = template.findResources('AWS::KMS::Key');

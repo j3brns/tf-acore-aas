@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as kms from 'aws-cdk-lib/aws-kms';
 import { PlatformStack } from '../lib/platform-stack';
 
 describe('PlatformStack (TASK-023)', () => {
@@ -17,8 +16,6 @@ describe('PlatformStack (TASK-023)', () => {
       },
     });
     const env = { account: '123456789012', region: 'eu-west-2' };
-    const identityStack = new cdk.Stack(app, 'IdentityStack', { env });
-    const mockKey = new kms.Key(identityStack, 'MockKey');
 
     const networkStack = new cdk.Stack(app, 'NetworkStack', { env });
     const mockVpc = new ec2.Vpc(networkStack, 'MockVpc', {
@@ -37,8 +34,6 @@ describe('PlatformStack (TASK-023)', () => {
     const stack = new PlatformStack(app, `platform-core-${environment}`, {
       env,
       vpc: mockVpc,
-      tenantDataKey: mockKey,
-      platformConfigKey: mockKey,
     });
     return Template.fromStack(stack);
   };
@@ -73,6 +68,16 @@ describe('PlatformStack (TASK-023)', () => {
         StreamViewType: 'NEW_AND_OLD_IMAGES',
       },
     });
+
+    const tables = template.findResources('AWS::DynamoDB::Table') as Record<
+      string,
+      { Properties?: { SSESpecification?: Record<string, unknown> } }
+    >;
+    for (const table of Object.values(tables)) {
+      expect(table.Properties?.SSESpecification).toEqual({
+        SSEEnabled: true,
+      });
+    }
   });
 
   test('creates REST API with authorizer-backed API key source and usage plans', () => {

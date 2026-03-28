@@ -93,7 +93,7 @@ acting principal, target tenant, operation type, and outcome
 | JWT validation (sig, exp, aud) | 1, 3                         | Authoriser Lambda         |
 | TenantScopedDynamoDB           | 2                            | data-access-lib           |
 | Act-on-behalf scoped tokens    | 4                            | REQUEST interceptor        |
-| KMS encryption at rest         | 2, 10                        | All DynamoDB + S3          |
+| Encryption at rest            | 2, 10                        | AWS-managed encryption on DynamoDB + S3; customer-managed KMS for AgentCore tenant memory |
 | HTTPS everywhere               | 8                            | CloudFront, API GW, VPC   |
 | detect-secrets in CI           | 6, 7                         | GitLab CI validate stage  |
 | Two-reviewer prod approval     | 7                            | GitLab protected env + CI API audit |
@@ -107,21 +107,21 @@ acting principal, target tenant, operation type, and outcome
 
 | Data Type               | Classification  | Encryption       | Retention    |
 |-------------------------|-----------------|------------------|--------------|
-| Agent invocation content| Confidential    | KMS at rest+TLS  | 90 days      |
-| Tenant metadata         | Internal        | KMS at rest+TLS  | Lifetime     |
-| Audit logs              | Internal        | KMS at rest+TLS  | 7 years      |
+| Agent invocation content| Confidential    | DynamoDB AWS managed at rest + TLS | 90 days      |
+| Tenant metadata         | Internal        | DynamoDB AWS managed at rest + TLS | Lifetime     |
+| Audit logs              | Internal        | AWS managed at rest + TLS  | 7 years      |
 | CloudTrail logs         | Internal        | Default+KMS      | 7 years      |
 | Platform secrets        | Secret          | Secrets Manager  | Rotated 30d  |
-| Agent code (ZIP/image)  | Internal        | S3 SSE-KMS       | Per version  |
+| Agent code (ZIP/image)  | Internal        | S3 SSE-S3        | Per version  |
 
 ## Residual Risks
 
 1. Entra identity provider outage: platform cannot authenticate human users.
    Mitigation: SigV4 path still works for machine consumers; monitor Entra SLA.
 
-2. KMS key compromise: all encrypted data at risk.
-   Mitigation: KMS key policies restrict access; key rotation every 90 days;
-   separate keys per data classification.
+2. Customer-managed key compromise on the tenant memory path.
+   Mitigation: CMK scope is reduced to the AgentCore tenant-memory path only;
+   platform DynamoDB and S3 storage use AWS-managed encryption to reduce key-policy blast radius.
 
 3. AgentCore Runtime escape: microVM isolation breach at hypervisor level.
    Mitigation: AWS responsibility under shared responsibility model; Firecracker
