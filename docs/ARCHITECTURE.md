@@ -259,7 +259,9 @@ Control-plane Lambdas cache capability policy locally and evaluate it with
 deny-by-default fallback semantics: use the last known good AppConfig document
 when available, otherwise fall back to an empty policy that enables nothing.
 Kill switches override all rollout rules. Rollback of capability changes uses
-AppConfig version history rather than ad hoc DynamoDB edits.
+AppConfig version history rather than ad hoc DynamoDB edits. Capability changes
+deploy through a bounded rollout strategy with bake time rather than immediate
+100% rollout.
 
 ### Safe Defaults And Fallbacks
 

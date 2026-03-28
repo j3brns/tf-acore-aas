@@ -514,16 +514,19 @@ class TenantCapabilityClient:
             if self._application and self._environment
             else None
         )
+        self._last_known_good_policy = TenantCapabilityPolicy.safe_fallback()
 
     def fetch_policy(self) -> TenantCapabilityPolicy:
         """Fetch the active capability policy from AppConfig.
 
-        Returns TenantCapabilityPolicy.safe_fallback() on any error.
+        Returns the last known good policy on read failure when available.
+        Falls back to TenantCapabilityPolicy.safe_fallback() only when there is
+        no previously parsed policy to retain.
         Policy is cached for 60 seconds (max_age) to minimize AppConfig calls.
         """
         if not self._provider or not self._profile:
             logger.warning("AppConfig provider or profile not configured; using fallback policy")
-            return TenantCapabilityPolicy.safe_fallback()
+            return self._last_known_good_policy
 
         try:
             # get() returns a dict if the profile is JSON and parsed by AppConfig.
@@ -534,7 +537,7 @@ class TenantCapabilityClient:
                     "AppConfig policy is not a JSON object",
                     extra={"type": str(type(raw_policy)), "profile": self._profile},
                 )
-                return TenantCapabilityPolicy.safe_fallback()
+                return self._last_known_good_policy
 
             # Map raw dict to TenantCapabilityPolicy dataclass
             # NOTE: Any malformed field will result in fallback for that specific rollout.
@@ -562,11 +565,13 @@ class TenantCapabilityClient:
                         extra={"capability": cap_name, "rollout_dict": rollout_dict},
                     )
 
-            return TenantCapabilityPolicy(
+            policy = TenantCapabilityPolicy(
                 schema_version=str(raw_policy.get("schema_version", "unknown")),
                 capabilities=capabilities,
                 killed_capabilities=frozenset(raw_policy.get("killed_capabilities", [])),
             )
+            self._last_known_good_policy = policy
+            return policy
         except Exception:
-            logger.exception("Failed to fetch AppConfig capability policy; using fallback")
-            return TenantCapabilityPolicy.safe_fallback()
+            logger.exception("Failed to fetch AppConfig capability policy; using last known good")
+            return self._last_known_good_policy

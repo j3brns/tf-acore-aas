@@ -4,6 +4,7 @@ tests/test_capability_client.py — Tests for AppConfig-backed TenantCapabilityC
 Coverage assertions:
   - fetch_policy() returns fallback on missing environment.
   - fetch_policy() returns fallback on AppConfig error.
+  - fetch_policy() retains last known good policy after provider failure.
   - fetch_policy() parses valid JSON policy correctly.
   - fetch_policy() handles malformed rollout dicts gracefully.
   - fetch_policy() uses max_age caching.
@@ -134,6 +135,30 @@ class TestTenantCapabilityClientFetch:
 
         policy = capability_client.fetch_policy()
         assert policy == TenantCapabilityPolicy.safe_fallback()
+
+    def test_fetch_policy_retains_last_known_good_on_provider_error(
+        self, capability_client, mock_appconfig_provider
+    ):
+        mock_provider_instance = mock_appconfig_provider.return_value
+        mock_provider_instance.get.return_value = {
+            "schema_version": "2026-03-21",
+            "capabilities": {
+                "agents.invoke": {
+                    "enabled": True,
+                    "rollout_percentage": 100,
+                    "tier_allow_list": ["basic", "standard", "premium"],
+                }
+            },
+            "killed_capabilities": [],
+        }
+
+        first = capability_client.fetch_policy()
+        assert "agents.invoke" in first.capabilities
+
+        mock_provider_instance.get.side_effect = Exception("AppConfig boom")
+        second = capability_client.fetch_policy()
+
+        assert second == first
 
     def test_fetch_policy_skips_malformed_rollouts(
         self, capability_client, mock_appconfig_provider

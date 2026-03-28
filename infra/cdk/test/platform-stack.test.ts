@@ -179,6 +179,36 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
+  test('creates AppConfig validator, bounded deployment strategy, and initial deployment', () => {
+    const devTemplate = synthTemplate('dev');
+    const prodTemplate = synthTemplate('prod');
+
+    devTemplate.hasResourceProperties('AWS::AppConfig::ConfigurationProfile', {
+      Name: 'tenant-capabilities',
+      Validators: Match.arrayWith([
+        Match.objectLike({
+          Type: 'JSON_SCHEMA',
+        }),
+      ]),
+    });
+
+    devTemplate.hasResourceProperties('AWS::AppConfig::DeploymentStrategy', {
+      GrowthType: 'LINEAR',
+      GrowthFactor: 50,
+      DeploymentDurationInMinutes: 10,
+      FinalBakeTimeInMinutes: 5,
+    });
+
+    prodTemplate.hasResourceProperties('AWS::AppConfig::DeploymentStrategy', {
+      GrowthType: 'LINEAR',
+      GrowthFactor: 25,
+      DeploymentDurationInMinutes: 30,
+      FinalBakeTimeInMinutes: 15,
+    });
+
+    devTemplate.resourceCountIs('AWS::AppConfig::Deployment', 1);
+  });
+
   test('creates WAF WebACL with managed rules, UK rate limit, and API association', () => {
     template.hasResourceProperties('AWS::WAFv2::WebACL', {
       Scope: 'REGIONAL',

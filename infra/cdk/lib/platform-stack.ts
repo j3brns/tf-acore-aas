@@ -300,6 +300,20 @@ export class PlatformStack extends cdk.Stack {
       ],
     });
 
+    const capabilityDeploymentStrategy = new appconfig.CfnDeploymentStrategy(
+      this,
+      'CapabilityDeploymentStrategy',
+      {
+        name: `tenant-capabilities-linear-${env}`,
+        deploymentDurationInMinutes: env === 'prod' ? 30 : 10,
+        growthFactor: env === 'prod' ? 25 : 50,
+        growthType: 'LINEAR',
+        finalBakeTimeInMinutes: env === 'prod' ? 15 : 5,
+        replicateTo: 'NONE',
+        description: 'Bounded rollout for tenant capability policy changes',
+      },
+    );
+
     // SSM parameters for AppConfig bootstrap (ADR-017)
     new ssm.StringParameter(this, 'AppConfigAppIdParam', {
       parameterName: `/platform/${env}/config/appconfig-app-id`,
@@ -317,7 +331,10 @@ export class PlatformStack extends cdk.Stack {
     });
 
     // Default configuration document (ADR-017 bootstrap)
-    new appconfig.CfnHostedConfigurationVersion(this, 'DefaultCapabilityConfiguration', {
+    const defaultCapabilityConfiguration = new appconfig.CfnHostedConfigurationVersion(
+      this,
+      'DefaultCapabilityConfiguration',
+      {
       applicationId: appconfigApp.ref,
       configurationProfileId: capabilityProfile.ref,
       contentType: 'application/json',
@@ -337,7 +354,22 @@ export class PlatformStack extends cdk.Stack {
         },
         killed_capabilities: [],
       }),
-    });
+      },
+    );
+
+    const defaultCapabilityDeployment = new appconfig.CfnDeployment(
+      this,
+      'DefaultCapabilityDeployment',
+      {
+        applicationId: appconfigApp.ref,
+        environmentId: appconfigEnv.ref,
+        configurationProfileId: capabilityProfile.ref,
+        configurationVersion: defaultCapabilityConfiguration.ref,
+        deploymentStrategyId: capabilityDeploymentStrategy.ref,
+      },
+    );
+    defaultCapabilityDeployment.addDependency(defaultCapabilityConfiguration);
+    defaultCapabilityDeployment.addDependency(capabilityDeploymentStrategy);
 
     // --- Lambdas ---
 

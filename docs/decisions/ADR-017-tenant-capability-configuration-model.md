@@ -70,6 +70,8 @@ The platform splits configuration ownership across three stores:
 - Capability changes are published through AppConfig deployment workflows.
 - Validators should reject malformed capability documents before rollout.
 - Rollout should start with bounded percentage exposure or explicit allow-lists.
+- AppConfig deployments should use an explicit deployment strategy with bake time
+  rather than immediate 100% rollout.
 - Rollback uses AppConfig environment version history; reverting to the previous
   known good configuration must not require DynamoDB record edits.
 
