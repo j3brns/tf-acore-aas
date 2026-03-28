@@ -52,7 +52,8 @@ eu-west-1 Dublin (COMPUTE — current primary runtime region by platform policy)
 eu-central-1 Frankfurt (EVALUATION + failover)
 ├── AgentCore Evaluations
 ├── AgentCore Policy (Cedar) for Gateway authorization decisions
-└── Runtime failover target
+├── Runtime failover target
+└── Shadow NetworkStack for failover parity work
 ```
 
 All data remains in the EU. The current approved zigzag to Dublin adds ~12ms RTT.
@@ -76,6 +77,9 @@ platform. Additional policy tuning remains an ongoing platform task.
 Failover: Dublin → Frankfurt on `ServiceUnavailableException`
 ([RUNBOOK-001](operations/RUNBOOK-001-runtime-region-failover.md)).
 Failover controlled by SSM `/platform/config/runtime-region` with DynamoDB distributed lock.
+The current infrastructure baseline now also deploys a shadow `NetworkStack` in
+Frankfurt so failover network dependencies can be tested and hardened without
+pretending eu-central-1 is only a paper target.
 
 Dynamic tenant capability policy uses AppConfig in the home region. AppConfig is
 reserved for rollout-sensitive capability policy only; runtime parameters remain
@@ -507,6 +511,7 @@ is represented today by the AgentCoreStack metric stream into eu-west-2 dashboar
 | FM-8 | Usage plan quota exhausted | 429 from API Gateway | `FM-8-UsagePlanQuotaExhausted` | By design (native enforcement) |
 | FM-9 | DLQ message arrival | DLQ CloudWatch alarm | `FM-9-DLQ-Arrival-{name}` | [RUNBOOK-005](operations/RUNBOOK-005-dlq-management.md) |
 | FM-10 | Billing Lambda failure | Billing Lambda errors | `FM-10-BillingLambdaFailure` | [RUNBOOK-006](operations/RUNBOOK-006-budget-and-suspension.md) |
+| FM-11 | Bedrock runtime throttle pressure | Bridge emits `Invocation.Throttled.Bedrock` | `FM-11-BedrockThrottlePressure` | Investigate noisy tenants, concurrency pressure, and runtime quota headroom |
 
 ## Security Model
 
@@ -554,5 +559,5 @@ See [ADR-013](decisions/ADR-013-entra-rbac-roles-claim.md).
 | AgentCore Gateway timeout: 5 min | Tools cannot exceed 5 min response | Design tools for fast response; long work uses async mode |
 | Code Interpreter: 25 concurrent sessions | Per-account per-region limit | Monitor via [RUNBOOK-002](operations/RUNBOOK-002-quota-monitoring.md) |
 | arm64 only in Runtime | All Python deps must be cross-compiled aarch64-manylinux2014 | See [ADR-001](decisions/ADR-001-agentcore-runtime.md) |
-| Session idle timeout: 15 min | Long UI sessions require keepalive | BFF keepalive endpoint; see [ADR-011](decisions/ADR-011-thin-bff.md) |
+| Session idle timeout: 15 min | Long UI sessions require keepalive | BFF keepalive endpoint; BFF secret resolution uses cached values plus retry/jitter on fetch miss; see [ADR-011](decisions/ADR-011-thin-bff.md) |
 | REST API sync timeout: 15 min | Not the standard 29s Lambda limit | Lambda configured for 15 min; API Gateway integration timeout matched |
