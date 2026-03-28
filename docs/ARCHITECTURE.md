@@ -287,6 +287,8 @@ See [ADR-012](decisions/ADR-012-dynamodb-capacity.md) for capacity mode rational
   provisioningStatus, provisioningUpdatedAt, provisioningError, ownerEmail,
   ownerTeam, executionRoleArn, memoryStoreArn, runtimeRegion, fallbackRegion,
   apiKeySecretArn, monthlyBudgetUsd, accountId
+- Control-plane metadata only. Do not store high-frequency invocation counters,
+  last-activity markers, or session heartbeat state in this row.
 - Excludes dynamic capability policy. Capability flags, kill switches, and
   rollout-managed model/tool availability live in AppConfig, not in this table.
 - Capacity: provisioned, auto-scaling, 5 RCU/WCU minimum
@@ -363,6 +365,8 @@ Operational consumers:
 - Attributes: invocationId, tenantId, appId, agentName, agentVersion,
   sessionId, inputTokens, outputTokens, latencyMs, status, errorCode,
   runtimeRegion, invocationMode, jobId
+- This is the high-frequency tenant activity record for invocations. Do not
+  mirror per-request counters or last-seen markers into `platform-tenants`.
 - TTL: 90 days. Capacity: on-demand (unpredictable volume)
 - Hot partition protection: SK includes random jitter suffix for high-volume tenants
 
@@ -375,6 +379,7 @@ Operational consumers:
 **platform-sessions** — active session tracking
 - PK: `TENANT#{tenantId}`, SK: `SESSION#{sessionId}`
 - Attributes: sessionId, runtimeSessionId, agentName, startedAt, lastActivityAt, status
+- Session liveness and last-activity state belong here, not in `platform-tenants`.
 - TTL: 24 hours after last activity
 
 **platform-tools** — Gateway tool registry

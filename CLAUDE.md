@@ -43,6 +43,10 @@ alternative. Never silently work around them.
 12. data-access-lib is the only permitted way to access DynamoDB from Lambda handlers.
 13. No superuser IAM roles in normal operation.
 14. All data remains in the EU at all times.
+15. `platform-tenants` is control-plane metadata only. Do not write high-frequency
+    runtime activity, counters, or last-seen markers to tenant `METADATA` records.
+    Use `platform-invocations`, `platform-sessions`, CloudWatch metrics, or a
+    dedicated aggregate path for hot activity data.
 
 ## How To Work
 
