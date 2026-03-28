@@ -43,6 +43,7 @@ _INVOCATIONS_TABLE_ENV = "INVOCATIONS_TABLE_NAME"
 _EVENT_BUS_ENV = "EVENT_BUS_NAME"
 _AUDIT_EXPORT_BUCKET_ENV = "AUDIT_EXPORT_BUCKET"
 _API_KEY_SECRET_PREFIX_ENV = "TENANT_API_KEY_SECRET_PREFIX"  # pragma: allowlist secret
+_TENANT_MGMT_ROLE_ARN_ENV = "TENANT_MGMT_ROLE_ARN"
 _OPS_LOCKS_TABLE_ENV = "OPS_LOCKS_TABLE"
 _RUNTIME_REGION_PARAM_ENV = "RUNTIME_REGION_PARAM"
 _FALLBACK_REGION_PARAM_ENV = "FALLBACK_REGION_PARAM"
@@ -723,7 +724,47 @@ def _create_api_key_secret(
             {"Key": "appid", "Value": app_id},
         ],
     )
+    _attach_tenant_api_key_secret_policy(
+        deps,
+        secret_arn=str(response["ARN"]),
+        tenant_id=tenant_id,
+        app_id=app_id,
+    )
     return str(response["ARN"])
+
+
+def _attach_tenant_api_key_secret_policy(
+    deps: TenantApiDependencies,
+    *,
+    secret_arn: str,
+    tenant_id: str,
+    app_id: str,
+) -> None:
+    tenant_mgmt_role_arn = os.environ.get(_TENANT_MGMT_ROLE_ARN_ENV, "").strip()
+    if not tenant_mgmt_role_arn:
+        logger.warning(
+            "Skipping tenant API key secret resource policy: manager role ARN not configured",
+            extra={"tenant_id": tenant_id, "app_id": app_id},
+        )
+        return
+
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "DenyTenantMgmtReadback",
+                "Effect": "Deny",
+                "Principal": {"AWS": tenant_mgmt_role_arn},
+                "Action": "secretsmanager:GetSecretValue",
+                "Resource": secret_arn,
+            }
+        ],
+    }
+    deps.secretsmanager.put_resource_policy(
+        SecretId=secret_arn,
+        ResourcePolicy=json.dumps(policy, separators=(",", ":")),
+        BlockPublicPolicy=True,
+    )
 
 
 def _serialize_tenant(item: dict[str, Any]) -> dict[str, Any]:

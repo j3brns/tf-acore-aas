@@ -76,11 +76,17 @@ export function createPlatformCompute(
       TENANT_API_KEY_SECRET_PREFIX: 'platform/tenants', // pragma: allowlist secret
     },
   });
+  tenantMgmtFn.addEnvironment('TENANT_MGMT_ROLE_ARN', tenantMgmtFn.role!.roleArn);
   storage.tenantsTable.grantReadWriteData(tenantMgmtFn);
   storage.invocationsTable.grantReadData(tenantMgmtFn);
   tenantMgmtFn.addToRolePolicy(
     new iam.PolicyStatement({
-      actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource', 'secretsmanager:PutSecretValue'],
+      actions: [
+        'secretsmanager:CreateSecret',
+        'secretsmanager:TagResource',
+        'secretsmanager:PutSecretValue',
+        'secretsmanager:PutResourcePolicy',
+      ],
       resources: [`arn:aws:secretsmanager:${stack.region}:${stack.account}:secret:platform/tenants/*`],
     }),
   );

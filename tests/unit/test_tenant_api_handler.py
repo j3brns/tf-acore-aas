@@ -163,6 +163,7 @@ class FakeSecretsManager:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.rotate_calls: list[dict[str, Any]] = []
+        self.policy_calls: list[dict[str, Any]] = []
 
     def create_secret(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
@@ -171,6 +172,13 @@ class FakeSecretsManager:
     def put_secret_value(self, **kwargs: Any) -> dict[str, Any]:
         self.rotate_calls.append(kwargs)
         return {"ARN": str(kwargs.get("SecretId", "")), "VersionId": "ver-rotated-001"}
+
+    def put_resource_policy(self, **kwargs: Any) -> dict[str, Any]:
+        self.policy_calls.append(kwargs)
+        return {
+            "ARN": str(kwargs.get("SecretId", "")),
+            "Name": str(kwargs.get("SecretId", "")).split(":secret:", 1)[-1],
+        }
 
 
 class FakeEvents:
@@ -443,6 +451,10 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     monkeypatch.setenv("AUDIT_EXPORT_BUCKET", "platform-audit-exports")
     monkeypatch.setenv("AUDIT_EXPORT_URL_EXPIRY_SECONDS", "1800")
     monkeypatch.setenv("TENANT_API_KEY_SECRET_PREFIX", "platform/tenants")
+    monkeypatch.setenv(
+        "TENANT_MGMT_ROLE_ARN",
+        "arn:aws:iam::111111111111:role/platform-tenant-mgmt-dev",
+    )
     monkeypatch.setenv("OPS_LOCKS_TABLE", "platform-ops-locks")
     monkeypatch.setenv("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
     monkeypatch.setenv("FALLBACK_REGION_PARAM", "/platform/config/fallback-region")
@@ -579,6 +591,16 @@ def test_create_tenant_writes_record_provisions_memory_secret_and_emits_event(
         {"tenant_id": "t-001", "app_id": "app-001"}
     ]
     assert len(fake_state["deps"].secretsmanager.calls) == 1
+    assert len(fake_state["deps"].secretsmanager.policy_calls) == 1
+    policy_call = fake_state["deps"].secretsmanager.policy_calls[0]
+    assert policy_call["SecretId"].endswith("platform/tenants/t-001/api-key")
+    policy = json.loads(policy_call["ResourcePolicy"])
+    statement = policy["Statement"][0]
+    assert statement["Effect"] == "Deny"
+    assert statement["Action"] == "secretsmanager:GetSecretValue"
+    assert (
+        statement["Principal"]["AWS"] == "arn:aws:iam::111111111111:role/platform-tenant-mgmt-dev"
+    )
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.created"
     assert detail["tenantId"] == "t-001"

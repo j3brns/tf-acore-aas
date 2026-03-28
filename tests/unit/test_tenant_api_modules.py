@@ -52,6 +52,10 @@ def module_state(monkeypatch: pytest.MonkeyPatch, fixed_now: Any) -> dict[str, A
     monkeypatch.setenv("AUDIT_EXPORT_BUCKET", "platform-audit-exports")
     monkeypatch.setenv("AUDIT_EXPORT_URL_EXPIRY_SECONDS", "1800")
     monkeypatch.setenv("TENANT_API_KEY_SECRET_PREFIX", "platform/tenants")
+    monkeypatch.setenv(
+        "TENANT_MGMT_ROLE_ARN",
+        "arn:aws:iam::111111111111:role/platform-tenant-mgmt-dev",
+    )
     monkeypatch.setenv("OPS_LOCKS_TABLE", "platform-ops-locks")
     monkeypatch.setenv("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
     monkeypatch.setenv("FALLBACK_REGION_PARAM", "/platform/config/fallback-region")
@@ -143,6 +147,7 @@ def test_tenant_lifecycle_dispatch_creates_tenant(module_state: dict[str, Any]) 
     assert response is not None
     assert response["statusCode"] == 201
     assert ("TENANT#tenant-mod-001", "METADATA") in module_state["db"].items
+    assert len(module_state["deps"].secretsmanager.policy_calls) == 1
 
 
 def test_webhook_registry_dispatch_registers_webhook(module_state: dict[str, Any]) -> None:
