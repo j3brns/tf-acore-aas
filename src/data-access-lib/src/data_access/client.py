@@ -39,6 +39,52 @@ logger = Logger(service="data-access-lib")
 
 _TENANT_PK_PREFIX = "TENANT#"
 _S3_TENANT_DIR = "tenants/"
+_dynamodb_resource = None
+_s3_client = None
+_cloudwatch_client = None
+_dynamodb_resource_cache_key: tuple[str, str | None, str | None, str | None] | None = None
+_s3_client_cache_key: tuple[str, str | None, str | None, str | None] | None = None
+_cloudwatch_client_cache_key: tuple[str, str | None, str | None, str | None] | None = None
+
+
+def _aws_region() -> str:
+    return os.environ["AWS_REGION"]
+
+
+def _aws_client_cache_key() -> tuple[str, str | None, str | None, str | None]:
+    return (
+        _aws_region(),
+        os.environ.get("AWS_ACCESS_KEY_ID"),
+        os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        os.environ.get("AWS_SESSION_TOKEN"),
+    )
+
+
+def _get_dynamodb_resource():
+    global _dynamodb_resource, _dynamodb_resource_cache_key
+    cache_key = _aws_client_cache_key()
+    if _dynamodb_resource is None or _dynamodb_resource_cache_key != cache_key:
+        _dynamodb_resource = boto3.resource("dynamodb", region_name=_aws_region())
+        _dynamodb_resource_cache_key = cache_key
+    return _dynamodb_resource
+
+
+def _get_s3_client():
+    global _s3_client, _s3_client_cache_key
+    cache_key = _aws_client_cache_key()
+    if _s3_client is None or _s3_client_cache_key != cache_key:
+        _s3_client = boto3.client("s3", region_name=_aws_region())
+        _s3_client_cache_key = cache_key
+    return _s3_client
+
+
+def _get_cloudwatch_client():
+    global _cloudwatch_client, _cloudwatch_client_cache_key
+    cache_key = _aws_client_cache_key()
+    if _cloudwatch_client is None or _cloudwatch_client_cache_key != cache_key:
+        _cloudwatch_client = boto3.client("cloudwatch", region_name=_aws_region())
+        _cloudwatch_client_cache_key = cache_key
+    return _cloudwatch_client
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +156,8 @@ class TenantScopedDynamoDB:
     ) -> None:
         self._tenant_id = context.tenant_id
         self._app_id = context.app_id
-        region = os.environ["AWS_REGION"]
-        self._dynamodb: Any = dynamodb_resource or boto3.resource("dynamodb", region_name=region)
-        self._cloudwatch: Any = cloudwatch_client or boto3.client("cloudwatch", region_name=region)
+        self._dynamodb: Any = dynamodb_resource or _get_dynamodb_resource()
+        self._cloudwatch: Any = cloudwatch_client or _get_cloudwatch_client()
 
     def _validate_pk(self, key: dict[str, Any]) -> None:
         """Raise TenantAccessViolation if a TENANT#-prefixed PK doesn't match caller.
@@ -391,9 +436,8 @@ class TenantScopedS3:
         self._tenant_id = context.tenant_id
         self._app_id = context.app_id
         self._prefix = f"{_S3_TENANT_DIR}{self._tenant_id}/"
-        region = os.environ["AWS_REGION"]
-        self._s3: Any = s3_client or boto3.client("s3", region_name=region)
-        self._cloudwatch: Any = cloudwatch_client or boto3.client("cloudwatch", region_name=region)
+        self._s3: Any = s3_client or _get_s3_client()
+        self._cloudwatch: Any = cloudwatch_client or _get_cloudwatch_client()
 
     def _validate_key(self, key: str) -> None:
         """Raise TenantAccessViolation if key is outside the tenant prefix."""

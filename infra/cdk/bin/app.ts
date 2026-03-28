@@ -46,6 +46,18 @@ const runtimeEnv: cdk.Environment = {
 const networkStack = new NetworkStack(app, `platform-network-${env}`, {
   env: awsEnv,
   description: `Platform network infrastructure — ${env}`,
+  runtimePeerRegion: PRIMARY_RUNTIME_REGION,
+});
+
+const failoverRuntimeEnv: cdk.Environment = {
+  account: process.env['CDK_DEFAULT_ACCOUNT'],
+  region: FAILOVER_RUNTIME_REGION,
+};
+
+new NetworkStack(app, `platform-network-shadow-${env}`, {
+  env: failoverRuntimeEnv,
+  description: `Platform failover runtime network shadow — ${env}`,
+  runtimePeerRegion: HOME_REGION,
 });
 
 // 2. IdentityStack

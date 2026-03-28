@@ -46,6 +46,8 @@ ENTRA_CLIENT_SECRET_SECRET_ARN = os.environ.get("ENTRA_CLIENT_SECRET_SECRET_ARN"
 _secrets_cache: dict[str, str] = {}
 _secrets_expiry: dict[str, float] = {}
 _CACHE_TTL = 300  # 5 minutes
+_SECRET_FETCH_RETRIES = 3
+_SECRET_FETCH_BASE_DELAY_SECONDS = 0.1
 
 RUNTIME_PING_URL = os.environ.get("RUNTIME_PING_URL") or os.environ.get("MOCK_RUNTIME_URL")
 RUNTIME_KEEPALIVE_WINDOW_SECONDS = 15 * 60
@@ -62,15 +64,21 @@ def _resolve_secret(secret_arn: str | None, env_value: str | None, env_name: str
     if secret_arn in _secrets_cache and now < _secrets_expiry.get(secret_arn, 0):
         return _secrets_cache[secret_arn]
 
-    try:
-        # get_secret includes its own 5-minute cache by default (max_age=300)
-        val = get_secret(secret_arn, max_age=_CACHE_TTL)
-        if val and isinstance(val, str):
-            _secrets_cache[secret_arn] = val
-            _secrets_expiry[secret_arn] = now + _CACHE_TTL
-            return val
-    except Exception:
-        logger.exception(f"Failed to fetch {env_name} from Secrets Manager ARN: {secret_arn}")
+    for attempt in range(1, _SECRET_FETCH_RETRIES + 1):
+        try:
+            # get_secret includes its own 5-minute cache by default (max_age=300)
+            val = get_secret(secret_arn, max_age=_CACHE_TTL)
+            if val and isinstance(val, str):
+                _secrets_cache[secret_arn] = val
+                _secrets_expiry[secret_arn] = now + _CACHE_TTL
+                return val
+        except Exception:
+            logger.exception(
+                f"Failed to fetch {env_name} from Secrets Manager ARN: {secret_arn}",
+                extra={"attempt": attempt},
+            )
+            if attempt < _SECRET_FETCH_RETRIES:
+                time.sleep(_SECRET_FETCH_BASE_DELAY_SECONDS * attempt)
 
     # Fallback to direct environment variable if secret fetch fails
     return _required_env_value(env_name, env_value)

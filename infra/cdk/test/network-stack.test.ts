@@ -9,6 +9,19 @@ describe('NetworkStack', () => {
       env: {
         region: 'eu-west-2',
       },
+      runtimePeerRegion: 'eu-west-1',
+    });
+
+    return Template.fromStack(stack);
+  }
+
+  function synthShadowTemplate(): Template {
+    const app = new cdk.App();
+    const stack = new NetworkStack(app, 'platform-network-shadow-dev', {
+      env: {
+        region: 'eu-central-1',
+      },
+      runtimePeerRegion: 'eu-west-2',
     });
 
     return Template.fromStack(stack);
@@ -74,5 +87,17 @@ describe('NetworkStack', () => {
         ToPort: 443,
       }),
     );
+  });
+
+  test('allows failover shadow deployment to peer back to the home region', () => {
+    const template = synthShadowTemplate();
+
+    template.hasResourceProperties('AWS::EC2::VPCPeeringConnection', {
+      PeerRegion: 'eu-west-2',
+    });
+    template.hasResourceProperties('AWS::EC2::VPCEndpoint', {
+      ServiceName: 'com.amazonaws.eu-central-1.bedrock-agentcore',
+      VpcEndpointType: 'Interface',
+    });
   });
 });

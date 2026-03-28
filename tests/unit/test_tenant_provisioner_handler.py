@@ -1,11 +1,17 @@
 import json
 import os
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from src.tenant_provisioner.handler import lambda_handler
+
+provisioner_handler = sys.modules[lambda_handler.__module__]
 
 
 class TestTenantProvisioner(unittest.TestCase):
@@ -23,11 +29,13 @@ class TestTenantProvisioner(unittest.TestCase):
 
     def tearDown(self):
         self.env_patcher.stop()
+        provisioner_handler._cloudformation_client = None
+        provisioner_handler._events_client = None
 
-    @patch("boto3.client")
-    def test_start_create_returns_in_progress(self, mock_client):
+    @patch("src.tenant_provisioner.handler.get_cloudformation")
+    def test_start_create_returns_in_progress(self, mock_get_cloudformation):
         mock_cfn = MagicMock()
-        mock_client.return_value = mock_cfn
+        mock_get_cloudformation.return_value = mock_cfn
         mock_cfn.describe_stacks.side_effect = ClientError(
             {"Error": {"Code": "ValidationError", "Message": "Stack does not exist"}},
             "DescribeStacks",
@@ -50,10 +58,10 @@ class TestTenantProvisioner(unittest.TestCase):
         self.assertEqual(result["stackName"], "platform-tenant-t-test-001-dev")
         mock_cfn.create_stack.assert_called_once()
 
-    @patch("boto3.client")
-    def test_start_update_noop_returns_ready(self, mock_client):
+    @patch("src.tenant_provisioner.handler.get_cloudformation")
+    def test_start_update_noop_returns_ready(self, mock_get_cloudformation):
         mock_cfn = MagicMock()
-        mock_client.return_value = mock_cfn
+        mock_get_cloudformation.return_value = mock_cfn
         mock_cfn.describe_stacks.side_effect = [
             {"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]},
             {
@@ -83,10 +91,10 @@ class TestTenantProvisioner(unittest.TestCase):
         self.assertEqual(result["outputs"]["ExecutionRoleArn"], "arn:role")
         mock_cfn.update_stack.assert_called_once()
 
-    @patch("boto3.client")
-    def test_poll_returns_ready_with_outputs(self, mock_client):
+    @patch("src.tenant_provisioner.handler.get_cloudformation")
+    def test_poll_returns_ready_with_outputs(self, mock_get_cloudformation):
         mock_cfn = MagicMock()
-        mock_client.return_value = mock_cfn
+        mock_get_cloudformation.return_value = mock_cfn
         mock_cfn.describe_stacks.return_value = {
             "Stacks": [
                 {
@@ -112,10 +120,10 @@ class TestTenantProvisioner(unittest.TestCase):
         self.assertEqual(result["stackStatus"], "CREATE_COMPLETE")
         self.assertEqual(result["outputs"]["MemoryStoreArn"], "arn:mem")
 
-    @patch("boto3.client")
-    def test_poll_returns_failed_for_terminal_failure(self, mock_client):
+    @patch("src.tenant_provisioner.handler.get_cloudformation")
+    def test_poll_returns_failed_for_terminal_failure(self, mock_get_cloudformation):
         mock_cfn = MagicMock()
-        mock_client.return_value = mock_cfn
+        mock_get_cloudformation.return_value = mock_cfn
         mock_cfn.describe_stacks.return_value = {
             "Stacks": [{"StackStatus": "ROLLBACK_COMPLETE", "Outputs": []}]
         }
@@ -132,10 +140,10 @@ class TestTenantProvisioner(unittest.TestCase):
         self.assertEqual(result["provisioningState"], "FAILED")
         self.assertEqual(result["reason"], "ROLLBACK_COMPLETE")
 
-    @patch("boto3.client")
-    def test_emit_result_publishes_eventbridge_event(self, mock_client):
+    @patch("src.tenant_provisioner.handler.get_events")
+    def test_emit_result_publishes_eventbridge_event(self, mock_get_events):
         mock_events = MagicMock()
-        mock_client.return_value = mock_events
+        mock_get_events.return_value = mock_events
 
         result = lambda_handler(
             {
@@ -157,10 +165,10 @@ class TestTenantProvisioner(unittest.TestCase):
         self.assertEqual(detail["tenantId"], "t-test-001")
         self.assertEqual(detail["ExecutionRoleArn"], "arn:role")
 
-    @patch("boto3.client")
-    def test_start_uses_context_account_when_missing_from_detail(self, mock_client):
+    @patch("src.tenant_provisioner.handler.get_cloudformation")
+    def test_start_uses_context_account_when_missing_from_detail(self, mock_get_cloudformation):
         mock_cfn = MagicMock()
-        mock_client.return_value = mock_cfn
+        mock_get_cloudformation.return_value = mock_cfn
         mock_cfn.describe_stacks.side_effect = ClientError(
             {"Error": {"Code": "ValidationError", "Message": "Stack does not exist"}},
             "DescribeStacks",

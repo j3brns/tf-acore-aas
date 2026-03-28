@@ -349,6 +349,22 @@ export class ObservabilityStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
     });
 
+    new cloudwatch.Alarm(this, 'Fm11BedrockThrottlePressureAlarm', {
+      alarmName: `${alarmNamePrefix}-FM-11-BedrockThrottlePressure`,
+      alarmDescription:
+        'Bridge is observing Bedrock/AgentCore throttle pressure via Invocation.Throttled.Bedrock',
+      metric: new cloudwatch.Metric({
+        namespace: 'Platform/Bridge',
+        metricName: 'Invocation.Throttled.Bedrock',
+        period: cdk.Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
     // FM-8: Usage plan quota exhausted (429 from API Gateway)
     new cloudwatch.Alarm(this, 'Fm8UsagePlanQuotaExhaustedAlarm', {
       alarmName: `${alarmNamePrefix}-FM-8-UsagePlanQuotaExhausted`,

@@ -46,6 +46,7 @@ WEBHOOK_DELIVERY_SKIPPED = "skipped"
 
 _deserializer = TypeDeserializer()
 _sqs_client = None
+_http_session = None
 
 
 def get_sqs():
@@ -53,6 +54,13 @@ def get_sqs():
     if _sqs_client is None:
         _sqs_client = boto3.client("sqs", region_name=os.environ["AWS_REGION"])
     return _sqs_client
+
+
+def get_http_session():
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
+    return _http_session
 
 
 @tracer.capture_lambda_handler
@@ -200,7 +208,7 @@ def _attempt_delivery(job_item: dict[str, Any], *, attempt: int) -> None:
     }
 
     try:
-        response = requests.post(
+        response = get_http_session().post(
             webhook_url,
             data=payload_bytes,
             headers=headers,

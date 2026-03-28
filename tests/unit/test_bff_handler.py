@@ -164,6 +164,31 @@ def test_exchange_obo_token_resolves_client_credentials_from_secret_arns(
     assert params["client_secret"] == "secret-client-secret"
 
 
+def test_resolve_secret_retries_before_falling_back_to_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bff_handler, "_secrets_cache", {})
+    monkeypatch.setattr(bff_handler, "_secrets_expiry", {})
+
+    with (
+        patch.object(
+            bff_handler,
+            "get_secret",
+            side_effect=Exception("boom"),
+        ) as get_secret,
+        patch.object(bff_handler.time, "sleep") as sleep,
+    ):
+        value = bff_handler._resolve_secret(
+            "arn:aws:secretsmanager:eu-west-2:111:secret:client-id",
+            "fallback-client-id",
+            "ENTRA_CLIENT_ID",
+        )
+
+    assert value == "fallback-client-id"
+    assert get_secret.call_count == 3
+    assert sleep.call_count == 2
+
+
 def test_entra_token_endpoint_falls_back_to_tenant_specific_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

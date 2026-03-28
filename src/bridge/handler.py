@@ -97,6 +97,7 @@ _sts_client = None
 _dynamodb_resource = None
 _cloudwatch_client = None
 _capability_client = None
+_http_session = None
 
 # Cache for SSM parameters (60s TTL as per ARCHITECTURE.md)
 _config_cache: dict[str, Any] = {}
@@ -141,6 +142,13 @@ def get_cloudwatch():
     if _cloudwatch_client is None:
         _cloudwatch_client = boto3.client("cloudwatch", region_name=_aws_region())
     return _cloudwatch_client
+
+
+def get_http_session():
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
+    return _http_session
 
 
 def get_runtime_client(region: str, credentials: dict[str, Any] | None = None) -> Any:
@@ -758,24 +766,38 @@ def _runtime_failure_response(
         status_code, code, message, invocation_status, headers = _map_runtime_exception(exc)
     else:
         headers = None
-        status_code = status_code or 500
-        code = code or "INTERNAL_ERROR"
-        message = message or "Agent runtime invocation failed"
-        invocation_status = invocation_status or InvocationStatus.ERROR
+
+    resolved_status_code = status_code or 500
+    resolved_code = code or "INTERNAL_ERROR"
+    resolved_message = message or "Agent runtime invocation failed"
+    resolved_invocation_status = invocation_status or InvocationStatus.ERROR
+
+    if resolved_invocation_status == InvocationStatus.THROTTLED:
+        emit_bedrock_throttle_metric(
+            tenant_context=tenant_context,
+            agent=agent,
+            runtime_region=runtime_region,
+        )
 
     latency_ms = int((time.time() - start_time) * 1000)
     log_invocation(
         tenant_context,
         agent,
         invocation_id,
-        invocation_status,
+        resolved_invocation_status,
         latency_ms,
         mode,
         session_id=session_id,
-        error_code=code,
+        error_code=resolved_code,
         runtime_region=runtime_region,
     )
-    return error_response(status_code, code, message, request_id, headers=headers)
+    return error_response(
+        resolved_status_code,
+        resolved_code,
+        resolved_message,
+        request_id,
+        headers=headers,
+    )
 
 
 def get_jitter() -> str:
@@ -1672,7 +1694,9 @@ def handle_sync_invocation(
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Handle synchronous invocation."""
-    response = requests.post(f"{url}/invocations", headers=headers, json=payload, timeout=900)
+    response = get_http_session().post(
+        f"{url}/invocations", headers=headers, json=payload, timeout=900
+    )
     response.raise_for_status()
 
     # Mock runtime returns SSE, collect into full text
@@ -1757,7 +1781,7 @@ def handle_streaming_invocation(
     }
     response_stream.write(json.dumps(preamble).encode("utf-8") + b"\0")
 
-    with requests.post(
+    with get_http_session().post(
         f"{url}/invocations", headers=headers, json=payload, stream=True, timeout=900
     ) as r:
         r.raise_for_status()
@@ -1826,7 +1850,9 @@ def handle_async_invocation(
 
     # 2. Trigger Runtime
     try:
-        response = requests.post(f"{url}/invocations", headers=headers, json=payload, timeout=2)
+        response = get_http_session().post(
+            f"{url}/invocations", headers=headers, json=payload, timeout=2
+        )
         response.raise_for_status()
     except requests.exceptions.ReadTimeout:
         # Expected for async trigger if it's fire-and-forget
@@ -2013,6 +2039,32 @@ def emit_invocation_metrics(
         cw.put_metric_data(Namespace="Platform/Bridge", MetricData=metric_data)
     except Exception as e:
         logger.warning(f"Failed to emit invocation metrics: {e}")
+
+
+def emit_bedrock_throttle_metric(
+    *,
+    tenant_context: TenantContext,
+    agent: AgentRecord,
+    runtime_region: str,
+) -> None:
+    try:
+        get_cloudwatch().put_metric_data(
+            Namespace="Platform/Bridge",
+            MetricData=[
+                {
+                    "MetricName": "Invocation.Throttled.Bedrock",
+                    "Value": 1.0,
+                    "Unit": "Count",
+                    "Dimensions": [
+                        {"Name": "TenantId", "Value": tenant_context.tenant_id},
+                        {"Name": "AgentName", "Value": agent.agent_name},
+                        {"Name": "RuntimeRegion", "Value": runtime_region},
+                    ],
+                }
+            ],
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to emit Bedrock throttle metric: {exc}")
 
 
 def log_job(tenant_context: TenantContext, record: JobRecord) -> None:

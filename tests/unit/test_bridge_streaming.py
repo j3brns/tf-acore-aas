@@ -156,16 +156,16 @@ def test_handler_handles_streaming_agent_result_none(mock_invoke, mock_get_agent
 
 
 @patch("src.bridge.handler.log_invocation")
-@patch("src.bridge.handler.requests")
+@patch("src.bridge.handler.get_http_session")
 def test_handle_streaming_invocation_streams_lines(
-    mock_requests, mock_log, fake_agent, fake_tenant
+    mock_get_http_session, mock_log, fake_agent, fake_tenant
 ):
     """Each non-empty SSE line from the runtime is forwarded to the response stream."""
     mock_stream = MagicMock()
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = [b"data: line1", b"data: line2", b""]
-    mock_requests.post.return_value.__enter__ = lambda s: mock_response
-    mock_requests.post.return_value.__exit__ = MagicMock(return_value=False)
+    mock_get_http_session.return_value.post.return_value.__enter__ = lambda s: mock_response
+    mock_get_http_session.return_value.post.return_value.__exit__ = MagicMock(return_value=False)
 
     result = handle_streaming_invocation(
         url="http://runtime:8080",
@@ -195,14 +195,16 @@ def test_handle_streaming_invocation_streams_lines(
 
 
 @patch("src.bridge.handler.log_invocation")
-@patch("src.bridge.handler.requests")
-def test_handle_streaming_invocation_empty_stream(mock_requests, mock_log, fake_agent, fake_tenant):
+@patch("src.bridge.handler.get_http_session")
+def test_handle_streaming_invocation_empty_stream(
+    mock_get_http_session, mock_log, fake_agent, fake_tenant
+):
     """An empty SSE stream (no lines) writes only the preamble and returns None."""
     mock_stream = MagicMock()
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = []
-    mock_requests.post.return_value.__enter__ = lambda s: mock_response
-    mock_requests.post.return_value.__exit__ = MagicMock(return_value=False)
+    mock_get_http_session.return_value.post.return_value.__enter__ = lambda s: mock_response
+    mock_get_http_session.return_value.post.return_value.__exit__ = MagicMock(return_value=False)
 
     result = handle_streaming_invocation(
         url="http://runtime:8080",
@@ -249,17 +251,17 @@ def test_handle_streaming_invocation_no_response_stream_returns_error(fake_agent
 
 
 @patch("src.bridge.handler.log_invocation")
-@patch("src.bridge.handler.requests")
+@patch("src.bridge.handler.get_http_session")
 def test_handle_streaming_invocation_http_error_propagates(
-    mock_requests, mock_log, fake_agent, fake_tenant
+    mock_get_http_session, mock_log, fake_agent, fake_tenant
 ):
     """An HTTP error from the runtime (4xx/5xx) propagates as an exception."""
 
     http_error_cls = type("HTTPError", (Exception,), {})
     mock_response = MagicMock()
     mock_response.raise_for_status.side_effect = http_error_cls("502 Bad Gateway")
-    mock_requests.post.return_value.__enter__ = lambda s: mock_response
-    mock_requests.post.return_value.__exit__ = MagicMock(return_value=False)
+    mock_get_http_session.return_value.post.return_value.__enter__ = lambda s: mock_response
+    mock_get_http_session.return_value.post.return_value.__exit__ = MagicMock(return_value=False)
 
     with pytest.raises(http_error_cls):
         handle_streaming_invocation(
@@ -277,16 +279,16 @@ def test_handle_streaming_invocation_http_error_propagates(
 
 
 @patch("src.bridge.handler.log_invocation")
-@patch("src.bridge.handler.requests")
+@patch("src.bridge.handler.get_http_session")
 def test_handle_streaming_invocation_uses_mock_session_when_no_session(
-    mock_requests, mock_log, fake_agent, fake_tenant
+    mock_get_http_session, mock_log, fake_agent, fake_tenant
 ):
     """session_id=None should use 'mock-session-id' fallback for logging."""
     mock_stream = MagicMock()
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = []
-    mock_requests.post.return_value.__enter__ = lambda s: mock_response
-    mock_requests.post.return_value.__exit__ = MagicMock(return_value=False)
+    mock_get_http_session.return_value.post.return_value.__enter__ = lambda s: mock_response
+    mock_get_http_session.return_value.post.return_value.__exit__ = MagicMock(return_value=False)
 
     handle_streaming_invocation(
         url="http://runtime:8080",
@@ -307,16 +309,16 @@ def test_handle_streaming_invocation_uses_mock_session_when_no_session(
 
 
 @patch("src.bridge.handler.log_invocation")
-@patch("src.bridge.handler.requests")
+@patch("src.bridge.handler.get_http_session")
 def test_handle_streaming_invocation_logs_after_stream_closes(
-    mock_requests, mock_log, fake_agent, fake_tenant
+    mock_get_http_session, mock_log, fake_agent, fake_tenant
 ):
     """log_invocation is called exactly once after the stream finishes."""
     mock_stream = MagicMock()
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = [b"data: chunk"]
-    mock_requests.post.return_value.__enter__ = lambda s: mock_response
-    mock_requests.post.return_value.__exit__ = MagicMock(return_value=False)
+    mock_get_http_session.return_value.post.return_value.__enter__ = lambda s: mock_response
+    mock_get_http_session.return_value.post.return_value.__exit__ = MagicMock(return_value=False)
 
     handle_streaming_invocation(
         url="http://runtime:8080",

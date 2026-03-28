@@ -142,7 +142,9 @@ def test_handler_failover_on_503(setup_data):
         "body": json.dumps({"input": "Hello"}),
     }
 
-    with patch("requests.post") as mock_post:
+    with patch("src.bridge.handler.get_http_session") as mock_get_http_session:
+        mock_post = MagicMock()
+        mock_get_http_session.return_value.post = mock_post
         # First call fails with 503
         mock_response_503 = MagicMock()
         mock_response_503.status_code = 503
@@ -199,7 +201,9 @@ def test_handler_failover_already_in_progress(setup_data):
         "body": json.dumps({"input": "Hello"}),
     }
 
-    with patch("requests.post") as mock_post:
+    with patch("src.bridge.handler.get_http_session") as mock_get_http_session:
+        mock_post = MagicMock()
+        mock_get_http_session.return_value.post = mock_post
         mock_response_503 = MagicMock()
         mock_response_503.status_code = 503
         mock_response_503.raise_for_status.side_effect = requests.exceptions.HTTPError(

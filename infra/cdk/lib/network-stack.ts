@@ -11,13 +11,18 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 
+export interface NetworkStackProps extends cdk.StackProps {
+  readonly runtimePeerRegion?: string;
+}
+
 export class NetworkStack extends cdk.Stack {
   public readonly vpc: ec2.Vpc;
 
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: NetworkStackProps) {
     super(scope, id, props);
 
     const region = cdk.Stack.of(this).region;
+    const runtimePeerRegion = props?.runtimePeerRegion ?? 'eu-west-1';
     const privateSubnetSelection: ec2.SubnetSelection = {
       subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
     };
@@ -137,22 +142,22 @@ export class NetworkStack extends cdk.Stack {
       allowedValues: ['true', 'false'],
       default: 'false',
       description:
-        'Enable optional inter-region VPC peering to a eu-west-1 runtime egress VPC for AgentCore Runtime traffic',
+        `Enable optional inter-region VPC peering to a ${runtimePeerRegion} runtime egress VPC for AgentCore Runtime traffic`,
     });
     const runtimePeerVpcId = new cdk.CfnParameter(this, 'RuntimePeerVpcId', {
       type: 'String',
       default: '',
-      description: 'Peer VPC ID in eu-west-1 (required when EnableRuntimeVpcPeering=true)',
+      description: `Peer VPC ID in ${runtimePeerRegion} (required when EnableRuntimeVpcPeering=true)`,
     });
     const runtimePeerAccountId = new cdk.CfnParameter(this, 'RuntimePeerAccountId', {
       type: 'String',
       default: '',
-      description: 'Peer AWS account ID in eu-west-1 (required when EnableRuntimeVpcPeering=true)',
+      description: `Peer AWS account ID in ${runtimePeerRegion} (required when EnableRuntimeVpcPeering=true)`,
     });
     const runtimePeerCidr = new cdk.CfnParameter(this, 'RuntimePeerCidr', {
       type: 'String',
       default: '',
-      description: 'CIDR of the eu-west-1 runtime egress VPC (required when peering is enabled)',
+      description: `CIDR of the ${runtimePeerRegion} runtime egress VPC (required when peering is enabled)`,
     });
 
     const runtimePeeringConfigured = new cdk.CfnCondition(this, 'RuntimeVpcPeeringConfigured', {
@@ -168,7 +173,7 @@ export class NetworkStack extends cdk.Stack {
       vpcId: this.vpc.vpcId,
       peerVpcId: runtimePeerVpcId.valueAsString,
       peerOwnerId: runtimePeerAccountId.valueAsString,
-      peerRegion: 'eu-west-1',
+      peerRegion: runtimePeerRegion,
       tags: [{ key: 'Name', value: `${cdk.Stack.of(this).stackName}-runtime-peering` }],
     });
     runtimeVpcPeering.cfnOptions.condition = runtimePeeringConfigured;
@@ -190,7 +195,7 @@ export class NetworkStack extends cdk.Stack {
       fromPort: 443,
       toPort: 443,
       cidrIp: runtimePeerCidr.valueAsString,
-      description: 'HTTPS egress to eu-west-1 runtime VPC over optional inter-region peering',
+      description: `HTTPS egress to ${runtimePeerRegion} runtime VPC over optional inter-region peering`,
     });
     runtimePeerEgress.cfnOptions.condition = runtimePeeringConfigured;
 

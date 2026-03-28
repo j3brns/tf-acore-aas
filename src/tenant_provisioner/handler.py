@@ -36,6 +36,27 @@ FAILED_STATUSES = {
 }
 READY_STATUSES = {"CREATE_COMPLETE", "UPDATE_COMPLETE"}
 
+_cloudformation_client = None
+_events_client = None
+
+
+def _aws_region() -> str:
+    return os.environ["AWS_REGION"]
+
+
+def get_cloudformation():
+    global _cloudformation_client
+    if _cloudformation_client is None:
+        _cloudformation_client = boto3.client("cloudformation", region_name=_aws_region())
+    return _cloudformation_client
+
+
+def get_events():
+    global _events_client
+    if _events_client is None:
+        _events_client = boto3.client("events", region_name=_aws_region())
+    return _events_client
+
 
 def _event_detail(event: dict[str, Any]) -> dict[str, Any]:
     detail = event.get("detail")
@@ -101,7 +122,7 @@ def _start_provisioning(event: dict[str, Any], context: Any) -> dict[str, Any]:
     tenant_id = _tenant_id(detail)
     stack_name = _stack_name(tenant_id)
     template_url = os.environ["TENANT_STACK_TEMPLATE_URL"]
-    cfn = boto3.client("cloudformation")
+    cfn = get_cloudformation()
     params = _stack_parameters(detail, context)
     operation = "UPDATE"
 
@@ -174,7 +195,7 @@ def _poll_provisioning(event: dict[str, Any]) -> dict[str, Any]:
     tenant_id = str(event.get("tenantId") or "").strip()
     if not stack_name or not tenant_id:
         raise ValueError("stackName and tenantId are required")
-    cfn = boto3.client("cloudformation")
+    cfn = get_cloudformation()
     stack = _describe_stack(cfn, stack_name)
     status = str(stack["StackStatus"])
     outputs = _stack_outputs(stack)
@@ -225,7 +246,7 @@ def _emit_completion(event: dict[str, Any]) -> dict[str, Any]:
     if event.get("reason") is not None:
         detail["reason"] = event.get("reason")
 
-    events = boto3.client("events")
+    events = get_events()
     events.put_events(
         Entries=[
             {

@@ -126,6 +126,15 @@ describe('ObservabilityStack (TASK-026)', () => {
     });
   });
 
+  test('creates FM-11 Bedrock throttle pressure alarm', () => {
+    const template = synthStack();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ObservabilityStack-FM-11-BedrockThrottlePressure',
+      MetricName: 'Invocation.Throttled.Bedrock',
+      Threshold: 1,
+    });
+  });
+
   test('creates FM-8 Usage Plan Quota Exhausted alarm', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
@@ -192,6 +201,7 @@ describe('ObservabilityStack (TASK-026)', () => {
       'FM-5-BridgeTimeout',
       'FM-6-InterceptorRetryStorm',
       'FM-7-AgentCoreMemoryDegraded',
+      'FM-11-BedrockThrottlePressure',
       'FM-8-UsagePlanQuotaExhausted',
       'FM-9-DLQ-Arrival-',
       'FM-10-BillingLambdaFailure',
