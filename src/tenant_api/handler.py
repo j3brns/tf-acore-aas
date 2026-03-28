@@ -2188,16 +2188,18 @@ def _dispatch_platform_routes(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
 ) -> dict[str, Any] | None:
-    if path == "/v1/platform/failover" and method == "POST":
-        return _handle_platform_failover(event, caller, deps)
-    if path == "/v1/platform/quota" and method == "GET":
-        return _handle_platform_quota(caller, deps)
-    if path == "/v1/platform/quota/split-accounts" and method == "POST":
-        return _handle_platform_split_accounts(event, caller, deps)
-    if path == "/v1/platform/service-health" and method == "GET":
-        return _handle_platform_service_health(caller, deps)
-    if path == "/v1/platform/billing/status" and method == "GET":
-        return _handle_platform_billing_status(caller, deps)
+    if path in {
+        "/v1/platform/failover",
+        "/v1/platform/quota",
+        "/v1/platform/quota/split-accounts",
+        "/v1/platform/service-health",
+        "/v1/platform/billing/status",
+    }:
+        try:
+            import ops_control
+        except ImportError:  # pragma: no cover - local package import path
+            from src.tenant_api import ops_control
+        return ops_control.dispatch_platform_admin_routes(path, method, event, caller, deps)
 
     if path.startswith("/v1/platform/agents"):
         try:
@@ -2216,57 +2218,11 @@ def _dispatch_ops_routes(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
 ) -> dict[str, Any] | None:
-    path_lower = path.lower()
-    if not path_lower.startswith("/v1/platform/ops/"):
-        return None
-
-    _require_admin(caller)
-    if path_lower == "/v1/platform/ops/top-tenants" and method == "GET":
-        return _handle_ops_top_tenants(event, caller, deps)
-    if path_lower == "/v1/platform/ops/security-events" and method == "GET":
-        return _handle_ops_security_events(event, caller, deps)
-    if path_lower == "/v1/platform/ops/error-rate" and method == "GET":
-        return _handle_ops_error_rate(event, caller, deps)
-    if path_lower == "/v1/platform/ops/lambda-rollback" and method == "POST":
-        return _handle_ops_lambda_rollback(event, caller, deps)
-
-    parts = path.split("/")
-    if path_lower.startswith("/v1/platform/ops/dlq/"):
-        # Expected: /v1/platform/ops/dlq/{queueName} (len 6)
-        # or /v1/platform/ops/dlq/{queueName}/redrive (len 7)
-        if len(parts) == 6 and method == "GET":
-            queue_name = parts[5]
-            return _handle_ops_dlq_inspect(caller, deps, queue_name=queue_name)
-        if len(parts) == 7 and parts[6].lower() == "redrive" and method == "POST":
-            queue_name = parts[5]
-            return _handle_ops_dlq_redrive(caller, deps, queue_name=queue_name)
-
-    if path_lower.startswith("/v1/platform/ops/tenants/"):
-        # Expected: /v1/platform/ops/tenants/{tenantId}/{subpath} (len 7)
-        if len(parts) == 7:
-            tenant_id = parts[5]
-            subpath = parts[6].lower()
-            if subpath == "sessions" and method == "GET":
-                return _handle_ops_tenant_sessions(caller, deps, tenant_id=tenant_id)
-            if subpath == "suspend" and method == "POST":
-                return _handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
-            if subpath == "reinstate" and method == "POST":
-                return _handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
-            if subpath == "invocations" and method == "GET":
-                return _handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
-            if subpath == "notify" and method == "POST":
-                return _handle_ops_notify_tenant(event, caller, deps, tenant_id=tenant_id)
-
-    if path_lower.startswith("/v1/platform/ops/jobs/"):
-        # Expected: /v1/platform/ops/jobs/{jobId}/fail (len 7)
-        if len(parts) == 7 and parts[6].lower() == "fail" and method == "POST":
-            job_id = parts[5]
-            return _handle_ops_fail_job(event, caller, deps, job_id=job_id)
-
-    if path_lower == "/v1/platform/ops/security/page" and method == "POST":
-        return _handle_ops_page_security(event, caller, deps)
-
-    return None
+    try:
+        import ops_control
+    except ImportError:  # pragma: no cover - local package import path
+        from src.tenant_api import ops_control
+    return ops_control.dispatch_ops_routes(path, method, event, caller, deps)
 
 
 def _dispatch_webhook_routes(

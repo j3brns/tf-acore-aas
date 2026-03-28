@@ -6,8 +6,10 @@ from botocore.exceptions import ClientError
 
 try:
     import handler as shared
+    import ops_control
 except ImportError:  # pragma: no cover - local package import path
     from src.tenant_api import handler as shared
+    from src.tenant_api import ops_control
 
 
 @shared.logger.inject_lambda_context(clear_state=True, log_event=False)
@@ -16,13 +18,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     path = shared._request_path(event)
 
     try:
-        platform_admin_paths = {
-            "/v1/platform/failover",
-            "/v1/platform/quota",
-            "/v1/platform/quota/split-accounts",
-            "/v1/platform/service-health",
-            "/v1/platform/billing/status",
-        }
+        platform_admin_paths = ops_control.PLATFORM_ADMIN_PATHS
 
         if not path.startswith("/v1/platform/ops/") and path not in platform_admin_paths:
             return shared._error(405, "METHOD_NOT_ALLOWED", "Unsupported admin ops route")
@@ -35,12 +31,12 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
 
         if path.startswith("/v1/platform/ops/"):
-            response = shared._dispatch_ops_routes(path, method, event, caller, deps)
+            response = ops_control.dispatch_ops_routes(path, method, event, caller, deps)
             if response:
                 return response
 
         if path in platform_admin_paths:
-            response = shared._dispatch_platform_routes(path, method, event, caller, deps)
+            response = ops_control.dispatch_platform_admin_routes(path, method, event, caller, deps)
             if response:
                 return response
 
