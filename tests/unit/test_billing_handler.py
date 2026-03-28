@@ -54,6 +54,12 @@ BUDGET = 5.0
 @pytest.fixture
 def mock_aws_clients() -> Generator[None, None, None]:
     with mock_aws():
+        billing_handler._ssm = None
+        billing_handler._events = None
+        billing_handler._dynamodb = None
+        billing_handler._cloudwatch = None
+        billing_handler._pricing_provider = None
+
         # Setup DynamoDB
         ddb = boto3.resource("dynamodb", region_name="eu-west-2")
 
@@ -102,6 +108,12 @@ def mock_aws_clients() -> Generator[None, None, None]:
             pass
 
         yield
+
+        billing_handler._ssm = None
+        billing_handler._events = None
+        billing_handler._dynamodb = None
+        billing_handler._cloudwatch = None
+        billing_handler._pricing_provider = None
 
 
 def _seed_tenant(ddb: Any, *, status: str = "active", budget: float = BUDGET) -> None:

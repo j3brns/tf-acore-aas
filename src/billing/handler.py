@@ -20,6 +20,7 @@ from typing import Any
 
 import boto3
 from aws_lambda_powertools import Logger, Tracer
+from aws_lambda_powertools.utilities.parameters import SSMProvider
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
 from data_access.client import TenantScopedDynamoDB
@@ -42,6 +43,7 @@ _ssm = None
 _events = None
 _dynamodb = None
 _cloudwatch = None
+_pricing_provider = None
 
 
 def _aws_region() -> str:
@@ -76,6 +78,13 @@ def _get_cloudwatch() -> Any:
     return _cloudwatch
 
 
+def _get_pricing_provider() -> SSMProvider:
+    global _pricing_provider
+    if _pricing_provider is None:
+        _pricing_provider = SSMProvider(boto3_client=_get_ssm())
+    return _pricing_provider
+
+
 class PricingResolutionError(RuntimeError):
     """Raised when billing pricing configuration is unavailable or invalid."""
 
@@ -84,18 +93,9 @@ def _get_pricing(tier: str) -> dict[str, float]:
     """Fetch pricing for a tier from SSM."""
     path = f"/platform/billing/pricing/{tier}"
     try:
-        response = _get_ssm().get_parameter(Name=path)
-        value = response.get("Parameter", {}).get("Value")
+        parsed = _get_pricing_provider().get(path, max_age=300, transform="json")
     except Exception as exc:
         raise PricingResolutionError(f"Failed to fetch pricing parameter {path} from SSM") from exc
-
-    if not value:
-        raise PricingResolutionError(f"Pricing parameter {path} is empty or missing a value")
-
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise PricingResolutionError(f"Pricing parameter {path} contains malformed JSON") from exc
 
     if not isinstance(parsed, dict):
         raise PricingResolutionError(

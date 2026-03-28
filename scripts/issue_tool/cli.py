@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hashlib
 import io
 import json
 import os
@@ -30,6 +29,30 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from scripts.issue_tool.evidence import (
+    audit_issue_handoff_evidence as _audit_issue_handoff_evidence,
+)
+from scripts.issue_tool.evidence import (
+    build_issue_handback_comment as _build_issue_handback_comment,
+)
+from scripts.issue_tool.evidence import (
+    find_latest_validation_receipt as _find_latest_validation_receipt,
+)
+from scripts.issue_tool.evidence import (
+    historical_issue_evidence as _historical_issue_evidence,
+)
+from scripts.issue_tool.evidence import (
+    issue_evidence_summary as _issue_evidence_summary,
+)
+from scripts.issue_tool.evidence import (
+    validation_receipt_path as _validation_receipt_path,
+)
+from scripts.issue_tool.evidence import (
+    validation_receipts_root as _validation_receipts_root,
+)
+from scripts.issue_tool.evidence import (
+    write_validation_receipt as _write_validation_receipt,
+)
 from scripts.issue_tool.github_client import (
     WORKFLOW_LABEL_DEFAULTS,
     ensure_label_exists,
@@ -1203,11 +1226,11 @@ def issue_state_path(root: Path, issue_number: int) -> Path:
 
 
 def validation_receipts_root(root: Path) -> Path:
-    return root / VALIDATION_RECEIPTS_DIR
+    return _validation_receipts_root(root, VALIDATION_RECEIPTS_DIR)
 
 
 def validation_receipt_path(root: Path, issue_number: int, head_sha: str) -> Path:
-    return validation_receipts_root(root) / f"issue-{issue_number}-{head_sha[:12]}.json"
+    return _validation_receipt_path(root, issue_number, head_sha, VALIDATION_RECEIPTS_DIR)
 
 
 def worktree_agent_run_dir(path: Path) -> Path:
@@ -1227,14 +1250,7 @@ def read_json_file(path: Path) -> dict[str, object] | None:
 
 
 def find_latest_validation_receipt(root: Path, issue_id: int) -> Path | None:
-    receipts_root = validation_receipts_root(root)
-    if not receipts_root.exists():
-        return None
-    matches = sorted(
-        receipts_root.glob(f"issue-{issue_id}-*.json"),
-        key=lambda candidate: candidate.stat().st_mtime,
-    )
-    return matches[-1] if matches else None
+    return _find_latest_validation_receipt(root, issue_id, VALIDATION_RECEIPTS_DIR)
 
 
 def git_issue_branches(root: Path, issue_id: int) -> dict[str, list[str]]:
@@ -1279,37 +1295,7 @@ def git_log_issue_matches(root: Path, issue_id: int, *, limit: int = 5) -> list[
 
 
 def historical_issue_evidence(root: Path, issue_id: int) -> dict[str, object] | None:
-    branches = git_issue_branches(root, issue_id)
-    preferred_branch = next(iter(branches["local"]), None) or next(iter(branches["remote"]), None)
-    branch_tip: dict[str, str] | None = None
-    divergence: dict[str, int] | None = None
-    if preferred_branch:
-        tip = run(
-            ["git", "log", "-1", "--format=%H%x09%cI%x09%s", preferred_branch],
-            cwd=root,
-            check=False,
-        ).stdout.strip()
-        if tip:
-            sha, ts, subject = (tip.split("\t", 2) + ["", ""])[:3]
-            branch_tip = {"sha": sha, "timestamp": ts, "subject": subject}
-        counts = run(
-            ["git", "rev-list", "--left-right", "--count", f"origin/main...{preferred_branch}"],
-            cwd=root,
-            check=False,
-        ).stdout.strip()
-        if counts:
-            behind, ahead = [int(part) for part in counts.split()]
-            divergence = {"behind": behind, "ahead": ahead}
-    log_matches = git_log_issue_matches(root, issue_id)
-    if preferred_branch is None and not log_matches:
-        return None
-    return {
-        "branches": branches,
-        "preferred_branch": preferred_branch,
-        "branch_tip": branch_tip,
-        "divergence_vs_origin_main": divergence,
-        "log_matches": log_matches,
-    }
+    return _historical_issue_evidence(root, issue_id, run_fn=run)
 
 
 def write_validation_receipt(
@@ -1320,17 +1306,16 @@ def write_validation_receipt(
     branch: str | None,
     check_name: str,
 ) -> Path:
-    head_sha = run(["git", "rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
-    payload = {
-        "issue_number": issue_id,
-        "branch": branch,
-        "worktree_path": str(worktree_path),
-        "check": check_name,
-        "result": "pass",
-        "head_sha": head_sha,
-        "generated_at": datetime.now(UTC).isoformat(),
-    }
-    return write_json_file(validation_receipt_path(root, issue_id, head_sha), payload)
+    return _write_validation_receipt(
+        root,
+        issue_id=issue_id,
+        worktree_path=worktree_path,
+        branch=branch,
+        check_name=check_name,
+        run_fn=run,
+        write_json_file_fn=write_json_file,
+        receipts_dir=VALIDATION_RECEIPTS_DIR,
+    )
 
 
 def record_issue_handoff_event(
@@ -1422,83 +1407,20 @@ def audit_issue_handoff_evidence(
     target: WorktreeInfo,
     report_path: Path,
 ) -> dict[str, object]:
-    state_path = issue_state_path(root, issue_id)
-    if not state_path.exists():
-        raise CliError(f"Missing issue state evidence: {state_path}")
-    if not report_path.exists():
-        raise CliError(f"Missing closeout report: {report_path}")
-
-    issue_state = read_json_file(state_path)
-    if not isinstance(issue_state, dict):
-        raise CliError(f"Invalid issue state evidence: {state_path}")
-    closeout = read_closeout_report(report_path)
-    if str(closeout.get("stage")) != "complete":
-        raise CliError("Closeout report is not complete")
-
-    events = issue_state.get("events")
-    if not isinstance(events, list) or not events:
-        raise CliError("Issue state evidence has no events")
-
-    event_types = [
-        str(event.get("event_type"))
-        for event in events
-        if isinstance(event, dict) and event.get("event_type")
-    ]
-    if not event_types:
-        raise CliError("Issue state evidence has no typed events")
-
-    required_any_start = {"worktree-created", "worktree-reused", "worktree-resumed"}
-    if not any(event_type in required_any_start for event_type in event_types):
-        raise CliError("Issue state evidence is missing a worktree start/resume event")
-    if "closeout-started" not in event_types:
-        raise CliError("Issue state evidence is missing closeout-started")
-    if event_types[-1] != "closeout-complete":
-        raise CliError(
-            f"Final issue state event must be closeout-complete (found {event_types[-1]})"
-        )
-
-    summary_payload: dict[str, object] = {
-        "issue_number": issue_id,
-        "repo": repo,
-        "branch": target.branch,
-        "worktree_path": str(target.path),
-        "final_state": issue_state.get("state"),
-        "last_event_type": issue_state.get("last_event_type"),
-        "event_types": event_types,
-        "event_count": len(event_types),
-        "cleanup_verified": bool(closeout.get("cleanup_verified")),
-        "cleanup": closeout.get("cleanup"),
-        "issue_closed": bool(closeout.get("issue_closed")),
-        "closeout_stage": closeout.get("stage"),
-        "report_path": str(report_path),
-    }
-    evidence_hash = hashlib.sha256(
-        json.dumps(summary_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return {
-        **summary_payload,
-        "evidence_hash": evidence_hash,
-        "state_path": str(state_path),
-    }
+    return _audit_issue_handoff_evidence(
+        root=root,
+        repo=repo,
+        issue_id=issue_id,
+        target=target,
+        report_path=report_path,
+        read_json_file_fn=read_json_file,
+        read_closeout_report_fn=read_closeout_report,
+        issue_state_path_fn=issue_state_path,
+    )
 
 
 def build_issue_handback_comment(summary: dict[str, object]) -> str:
-    event_types = summary.get("event_types")
-    ordered = ", ".join(event_types) if isinstance(event_types, list) else ""
-    return "\n".join(
-        [
-            "Execution evidence: PASS",
-            f"Issue: #{summary['issue_number']}",
-            f"Branch: {summary['branch']}",
-            f"Worktree: {summary['worktree_path']}",
-            f"Terminal state: {summary['final_state']}",
-            f"Last event: {summary['last_event_type']}",
-            f"Events ({summary['event_count']}): {ordered}",
-            f"Cleanup verified: {summary['cleanup_verified']}",
-            f"Closeout: {summary['closeout_stage']}",
-            f"Evidence hash: {summary['evidence_hash']}",
-        ]
-    )
+    return _build_issue_handback_comment(summary)
 
 
 def issue_has_handback_comment(
@@ -2551,36 +2473,21 @@ def find_latest_closeout_report(root: Path, issue_id: int) -> Path | None:
 
 
 def issue_evidence_summary(root: Path, issue_id: int) -> dict[str, object]:
-    linked = find_linked_worktree_for_issue(root, issue_id)
-    state_path = issue_state_path(root, issue_id)
-    state = read_json_file(state_path) if state_path.exists() else None
-    closeout_path = find_latest_closeout_report(root, issue_id)
-    closeout = read_closeout_report(closeout_path) if closeout_path else None
-    validation_path = find_latest_validation_receipt(root, issue_id)
-    validation_receipt = read_json_file(validation_path) if validation_path else None
-    has_local_evidence = any(
-        (
-            linked is not None,
-            state_path.exists(),
-            closeout_path is not None,
-            validation_path is not None,
-        )
+    def _read_json(path: Path) -> dict[str, object] | None:
+        if "worktree-closeouts" in str(path):
+            return read_closeout_report(path)
+        return read_json_file(path)
+
+    return _issue_evidence_summary(
+        root,
+        issue_id,
+        issue_state_path_fn=issue_state_path,
+        latest_closeout_report_path_fn=find_latest_closeout_report,
+        read_json_file_fn=_read_json,
+        find_latest_validation_receipt_fn=find_latest_validation_receipt,
+        historical_issue_evidence_fn=historical_issue_evidence,
+        linked_worktree_for_issue_fn=find_linked_worktree_for_issue,
     )
-    historical = None if has_local_evidence else historical_issue_evidence(root, issue_id)
-    evidence_source = "local" if has_local_evidence else ("historical" if historical else "none")
-    return {
-        "issue_number": issue_id,
-        "evidence_source": evidence_source,
-        "linked_worktree": str(linked.path) if linked is not None else None,
-        "linked_branch": linked.branch if linked is not None else None,
-        "state_path": str(state_path) if state_path.exists() else None,
-        "state": state,
-        "closeout_path": str(closeout_path) if closeout_path is not None else None,
-        "closeout": closeout,
-        "validation_receipt_path": str(validation_path) if validation_path is not None else None,
-        "validation_receipt": validation_receipt,
-        "historical": historical,
-    }
 
 
 def evidence_drift_findings(root: Path, issues: list[Issue]) -> list[AuditFinding]:
