@@ -203,7 +203,7 @@ validate-pre-push: validate-local-prereqs
 	@$(MAKE) --no-print-directory validate-python
 	@$(MAKE) --no-print-directory validate-cdk-ts-push
 	@$(MAKE) --no-print-directory validate-secrets-push
-	@uv run python scripts/worktree_issues.py write-validation-receipt --check validate-pre-push >/dev/null
+	@uv run python -m scripts.issue_tool write-validation-receipt --check validate-pre-push >/dev/null
 	@echo "==> Pre-push validation passed"
 
 ## validate-local-prereqs: Minimal local tool checks (no auto-install)
@@ -783,7 +783,7 @@ task-prompt:
 ## issue-queue: Show issue queue ordered by Seq (with dependency blocking)
 ## Usage: make issue-queue [QUEUE_MODE=auto|ready|open-task] [STREAM=a] [FROM_ISSUE=310] [LIMIT=20]
 issue-queue:
-	uv run python scripts/worktree_issues.py issue-queue \
+	uv run python -m scripts.issue_tool issue-queue \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),) \
@@ -793,31 +793,31 @@ issue-queue:
 ## Usage: make issue-evidence ISSUE=314 [JSON=1]
 issue-evidence:
 	$(if $(ISSUE),,@echo "ERROR: ISSUE required. Usage: make issue-evidence ISSUE=314" && exit 1)
-	uv run python scripts/worktree_issues.py issue-evidence \
+	uv run python -m scripts.issue_tool issue-evidence \
 		--issue $(ISSUE) \
 		$(if $(JSON),--json,)
 
 ## issues-audit: Objective issue-state/queue invariants check (fails on drift)
 ## Usage: make issues-audit [JSON=1]
 issues-audit:
-	uv run python scripts/worktree_issues.py issues-audit \
+	uv run python -m scripts.issue_tool issues-audit \
 		$(if $(JSON),--json,)
 
 ## issues-reconcile: Repair task issue labels to lifecycle rules
 ## Usage: make issues-reconcile [DRY_RUN=1]
 issues-reconcile:
-	uv run python scripts/worktree_issues.py issues-reconcile \
+	uv run python -m scripts.issue_tool issues-reconcile \
 		$(if $(DRY_RUN),--dry-run,)
 
 ## gitnexus-refresh: Refresh local GitNexus index for the current checkout if stale/missing
 ## Usage: make gitnexus-refresh
 gitnexus-refresh:
-	uv run python scripts/worktree_issues.py gitnexus-refresh
+	uv run python -m scripts.issue_tool gitnexus-refresh
 
 ## worktree: Interactive issue-driven worktree menu (Seq/Depends on aware)
 ## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a] [FROM_ISSUE=310]
 worktree:
-	uv run python scripts/worktree_issues.py menu \
+	uv run python -m scripts.issue_tool menu \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),)
@@ -838,7 +838,7 @@ wt-go:
 ## Usage: make worktree-next-issue [QUEUE_MODE=auto|ready|open-task] [FROM_ISSUE=310] [DRY_RUN=1] [OPEN_SHELL=1]
 ## OPEN_SHELL=1 opens a plain shell only. Agent launch is explicit via AGENT=... or make agent-handoff.
 worktree-next-issue:
-	uv run python scripts/worktree_issues.py worktree-next \
+	uv run python -m scripts.issue_tool worktree-next \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),) \
@@ -857,7 +857,7 @@ worktree-next-issue:
 ## wt-batch: Create multiple runnable issue worktrees and start detached agent runs
 ## Usage: make wt-batch [COUNT=3] [FROM_ISSUE=310] [AGENTS=gemini] [AGENT_MODE=yolo] [INTERACTIVE=1]
 wt-batch:
-	uv run python scripts/worktree_issues.py wt-batch \
+	uv run python -m scripts.issue_tool wt-batch \
 		--count $(if $(COUNT),$(COUNT),3) \
 		--agents "$(if $(AGENTS),$(AGENTS),$(if $(INTERACTIVE),gemini,codex,gemini))" \
 		--agent-mode "$(if $(AGENT_MODE),$(AGENT_MODE),yolo)" \
@@ -873,7 +873,7 @@ wt-batch:
 ## OPEN_SHELL=1 opens a plain shell only. Agent launch is explicit via AGENT=... or make agent-handoff.
 worktree-create-issue:
 	@test -n "$(ISSUE)" || (echo "ERROR: ISSUE required. Usage: make worktree-create-issue ISSUE=23" && exit 1)
-	uv run python scripts/worktree_issues.py worktree-create \
+	uv run python -m scripts.issue_tool worktree-create \
 		--issue $(ISSUE) \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
@@ -898,7 +898,7 @@ worktree-create-issue:
 ## Usage: make worktree-resume-issue [OPEN_SHELL=1] [CMD='make test-unit']
 ## OPEN_SHELL=1 opens a plain shell only. Agent launch is explicit via AGENT=... or make agent-handoff.
 worktree-resume-issue:
-	uv run python scripts/worktree_issues.py worktree-resume \
+	uv run python -m scripts.issue_tool worktree-resume \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(NO_PREFLIGHT),--no-preflight,) \
 		$(if $(CMD),--command "$(CMD)",) \
@@ -912,38 +912,38 @@ worktree-resume-issue:
 
 ## preflight-session: Run issue-worktree preflight checks for current worktree
 preflight-session:
-	uv run python scripts/worktree_issues.py preflight
+	uv run python -m scripts.issue_tool preflight
 
 ## pre-validate-session: Run enforced pre-push validation (skips cdk synth)
 ## Usage: make pre-validate-session [WT_PATH=../worktrees/wt23]
 pre-validate-session:
-	uv run python scripts/worktree_issues.py pre-validate \
+	uv run python -m scripts.issue_tool pre-validate \
 		$(if $(WT_PATH),--path "$(WT_PATH)",)
 
 ## worktree-push-issue: Push current issue worktree branch (preflight + pre-validate enforced)
 ## Usage: make worktree-push-issue [WT_PATH=../worktrees/wt23] [DRY_RUN=1]
 worktree-push-issue:
-	uv run python scripts/worktree_issues.py push-branch \
+	uv run python -m scripts.issue_tool push-branch \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(DRY_RUN),--dry-run,)
 
 ## finish-worktree-summary: Show guided finish summary for current worktree
 ## Usage: make finish-worktree-summary [WT_PATH=../worktrees/wt23]
 finish-worktree-summary:
-	uv run python scripts/worktree_issues.py finish-summary \
+	uv run python -m scripts.issue_tool finish-summary \
 		$(if $(WT_PATH),--path "$(WT_PATH)",)
 
 ## finish-worktree-close: Close the current worktree issue after merge verification
 ## Usage: make finish-worktree-close [WT_PATH=../worktrees/wt23] [FORCE=1]
 finish-worktree-close:
-	uv run python scripts/worktree_issues.py finish-close \
+	uv run python -m scripts.issue_tool finish-close \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(FORCE),--force,)
 
 ## finish-worktree-close-json: Close the current worktree issue and print the closeout report JSON
 ## Usage: make finish-worktree-close-json [WT_PATH=../worktrees/wt23] [FORCE=1]
 finish-worktree-close-json:
-	uv run python scripts/worktree_issues.py finish-close \
+	uv run python -m scripts.issue_tool finish-close \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(FORCE),--force,) \
 		--json
@@ -951,7 +951,7 @@ finish-worktree-close-json:
 ## agent-handoff: Launch the issue-worktree agent flow for the current path
 ## Usage: make agent-handoff [AGENT=codex|gemini|claude|random] [AGENT_MODE=yolo] [HANDOFF=execute-now|print-only]
 agent-handoff:
-	uv run python scripts/worktree_issues.py agent-handoff \
+	uv run python -m scripts.issue_tool agent-handoff \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(AGENT),--agent "$(AGENT)",) \
 		$(if $(AGENT),, --agent "codex") \
