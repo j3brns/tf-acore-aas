@@ -780,11 +780,12 @@ task-prompt:
 # =============================================================================
 
 ## issue-queue: Show issue queue ordered by Seq (with dependency blocking)
-## Usage: make issue-queue [QUEUE_MODE=auto|ready|open-task] [STREAM=a] [LIMIT=20]
+## Usage: make issue-queue [QUEUE_MODE=auto|ready|open-task] [STREAM=a] [FROM_ISSUE=310] [LIMIT=20]
 issue-queue:
 	uv run python scripts/worktree_issues.py issue-queue \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),) \
 		$(if $(LIMIT),--limit $(LIMIT),)
 
 ## issues-audit: Objective issue-state/queue invariants check (fails on drift)
@@ -805,30 +806,33 @@ gitnexus-refresh:
 	uv run python scripts/worktree_issues.py gitnexus-refresh
 
 ## worktree: Interactive issue-driven worktree menu (Seq/Depends on aware)
-## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a]
+## Usage: make worktree [QUEUE_MODE=auto|ready|open-task] [STREAM=a] [FROM_ISSUE=310]
 worktree:
 	uv run python scripts/worktree_issues.py menu \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
-		$(if $(STREAM),--stream-label "$(STREAM)",)
+		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),)
 
-## wt-go: Start the next runnable issue worktree in a visible zellij session
-## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task] [AGENT=gemini] [AGENT_MODE=yolo]
+## wt-go: Start the next runnable issue worktree and launch an explicit or random agent in zellij
+## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task] [FROM_ISSUE=310] [AGENT=random|codex|gemini|claude] [AGENT_MODE=yolo]
 wt-go:
 	$(MAKE) --no-print-directory worktree-next-issue \
-		OPEN_SHELL=1 \
 		HANDOFF=execute-now \
 		ZELLIJ=1 \
 		$(if $(QUEUE_MODE),QUEUE_MODE=$(QUEUE_MODE),) \
 		$(if $(STREAM),STREAM=$(STREAM),) \
-		AGENT=$(if $(AGENT),$(AGENT),gemini) \
+		$(if $(FROM_ISSUE),FROM_ISSUE=$(FROM_ISSUE),) \
+		AGENT=$(if $(AGENT),$(AGENT),random) \
 		AGENT_MODE=$(if $(AGENT_MODE),$(AGENT_MODE),yolo)
 
 ## worktree-next-issue: Create a worktree for the next runnable issue in the queue
-## Usage: make worktree-next-issue [QUEUE_MODE=auto|ready|open-task] [DRY_RUN=1] [OPEN_SHELL=1]
+## Usage: make worktree-next-issue [QUEUE_MODE=auto|ready|open-task] [FROM_ISSUE=310] [DRY_RUN=1] [OPEN_SHELL=1]
+## OPEN_SHELL=1 opens a plain shell only. Agent launch is explicit via AGENT=... or make agent-handoff.
 worktree-next-issue:
 	uv run python scripts/worktree_issues.py worktree-next \
 		--mode "$(if $(QUEUE_MODE),$(QUEUE_MODE),auto)" \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),) \
 		$(if $(DRY_RUN),--dry-run,) \
 		$(if $(OPEN_SHELL),--open-shell,) \
 		$(if $(NO_CLAIM),--no-claim,) \
@@ -842,7 +846,7 @@ worktree-next-issue:
 		$(if $(PRINT_ONLY),--print-only,)
 
 ## wt-batch: Create multiple runnable issue worktrees and start detached agent runs
-## Usage: make wt-batch [COUNT=3] [AGENTS=gemini] [AGENT_MODE=yolo] [INTERACTIVE=1]
+## Usage: make wt-batch [COUNT=3] [FROM_ISSUE=310] [AGENTS=gemini] [AGENT_MODE=yolo] [INTERACTIVE=1]
 wt-batch:
 	uv run python scripts/worktree_issues.py wt-batch \
 		--count $(if $(COUNT),$(COUNT),3) \
@@ -850,12 +854,14 @@ wt-batch:
 		--agent-mode "$(if $(AGENT_MODE),$(AGENT_MODE),yolo)" \
 		$(if $(QUEUE_MODE),--mode "$(QUEUE_MODE)",--mode auto) \
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
+		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),) \
 		$(if $(BASE_DIR),--base-dir "$(BASE_DIR)",) \
 		$(if $(INTERACTIVE),--interactive,) \
 		$(if $(DRY_RUN),--dry-run,)
 
 ## worktree-create-issue: Create a worktree for a specific issue number
 ## Usage: make worktree-create-issue ISSUE=23 [DRY_RUN=1] [OPEN_SHELL=1]
+## OPEN_SHELL=1 opens a plain shell only. Agent launch is explicit via AGENT=... or make agent-handoff.
 worktree-create-issue:
 	@test -n "$(ISSUE)" || (echo "ERROR: ISSUE required. Usage: make worktree-create-issue ISSUE=23" && exit 1)
 	uv run python scripts/worktree_issues.py worktree-create \
@@ -881,6 +887,7 @@ worktree-create-issue:
 
 ## worktree-resume-issue: Resume/select a linked issue worktree (preflight + optional shell/command)
 ## Usage: make worktree-resume-issue [OPEN_SHELL=1] [CMD='make test-unit']
+## OPEN_SHELL=1 opens a plain shell only. Agent launch is explicit via AGENT=... or make agent-handoff.
 worktree-resume-issue:
 	uv run python scripts/worktree_issues.py worktree-resume \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
@@ -932,14 +939,17 @@ finish-worktree-close-json:
 		$(if $(FORCE),--force,) \
 		--json
 
-## agent-handoff: Print/launch agent command with agent selection and yolo modes for current path
-## Usage: make agent-handoff [AGENT=codex] [AGENT_MODE=yolo] [HANDOFF=print-only]
+## agent-handoff: Launch the issue-worktree agent flow for the current path
+## Usage: make agent-handoff [AGENT=codex|gemini|claude|random] [AGENT_MODE=yolo] [HANDOFF=execute-now|print-only]
 agent-handoff:
 	uv run python scripts/worktree_issues.py agent-handoff \
 		$(if $(WT_PATH),--path "$(WT_PATH)",) \
 		$(if $(AGENT),--agent "$(AGENT)",) \
+		$(if $(AGENT),, --agent "codex") \
 		$(if $(AGENT_MODE),--agent-mode "$(AGENT_MODE)",) \
+		$(if $(AGENT_MODE),, --agent-mode "yolo") \
 		$(if $(HANDOFF),--handoff "$(HANDOFF)",) \
+		$(if $(HANDOFF),, --handoff "execute-now") \
 		$(if $(PRINT_ONLY),--print-only,)
 
 ## install-git-hooks: Install repo-local Git hooks (pre-push runs fast pre-validation)

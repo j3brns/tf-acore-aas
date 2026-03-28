@@ -149,6 +149,11 @@ GitHub Issues are the canonical task queue (effective 2026-02-25 13:00 local).
 Use issue `Seq:` for ordering and `Depends on:` for dependency gating.
 `docs/TASKS.md` is a snapshot/report and may lag.
 
+Parent `CR-*` issues are roadmap/design containers, not runnable tasks.
+They must not carry `type:task`, and they do not enter the issue queue.
+Only atomic child task issues are queueable and should carry `Seq:` / `Depends on:`.
+Parent `CR-*` issues do not count toward WIP limits; WIP is tracked on child task issues only.
+
 ### Queue and worktree commands (preferred)
 
 ```bash
@@ -187,6 +192,8 @@ The pre-push hook runs `make validate-pre-push` (fast path; no CDK synth).
 - Every task issue must have exactly one `status:*` label at all times.
 - Open task issues must never be `status:done`.
 - Closed task issues must always be `status:done` and must never retain `status:in-progress`, `status:not-started`, or `ready`.
+- Parent `CR-*` issues must not carry `type:task`; if they do, the issue audit must fail.
+- Parent `CR-*` issues must not carry `status:in-progress`; active implementation is tracked on child task issues.
 - `make finish-worktree-close` is the required close path even if the issue was already closed manually; it is the normalization step for lifecycle labels.
 - If issue state or labels drift, run `make issues-reconcile` immediately, then re-run `make issues-audit` until it passes.
 

@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
+import random
 import re
 import shlex
 import shutil
@@ -35,11 +37,13 @@ SEQ_RE = re.compile(r"(?mi)^Seq:\s*(\d+)\s*$")
 DEPENDS_RE = re.compile(r"(?mi)^Depends on:\s*(.+?)\s*$")
 TASK_ID_TOKEN_RE = re.compile(r"TASK-\d+")
 TITLE_TASK_RE = re.compile(r"^(TASK-\d+):\s")
+CR_TITLE_RE = re.compile(r"^CR-\d+\b", re.I)
 STATUS_LABELS = {"status:not-started", "status:in-progress", "status:blocked", "status:done"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 WORKTREE_CLOSEOUT_DIR = ".build/worktree-closeouts"
 WORKTREE_RUNS_DIR = ".build/worktree-runs"
 WORKTREE_AGENT_RUN_DIR = ".build/agent-run"
+WORKTREE_STATE_DIR = ".build/worktree-state"
 DETACHED_STARTUP_PROBE_SECONDS = 0.5
 DETACHED_STARTUP_PROBE_INTERVAL_SECONDS = 0.1
 AGENT_CAPABILITIES: dict[str, dict[str, bool]] = {
@@ -47,6 +51,7 @@ AGENT_CAPABILITIES: dict[str, dict[str, bool]] = {
     "claude": {"requires_tty": True, "supports_detached": False},
     "codex": {"requires_tty": True, "supports_detached": False},
 }
+DEFAULT_INTERACTIVE_AGENT_POOL = ("codex", "gemini", "claude")
 
 
 class CliError(RuntimeError):
@@ -88,6 +93,10 @@ class Issue:
         if {"p3", "priority:p3"} & labelset:
             return 3
         return 50
+
+    @property
+    def is_parent_cr(self) -> bool:
+        return bool(CR_TITLE_RE.match(self.title.strip()))
 
 
 @dataclass(slots=True)
@@ -300,6 +309,10 @@ def lifecycle_status(issue: Issue) -> str:
     return "unknown"
 
 
+def queue_task_issues(issues: list[Issue]) -> list[Issue]:
+    return [issue for issue in issues if "type:task" in issue.labels and not issue.is_parent_cr]
+
+
 def status_labels(issue: Issue) -> list[str]:
     return [label for label in issue.labels if label in STATUS_LABELS]
 
@@ -455,16 +468,20 @@ def build_queue(
     issues: list[Issue],
     *,
     stream_label: str | None = None,
+    from_issue: int | None = None,
     mode: Literal["auto", "ready", "open-task"] = "auto",
 ) -> QueueSelection:
-    task_issues = [i for i in issues if "type:task" in i.labels]
+    task_issues = queue_task_issues(issues)
     by_task_id = {i.task_id: i for i in task_issues if i.task_id}
-    source_note = ""
+    source_notes: list[str] = []
 
     def stream_ok(issue: Issue) -> bool:
         return not stream_label or stream_label in issue.labels
 
     open_task = [i for i in task_issues if i.state == "open" and stream_ok(i)]
+    if from_issue is not None:
+        open_task = [i for i in open_task if i.number >= from_issue]
+        source_notes.append(f"starting from issue #{from_issue}")
     # Queue excludes actively worked items. They remain visible via issue views / finish-summary.
     queued_open_task = [i for i in open_task if lifecycle_status(i) != "in-progress"]
     open_ready = [i for i in queued_open_task if "ready" in i.labels]
@@ -475,7 +492,7 @@ def build_queue(
             source_mode = "ready"
         else:
             source_mode = "open-task"
-            source_note = (
+            source_notes.append(
                 "auto-fallback: no queued task issues labeled 'ready' (excludes status:in-progress)"
             )
     if source_mode == "ready":
@@ -507,7 +524,11 @@ def build_queue(
             item.issue.number,
         )
     )
-    return QueueSelection(source_mode=str(source_mode), items=items, source_note=source_note)
+    return QueueSelection(
+        source_mode=str(source_mode),
+        items=items,
+        source_note="; ".join(source_notes),
+    )
 
 
 def print_queue(
@@ -545,7 +566,54 @@ def choose_next_runnable(selection: QueueSelection) -> QueueItem:
 
 def audit_issues(issues: list[Issue]) -> list[AuditFinding]:
     findings: list[AuditFinding] = []
-    task_issues = [i for i in issues if "type:task" in i.labels]
+    task_issues = queue_task_issues(issues)
+
+    for issue in issues:
+        if issue.is_parent_cr and "type:task" in issue.labels:
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=issue.number,
+                    message="parent CR issue must not carry type:task; only child issues are queueable",
+                )
+            )
+        parent_statuses = status_labels(issue) if issue.is_parent_cr else []
+        if issue.is_parent_cr and "status:in-progress" in parent_statuses:
+            findings.append(
+                AuditFinding(
+                    severity="error",
+                    issue_number=issue.number,
+                    message=(
+                        "parent CR issue must not carry status:in-progress; WIP is tracked on child task issues"
+                    ),
+                )
+            )
+        if issue.is_parent_cr and any(
+            status in parent_statuses for status in ("status:not-started", "status:blocked")
+        ):
+            findings.append(
+                AuditFinding(
+                    severity="warning",
+                    issue_number=issue.number,
+                    message="parent CR issue should generally avoid task lifecycle labels",
+                )
+            )
+        if issue.is_parent_cr and issue.seq is not None:
+            findings.append(
+                AuditFinding(
+                    severity="warning",
+                    issue_number=issue.number,
+                    message="parent CR issue should not carry Seq; ordering belongs on child task issues",
+                )
+            )
+        if issue.is_parent_cr and issue.depends_on:
+            findings.append(
+                AuditFinding(
+                    severity="warning",
+                    issue_number=issue.number,
+                    message="parent CR issue should not carry Depends on; dependency gating belongs on child task issues",
+                )
+            )
 
     for issue in task_issues:
         states = status_labels(issue)
@@ -842,6 +910,23 @@ def create_worktree_for_issue(
             run_preflight(path=wt_path, root=root, repo=repo)
         except CliError as exc:
             eprint(f"WARNING: post-create preflight failed: {exc}")
+    record_issue_handoff_event(
+        root=root,
+        repo=repo,
+        issue=issue,
+        branch=branch,
+        worktree_path=wt_path,
+        event_type="worktree-created",
+        state="worktree-ready",
+        details={
+            "base_ref": start_ref,
+            "scope": scope_val,
+            "slug": slug_val,
+            "auto_claim": auto_claim,
+            "preflight": preflight,
+        },
+        idempotency_key=f"create:{issue.number}:{branch}:{wt_path}",
+    )
     return wt_path
 
 
@@ -1168,6 +1253,14 @@ def worktree_runs_root(root: Path) -> Path:
     return root / WORKTREE_RUNS_DIR
 
 
+def worktree_state_root(root: Path) -> Path:
+    return root / WORKTREE_STATE_DIR
+
+
+def issue_state_path(root: Path, issue_number: int) -> Path:
+    return worktree_state_root(root) / f"issue-{issue_number}.json"
+
+
 def worktree_agent_run_dir(path: Path) -> Path:
     return path / WORKTREE_AGENT_RUN_DIR
 
@@ -1182,6 +1275,226 @@ def read_json_file(path: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def record_issue_handoff_event(
+    *,
+    root: Path,
+    repo: str | None,
+    issue: Issue | None = None,
+    issue_number: int | None = None,
+    issue_title: str | None = None,
+    branch: str | None = None,
+    worktree_path: Path | None = None,
+    event_type: str,
+    state: str,
+    details: dict[str, object] | None = None,
+    idempotency_key: str | None = None,
+) -> Path | None:
+    resolved_issue_number = issue.number if issue is not None else issue_number
+    if resolved_issue_number is None:
+        return None
+
+    path = issue_state_path(root, resolved_issue_number)
+    existing = read_json_file(path) or {}
+    events = existing.get("events")
+    if not isinstance(events, list):
+        events = []
+    start_events = {"worktree-created", "worktree-reused", "worktree-resumed"}
+    terminal_states = {"done", "closed", "cleanup-failed", "handback-failed"}
+    existing_branch = existing.get("branch")
+    existing_worktree = existing.get("worktree_path")
+    incoming_worktree = str(worktree_path) if worktree_path is not None else None
+    if event_type in start_events and (
+        existing.get("state") in terminal_states
+        or (branch and existing_branch and branch != existing_branch)
+        or (incoming_worktree and existing_worktree and incoming_worktree != existing_worktree)
+    ):
+        events = []
+        existing = {}
+
+    event = {
+        "ts": datetime.now(UTC).isoformat(),
+        "event_type": event_type,
+        "state": state,
+        "repo": repo,
+        "issue_number": resolved_issue_number,
+        "issue_title": issue.title if issue is not None else (issue_title or existing.get("issue_title")),
+        "branch": branch or existing.get("branch"),
+        "worktree_path": (
+            str(worktree_path)
+            if worktree_path is not None
+            else existing.get("worktree_path")
+        ),
+        "details": details or {},
+    }
+    if idempotency_key:
+        event["idempotency_key"] = idempotency_key
+        last = events[-1] if events else None
+        if isinstance(last, dict) and last.get("idempotency_key") == idempotency_key:
+            return path
+
+    events.append(event)
+    if len(events) > 50:
+        events = events[-50:]
+
+    payload: dict[str, object] = {
+        "issue_number": resolved_issue_number,
+        "issue_title": issue.title if issue is not None else (issue_title or existing.get("issue_title")),
+        "repo": repo or existing.get("repo"),
+        "branch": branch or existing.get("branch"),
+        "worktree_path": (
+            str(worktree_path)
+            if worktree_path is not None
+            else existing.get("worktree_path")
+        ),
+        "state": state,
+        "last_event_type": event_type,
+        "last_updated_at": event["ts"],
+        "events": events,
+    }
+    if details:
+        payload["details"] = details
+    return write_json_file(path, payload)
+
+
+def audit_issue_handoff_evidence(
+    *,
+    root: Path,
+    repo: str,
+    issue_id: int,
+    target: WorktreeInfo,
+    report_path: Path,
+) -> dict[str, object]:
+    state_path = issue_state_path(root, issue_id)
+    if not state_path.exists():
+        raise CliError(f"Missing issue state evidence: {state_path}")
+    if not report_path.exists():
+        raise CliError(f"Missing closeout report: {report_path}")
+
+    issue_state = read_json_file(state_path)
+    if not isinstance(issue_state, dict):
+        raise CliError(f"Invalid issue state evidence: {state_path}")
+    closeout = read_closeout_report(report_path)
+    if str(closeout.get("stage")) != "complete":
+        raise CliError("Closeout report is not complete")
+
+    events = issue_state.get("events")
+    if not isinstance(events, list) or not events:
+        raise CliError("Issue state evidence has no events")
+
+    event_types = [
+        str(event.get("event_type"))
+        for event in events
+        if isinstance(event, dict) and event.get("event_type")
+    ]
+    if not event_types:
+        raise CliError("Issue state evidence has no typed events")
+
+    required_any_start = {"worktree-created", "worktree-reused", "worktree-resumed"}
+    if not any(event_type in required_any_start for event_type in event_types):
+        raise CliError("Issue state evidence is missing a worktree start/resume event")
+    if "closeout-started" not in event_types:
+        raise CliError("Issue state evidence is missing closeout-started")
+    if event_types[-1] != "closeout-complete":
+        raise CliError(f"Final issue state event must be closeout-complete (found {event_types[-1]})")
+
+    summary_payload: dict[str, object] = {
+        "issue_number": issue_id,
+        "repo": repo,
+        "branch": target.branch,
+        "worktree_path": str(target.path),
+        "final_state": issue_state.get("state"),
+        "last_event_type": issue_state.get("last_event_type"),
+        "event_types": event_types,
+        "event_count": len(event_types),
+        "cleanup_verified": bool(closeout.get("cleanup_verified")),
+        "cleanup": closeout.get("cleanup"),
+        "issue_closed": bool(closeout.get("issue_closed")),
+        "closeout_stage": closeout.get("stage"),
+        "report_path": str(report_path),
+    }
+    evidence_hash = hashlib.sha256(
+        json.dumps(summary_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        **summary_payload,
+        "evidence_hash": evidence_hash,
+        "state_path": str(state_path),
+    }
+
+
+def build_issue_handback_comment(summary: dict[str, object]) -> str:
+    event_types = summary.get("event_types")
+    ordered = ", ".join(event_types) if isinstance(event_types, list) else ""
+    return "\n".join(
+        [
+            "Execution evidence: PASS",
+            f"Issue: #{summary['issue_number']}",
+            f"Branch: {summary['branch']}",
+            f"Worktree: {summary['worktree_path']}",
+            f"Terminal state: {summary['final_state']}",
+            f"Last event: {summary['last_event_type']}",
+            f"Events ({summary['event_count']}): {ordered}",
+            f"Cleanup verified: {summary['cleanup_verified']}",
+            f"Closeout: {summary['closeout_stage']}",
+            f"Evidence hash: {summary['evidence_hash']}",
+        ]
+    )
+
+
+def issue_has_handback_comment(
+    *,
+    root: Path,
+    repo: str,
+    issue_id: int,
+    evidence_hash: str,
+) -> bool:
+    try:
+        data = gh_json(
+            ["issue", "view", str(issue_id), "-R", repo, "--json", "comments"],
+            root=root,
+        )
+    except CliError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    comments = data.get("comments")
+    if not isinstance(comments, list):
+        return False
+    needle = f"Evidence hash: {evidence_hash}"
+    for comment in comments:
+        if isinstance(comment, dict) and needle in str(comment.get("body") or ""):
+            return True
+    return False
+
+
+def append_issue_handback_comment(
+    *,
+    root: Path,
+    repo: str,
+    issue_id: int,
+    summary: dict[str, object],
+) -> None:
+    if issue_has_handback_comment(
+        root=root,
+        repo=repo,
+        issue_id=issue_id,
+        evidence_hash=str(summary["evidence_hash"]),
+    ):
+        return
+    gh_text(
+        [
+            "issue",
+            "comment",
+            str(issue_id),
+            "-R",
+            repo,
+            "--body",
+            build_issue_handback_comment(summary),
+        ],
+        root=root,
+    )
 
 
 def pid_is_running(pid: int) -> bool:
@@ -1513,23 +1826,42 @@ def fetch_issue_labels_for_prompt(root: Path, repo: str | None, issue_id: int | 
     return "|".join(labels)
 
 
+def choose_default_launch_agent(pool: tuple[str, ...] = DEFAULT_INTERACTIVE_AGENT_POOL) -> str:
+    return random.choice(pool)
+
+
+def resolve_launch_request(args: argparse.Namespace) -> tuple[str, str, str, str | None]:
+    agent_raw = getattr(args, "agent", None) or "codex"
+    agent = choose_default_launch_agent() if agent_raw == "random" else agent_raw
+    agent_mode = getattr(args, "agent_mode", None) or "yolo"
+    handoff = getattr(args, "handoff", None) or "execute-now"
+    mux = resolve_mux_flag(args)
+    return agent, agent_mode, handoff, mux
+
+
 def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) -> str:
     branch = run(["git", "branch", "--show-current"], cwd=path).stdout.strip() or "(detached)"
     issue_id = worktree_issue_id(path)
     issue_ref = f"#{issue_id}" if issue_id is not None else "(no issue)"
     issue_labels = fetch_issue_labels_for_prompt(root, repo, issue_id)
-    labels_clause = f" Labels: {issue_labels}." if issue_labels else ""
-    return (
-        f"Task: issue {issue_ref} on branch {branch} in worktree {path}.{labels_clause} "
-        "Read docs/ARCHITECTURE.md and the ADRs linked to this issue. "
-        "Scope: changes scoped to the issue only. "
-        "Loop: inspect → plan → implement → make preflight-session → fix → repeat. "
-        "Before push: make pre-validate-session must pass. "
-        "Do not stop at PR creation. Continue through merge verification, "
-        "make finish-worktree-close, and worktree cleanup. "
-        "Done: merged PR, closed issue, and cleaned worktree/branch with "
-        "validation evidence and issue link. "
-        "If blocked by permission or policy, report the blocker and the exact next command."
+    labels_clause = issue_labels or "-"
+    return "\n".join(
+        [
+            f"Context: issue {issue_ref}; repo {repo or '(origin unavailable)'}; branch {branch}; worktree {path}; labels {labels_clause}.",
+            "Read: CLAUDE.md; docs/ARCHITECTURE.md; issue-linked ADRs if easy to identify from repo or issue context.",
+            "Scope: only this issue. Do not broaden scope.",
+            (
+                "Use: prefer GitNexus when available. Query unfamiliar flows. Use context/impact before editing shared symbols. "
+                "Run detect_changes before commit. If GitNexus is unavailable, use rg and direct file reads."
+            ),
+            "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done.",
+            "Push gate: make pre-validate-session must pass before push.",
+            "Done: merged PR; closed issue; cleaned worktree and branch; validation evidence recorded; make finish-worktree-close completed.",
+            (
+                "Pause only if: explicit policy or security blocker; missing required permission; external decision cannot be inferred safely. "
+                "If blocked, report the blocker and the exact next command."
+            ),
+        ]
     )
 
 
@@ -1598,6 +1930,18 @@ def handoff_to_agent_or_shell(
     if not sys.stdin.isatty():
         return
     open_shell(path)
+
+
+def wants_agent_launch(args: argparse.Namespace) -> bool:
+    return bool(
+        getattr(args, "agent", None)
+        or getattr(args, "agent_mode", None)
+        or getattr(args, "handoff", None)
+        or getattr(args, "print_only", False)
+        or getattr(args, "tmux", None)
+        or getattr(args, "zellij", None)
+        or getattr(args, "no_mux", False)
+    )
 
 
 def run_command_in_worktree(path: Path, command: str) -> None:
@@ -2347,6 +2691,18 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
                 issue_id=issue_id,
             )
         )
+    record_issue_handoff_event(
+        root=root,
+        repo=repo,
+        issue_number=issue_id,
+        issue_title=target.branch,
+        branch=target.branch,
+        worktree_path=target.path,
+        event_type="closeout-started",
+        state="closeout-started",
+        details={"force": force, "report_path": str(report_path)},
+        idempotency_key=f"closeout-started:{issue_id}:{target.branch}:{target.path}",
+    )
     write_closeout_report(root, target, report_base)
     try:
         merged_pr = pr_for_branch(root, repo, target.branch, "merged")
@@ -2454,6 +2810,56 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
                 "cleanup_verified": True,
             },
         )
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="closeout-complete",
+            state="closed",
+            details={"report_path": str(report_path), "issue_closed": issue_closed},
+            idempotency_key=f"closeout-complete:{issue_id}:{target.branch}:{target.path}",
+        )
+        handback_summary = audit_issue_handoff_evidence(
+            root=root,
+            repo=repo,
+            issue_id=issue_id,
+            target=target,
+            report_path=report_path,
+        )
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="handback-audited",
+            state="evidence-audited",
+            details={
+                "report_path": str(report_path),
+                "evidence_hash": handback_summary["evidence_hash"],
+            },
+            idempotency_key=f"handback-audited:{issue_id}:{handback_summary['evidence_hash']}",
+        )
+        append_issue_handback_comment(root=root, repo=repo, issue_id=issue_id, summary=handback_summary)
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="handback-complete",
+            state="done",
+            details={
+                "report_path": str(report_path),
+                "evidence_hash": handback_summary["evidence_hash"],
+            },
+            idempotency_key=f"handback-complete:{issue_id}:{handback_summary['evidence_hash']}",
+        )
         print(f"Closeout report: {report_path}")
     except Exception as exc:
         if isinstance(events, list):
@@ -2474,6 +2880,30 @@ def close_issue_done(root: Path, *, path: Path | None = None, force: bool = Fals
                 "stage": "failed",
                 "error": str(exc),
             },
+        )
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="closeout-failed",
+            state="cleanup-failed",
+            details={"report_path": str(report_path), "error": str(exc)},
+            idempotency_key=f"closeout-failed:{issue_id}:{target.branch}:{target.path}",
+        )
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="handback-failed",
+            state="handback-failed",
+            details={"report_path": str(report_path), "error": str(exc)},
+            idempotency_key=f"handback-failed:{issue_id}:{target.branch}:{target.path}:{str(exc)}",
         )
         print(f"Closeout report: {report_path}")
         raise
@@ -2531,6 +2961,7 @@ def cmd_issue_queue(args: argparse.Namespace) -> int:
     selection = build_queue(
         issues,
         stream_label=args.stream_label,
+        from_issue=getattr(args, "from_issue", None),
         mode=args.mode,
     )
     print_queue(selection, limit=args.limit, show_blocked=not args.runnable_only)
@@ -2602,7 +3033,7 @@ def cmd_issues_reconcile(args: argparse.Namespace) -> int:
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
     issues = fetch_repo_issues(root, repo, state="all")
-    task_issues = [issue for issue in issues if "type:task" in issue.labels]
+    task_issues = queue_task_issues(issues)
 
     changed = 0
     for issue in task_issues:
@@ -2654,7 +3085,12 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
     issues = fetch_repo_issues(root, repo, state="all")
-    selection = build_queue(issues, stream_label=args.stream_label, mode=args.mode)
+    selection = build_queue(
+        issues,
+        stream_label=args.stream_label,
+        from_issue=getattr(args, "from_issue", None),
+        mode=args.mode,
+    )
     if args.choose:
         issue = choose_issue_interactive(selection)
         queue_item = next(
@@ -2667,21 +3103,64 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         if existing_wt is not None:
             print(f"Issue #{issue.number} already has linked worktree: {existing_wt.path}")
             prepare_gitnexus_for_worktree(existing_wt.path)
+            record_issue_handoff_event(
+                root=root,
+                repo=repo,
+                issue=issue,
+                branch=existing_wt.branch,
+                worktree_path=existing_wt.path,
+                event_type="worktree-reused",
+                state="worktree-ready",
+                details={"source": "worktree-next", "choose": bool(args.choose)},
+                idempotency_key=f"reuse:{issue.number}:{existing_wt.branch}:{existing_wt.path}",
+            )
             if args.open_shell and not args.dry_run:
                 if not args.no_preflight:
                     run_preflight(path=existing_wt.path, root=root, repo=repo)
-                if getattr(args, "shell_only", False):
-                    open_shell(existing_wt.path)
-                    return 0
+                record_issue_handoff_event(
+                    root=root,
+                    repo=repo,
+                    issue=issue,
+                    branch=existing_wt.branch,
+                    worktree_path=existing_wt.path,
+                    event_type="shell-opened",
+                    state="shell-active",
+                    details={"source": "worktree-next"},
+                    idempotency_key=f"shell:{issue.number}:{existing_wt.path}",
+                )
+                open_shell(existing_wt.path)
+                return 0
+            if wants_agent_launch(args) and not args.dry_run:
+                agent, agent_mode, handoff, mux = resolve_launch_request(args)
+                record_issue_handoff_event(
+                    root=root,
+                    repo=repo,
+                    issue=issue,
+                    branch=existing_wt.branch,
+                    worktree_path=existing_wt.path,
+                    event_type="agent-launch-requested",
+                    state="agent-launching",
+                    details={
+                        "source": "worktree-next",
+                        "agent": agent,
+                        "agent_mode": agent_mode,
+                        "handoff": handoff,
+                        "mux": mux,
+                    },
+                    idempotency_key=(
+                        f"agent:{issue.number}:{existing_wt.path}:"
+                        f"{agent}:{agent_mode}:{handoff}:{mux}"
+                    ),
+                )
                 handoff_to_agent_or_shell(
                     path=existing_wt.path,
                     root=root,
                     repo=repo,
-                    agent=args.agent,
-                    agent_mode=args.agent_mode,
-                    handoff=args.handoff,
+                    agent=agent,
+                    agent_mode=agent_mode,
+                    handoff=handoff,
                     print_only_override=args.print_only,
-                    mux=resolve_mux_flag(args),
+                    mux=mux,
                 )
             return 0
     else:
@@ -2711,19 +3190,51 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         preflight=(not args.no_preflight),
         dry_run=args.dry_run,
     )
-    if getattr(args, "shell_only", False) and args.open_shell and not args.dry_run:
+    if args.open_shell and not args.dry_run:
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue=issue,
+            branch=f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}",
+            worktree_path=wt_path,
+            event_type="shell-opened",
+            state="shell-active",
+            details={"source": "worktree-next"},
+            idempotency_key=f"shell:{issue.number}:{wt_path}",
+        )
         open_shell(wt_path)
         return 0
-    if args.open_shell and not args.dry_run:
+    if wants_agent_launch(args) and not args.dry_run:
+        agent, agent_mode, handoff, mux = resolve_launch_request(args)
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue=issue,
+            branch=f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}",
+            worktree_path=wt_path,
+            event_type="agent-launch-requested",
+            state="agent-launching",
+            details={
+                "source": "worktree-next",
+                "agent": agent,
+                "agent_mode": agent_mode,
+                "handoff": handoff,
+                "mux": mux,
+            },
+            idempotency_key=(
+                f"agent:{issue.number}:{wt_path}:"
+                f"{agent}:{agent_mode}:{handoff}:{mux}"
+            ),
+        )
         handoff_to_agent_or_shell(
             path=wt_path,
             root=root,
             repo=repo,
-            agent=args.agent,
-            agent_mode=args.agent_mode,
-            handoff=args.handoff,
+            agent=agent,
+            agent_mode=agent_mode,
+            handoff=handoff,
             print_only_override=args.print_only,
-            mux=resolve_mux_flag(args),
+            mux=mux,
         )
     return 0
 
@@ -2737,25 +3248,73 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
     if existing_wt is not None:
         print(f"Issue #{issue.number} already has linked worktree: {existing_wt.path}")
         prepare_gitnexus_for_worktree(existing_wt.path)
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue=issue,
+            branch=existing_wt.branch,
+            worktree_path=existing_wt.path,
+            event_type="worktree-reused",
+            state="worktree-ready",
+            details={"source": "worktree-create"},
+            idempotency_key=f"reuse:{issue.number}:{existing_wt.branch}:{existing_wt.path}",
+        )
         if args.open_shell and not args.dry_run:
             if not args.no_preflight:
                 run_preflight(path=existing_wt.path, root=root, repo=repo)
-            if getattr(args, "shell_only", False):
-                open_shell(existing_wt.path)
-                return 0
+            record_issue_handoff_event(
+                root=root,
+                repo=repo,
+                issue=issue,
+                branch=existing_wt.branch,
+                worktree_path=existing_wt.path,
+                event_type="shell-opened",
+                state="shell-active",
+                details={"source": "worktree-create"},
+                idempotency_key=f"shell:{issue.number}:{existing_wt.path}",
+            )
+            open_shell(existing_wt.path)
+            return 0
+        if wants_agent_launch(args) and not args.dry_run:
+            agent, agent_mode, handoff, mux = resolve_launch_request(args)
+            record_issue_handoff_event(
+                root=root,
+                repo=repo,
+                issue=issue,
+                branch=existing_wt.branch,
+                worktree_path=existing_wt.path,
+                event_type="agent-launch-requested",
+                state="agent-launching",
+                details={
+                    "source": "worktree-create",
+                    "agent": agent,
+                    "agent_mode": agent_mode,
+                    "handoff": handoff,
+                    "mux": mux,
+                },
+                idempotency_key=(
+                    f"agent:{issue.number}:{existing_wt.path}:"
+                    f"{agent}:{agent_mode}:{handoff}:{mux}"
+                ),
+            )
             handoff_to_agent_or_shell(
                 path=existing_wt.path,
                 root=root,
                 repo=repo,
-                agent=args.agent,
-                agent_mode=args.agent_mode,
-                handoff=args.handoff,
+                agent=agent,
+                agent_mode=agent_mode,
+                handoff=handoff,
                 print_only_override=args.print_only,
-                mux=resolve_mux_flag(args),
+                mux=mux,
             )
         return 0
     assert_issue_startable(issue, allow_blocked=args.allow_blocked)
-    selection = build_queue(issues, stream_label=args.stream_label, mode=args.mode)
+    selection = build_queue(
+        issues,
+        stream_label=args.stream_label,
+        from_issue=getattr(args, "from_issue", None),
+        mode=args.mode,
+    )
     item = next((x for x in selection.items if x.issue.number == issue.number), None)
     if item and (not item.runnable) and not args.allow_blocked:
         raise CliError(f"Issue #{issue.number} is blocked: {'; '.join(item.blocked_reasons)}")
@@ -2778,15 +3337,52 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     if args.open_shell and not args.dry_run:
+        branch = f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}"
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue=issue,
+            branch=branch,
+            worktree_path=wt_path,
+            event_type="shell-opened",
+            state="shell-active",
+            details={"source": "worktree-create"},
+            idempotency_key=f"shell:{issue.number}:{wt_path}",
+        )
+        open_shell(wt_path)
+        return 0
+    if wants_agent_launch(args) and not args.dry_run:
+        branch = f"wt/{args.scope or infer_scope(issue)}/{issue.number}-{args.slug or slugify_text(issue.title)}"
+        agent, agent_mode, handoff, mux = resolve_launch_request(args)
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue=issue,
+            branch=branch,
+            worktree_path=wt_path,
+            event_type="agent-launch-requested",
+            state="agent-launching",
+            details={
+                "source": "worktree-create",
+                "agent": agent,
+                "agent_mode": agent_mode,
+                "handoff": handoff,
+                "mux": mux,
+            },
+            idempotency_key=(
+                f"agent:{issue.number}:{wt_path}:"
+                f"{agent}:{agent_mode}:{handoff}:{mux}"
+            ),
+        )
         handoff_to_agent_or_shell(
             path=wt_path,
             root=root,
             repo=repo,
-            agent=args.agent,
-            agent_mode=args.agent_mode,
-            handoff=args.handoff,
+            agent=agent,
+            agent_mode=agent_mode,
+            handoff=handoff,
             print_only_override=args.print_only,
-            mux=resolve_mux_flag(args),
+            mux=mux,
         )
     return 0
 
@@ -2817,15 +3413,58 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
         except CliError:
             repo = None
     prepare_gitnexus_for_worktree(target.path)
+    issue_id = extract_issue_id_from_branch(target.branch)
+    record_issue_handoff_event(
+        root=root,
+        repo=repo,
+        issue_number=issue_id,
+        issue_title=target.branch,
+        branch=target.branch,
+        worktree_path=target.path,
+        event_type="worktree-resumed",
+        state="worktree-ready",
+        details={"source": "worktree-resume"},
+        idempotency_key=f"resume:{issue_id}:{target.branch}:{target.path}",
+    )
     if args.command:
         run_command_in_worktree(target.path, args.command)
-    elif getattr(args, "shell_only", False) and args.open_shell:
-        open_shell(target.path)
     elif args.open_shell:
-        agent = getattr(args, "agent", None)
-        agent_mode = getattr(args, "agent_mode", None)
-        handoff = getattr(args, "handoff", None)
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="shell-opened",
+            state="shell-active",
+            details={"source": "worktree-resume"},
+            idempotency_key=f"shell:{issue_id}:{target.path}",
+        )
+        open_shell(target.path)
+    elif wants_agent_launch(args):
+        agent, agent_mode, handoff, mux = resolve_launch_request(args)
         print_only = bool(getattr(args, "print_only", False))
+        record_issue_handoff_event(
+            root=root,
+            repo=repo,
+            issue_number=issue_id,
+            issue_title=target.branch,
+            branch=target.branch,
+            worktree_path=target.path,
+            event_type="agent-launch-requested",
+            state="agent-launching",
+            details={
+                "source": "worktree-resume",
+                "agent": agent,
+                "agent_mode": agent_mode,
+                "handoff": handoff,
+                "mux": mux,
+            },
+            idempotency_key=(
+                f"agent:{issue_id}:{target.path}:{agent}:{agent_mode}:{handoff}:{mux}"
+            ),
+        )
         handoff_to_agent_or_shell(
             path=target.path,
             root=root,
@@ -2834,7 +3473,7 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
             agent_mode=agent_mode,
             handoff=handoff,
             print_only_override=print_only,
-            mux=resolve_mux_flag(args),
+            mux=mux,
         )
     else:
         print(target.path)
@@ -2875,15 +3514,39 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
         repo = args.repo or origin_repo_slug(root)
     except CliError:
         repo = None
-    handoff_to_agent_or_shell(
-        path=Path(args.path).resolve() if args.path else current_path(),
+    target_path = Path(args.path).resolve() if args.path else current_path()
+    branch = current_branch(target_path)
+    issue_id = extract_issue_id_from_branch(branch)
+    agent, agent_mode, handoff, mux = resolve_launch_request(args)
+    record_issue_handoff_event(
         root=root,
         repo=repo,
-        agent=args.agent,
-        agent_mode=args.agent_mode,
-        handoff=args.handoff,
-        print_only_override=args.print_only or args.handoff == "print-only",
-        mux=resolve_mux_flag(args),
+        issue_number=issue_id,
+        issue_title=branch,
+        branch=branch,
+        worktree_path=target_path,
+        event_type="agent-launch-requested",
+        state="agent-launching",
+        details={
+            "source": "agent-handoff",
+            "agent": agent,
+            "agent_mode": agent_mode,
+            "handoff": handoff,
+            "mux": mux,
+        },
+        idempotency_key=(
+            f"agent:{issue_id}:{target_path}:{agent}:{agent_mode}:{handoff}:{mux}"
+        ),
+    )
+    handoff_to_agent_or_shell(
+        path=target_path,
+        root=root,
+        repo=repo,
+        agent=agent,
+        agent_mode=agent_mode,
+        handoff=handoff,
+        print_only_override=args.print_only or handoff == "print-only",
+        mux=mux,
     )
     return 0
 
@@ -2908,7 +3571,12 @@ def cmd_wt_batch(args: argparse.Namespace) -> int:
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
     issues = fetch_repo_issues(root, repo, state="all")
-    selection = build_queue(issues, stream_label=args.stream_label, mode=args.mode)
+    selection = build_queue(
+        issues,
+        stream_label=args.stream_label,
+        from_issue=getattr(args, "from_issue", None),
+        mode=args.mode,
+    )
     base_dir = (
         Path(args.base_dir).expanduser().resolve() if args.base_dir else default_worktrees_dir(root)
     )
@@ -3104,6 +3772,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 ns = argparse.Namespace(
                     repo=args.repo,
                     stream_label=args.stream_label,
+                    from_issue=args.from_issue,
                     mode=args.mode,
                     limit=None,
                     runnable_only=False,
@@ -3115,6 +3784,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 ns = argparse.Namespace(
                     repo=args.repo,
                     stream_label=args.stream_label,
+                    from_issue=args.from_issue,
                     mode=args.mode,
                     choose=False,
                     allow_blocked=False,
@@ -3139,6 +3809,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 ns = argparse.Namespace(
                     repo=args.repo,
                     stream_label=args.stream_label,
+                    from_issue=args.from_issue,
                     mode=args.mode,
                     choose=True,
                     allow_blocked=False,
@@ -3229,6 +3900,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_common.add_argument(
         "--stream-label", help="Optional label filter (e.g. a, b, provider-matrix)."
     )
+    queue_common.add_argument(
+        "--from-issue",
+        type=int,
+        help="Lower bound issue number for queue selection (e.g. start from issue #310).",
+    )
 
     q = sub.add_parser("issue-queue", parents=[common_repo, queue_common], help="Show issue queue")
     q.add_argument("--limit", type=int, help="Limit displayed items")
@@ -3296,23 +3972,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wt_common.add_argument(
         "--agent",
-        choices=["gemini", "claude", "codex"],
-        help="Agent for open-shell handoff (otherwise prompt interactively)",
+        choices=["gemini", "claude", "codex", "random"],
+        help="Launch agent after worktree creation (explicit agent-launch path)",
     )
     wt_common.add_argument(
         "--agent-mode",
         choices=["normal", "yolo"],
-        help="Agent mode for open-shell handoff (otherwise prompt interactively)",
+        help="Agent mode for explicit agent-launch path",
     )
     wt_common.add_argument(
         "--handoff",
         choices=["execute-now", "print-only"],
-        help="Handoff behavior for open-shell flow (otherwise prompt interactively)",
+        help="Handoff behavior for explicit agent-launch path",
     )
     wt_common.add_argument(
         "--print-only",
         action="store_true",
-        help="Force print-only handoff when using open-shell (prints prompt/command, opens shell)",
+        help="Force print-only handoff for explicit agent-launch path",
     )
     mux_group = wt_common.add_mutually_exclusive_group()
     mux_group.add_argument(
@@ -3357,13 +4033,13 @@ def build_parser() -> argparse.ArgumentParser:
     res.add_argument("--no-preflight", action="store_true", help="Skip preflight before resume")
     res.add_argument("--open-shell", action="store_true", help="Open shell in selected worktree")
     res.add_argument("--command", help="Run command in selected worktree")
-    res.add_argument("--agent", choices=["gemini", "claude", "codex"])
+    res.add_argument("--agent", choices=["gemini", "claude", "codex", "random"])
     res.add_argument("--agent-mode", choices=["normal", "yolo"])
     res.add_argument("--handoff", choices=["execute-now", "print-only"])
     res.add_argument(
         "--print-only",
         action="store_true",
-        help="Force print-only handoff when using open-shell",
+        help="Force print-only handoff for explicit agent-launch path",
     )
     res_mux = res.add_mutually_exclusive_group()
     res_mux.add_argument("--tmux", action="store_true", default=None)

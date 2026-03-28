@@ -72,6 +72,26 @@ def test_build_queue_auto_excludes_in_progress_from_candidates():
     assert [item.issue.number for item in selection.items] == [23]
 
 
+def test_build_queue_can_start_from_issue_number():
+    lower = _issue(
+        number=22,
+        task_id="TASK-015",
+        seq=150,
+        labels=["type:task", "status:not-started"],
+    )
+    higher = _issue(
+        number=23,
+        task_id="TASK-016",
+        seq=160,
+        labels=["type:task", "status:not-started"],
+    )
+
+    selection = worktree_issues.build_queue([lower, higher], mode="open-task", from_issue=23)
+
+    assert "starting from issue #23" in selection.source_note
+    assert [item.issue.number for item in selection.items] == [23]
+
+
 def test_choose_next_runnable_requires_not_blocked_and_dependencies_closed():
     blocked_by_label = _issue(
         number=23,
@@ -192,6 +212,79 @@ def test_assert_issue_startable_rejects_in_progress():
         worktree_issues.assert_issue_startable(issue, allow_blocked=False)
 
 
+def test_record_issue_handoff_event_dedupes_by_idempotency_key(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    issue = _issue(number=33, task_id="TASK-033", seq=330)
+
+    first = worktree_issues.record_issue_handoff_event(
+        root=root,
+        repo="owner/repo",
+        issue=issue,
+        branch="wt/task/33-test-issue-33",
+        worktree_path=tmp_path / "worktrees" / "wt33",
+        event_type="worktree-created",
+        state="worktree-ready",
+        details={"source": "test"},
+        idempotency_key="create:33:wt33",
+    )
+    second = worktree_issues.record_issue_handoff_event(
+        root=root,
+        repo="owner/repo",
+        issue=issue,
+        branch="wt/task/33-test-issue-33",
+        worktree_path=tmp_path / "worktrees" / "wt33",
+        event_type="worktree-created",
+        state="worktree-ready",
+        details={"source": "test"},
+        idempotency_key="create:33:wt33",
+    )
+
+    assert first == second
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    assert payload["state"] == "worktree-ready"
+    assert payload["last_event_type"] == "worktree-created"
+    assert len(payload["events"]) == 1
+    assert payload["events"][0]["idempotency_key"] == "create:33:wt33"
+
+
+def test_record_issue_handoff_event_resets_completed_session_on_new_start(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+
+    worktree_issues.record_issue_handoff_event(
+        root=root,
+        repo="owner/repo",
+        issue_number=33,
+        issue_title="TASK-033: Test issue 33",
+        branch="wt/task/33-old",
+        worktree_path=tmp_path / "worktrees" / "wt33-old",
+        event_type="handback-complete",
+        state="done",
+        details={"source": "old"},
+        idempotency_key="done:33",
+    )
+    state_path = root / ".build" / "worktree-state" / "issue-33.json"
+    old_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert old_payload["events"][-1]["event_type"] == "handback-complete"
+
+    worktree_issues.record_issue_handoff_event(
+        root=root,
+        repo="owner/repo",
+        issue_number=33,
+        issue_title="TASK-033: Test issue 33",
+        branch="wt/task/33-new",
+        worktree_path=tmp_path / "worktrees" / "wt33-new",
+        event_type="worktree-created",
+        state="worktree-ready",
+        details={"source": "new"},
+        idempotency_key="create:33:new",
+    )
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert [event["event_type"] for event in payload["events"]] == ["worktree-created"]
+    assert payload["branch"] == "wt/task/33-new"
+
+
 def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(monkeypatch):
     root = Path("/tmp/repo")
     wt = worktree_issues.WorktreeInfo(
@@ -200,7 +293,7 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
         branch="wt/infra/33-observabilitystack",
         is_primary=False,
     )
-    called: dict[str, object] = {}
+    opened: list[Path] = []
 
     monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
     monkeypatch.setattr(worktree_issues, "list_resume_candidates", lambda _root: [wt])
@@ -208,11 +301,12 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
     monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: "owner/repo")
     monkeypatch.setattr(worktree_issues, "run_preflight", lambda **kwargs: None)
     monkeypatch.setattr(worktree_issues, "prepare_gitnexus_for_worktree", lambda _path: None)
-
-    def _handoff(**kwargs):
-        called.update(kwargs)
-
-    monkeypatch.setattr(worktree_issues, "handoff_to_agent_or_shell", _handoff)
+    monkeypatch.setattr(worktree_issues, "open_shell", lambda path: opened.append(path))
+    monkeypatch.setattr(
+        worktree_issues,
+        "handoff_to_agent_or_shell",
+        lambda **kwargs: pytest.fail("handoff_to_agent_or_shell should not be used"),
+    )
 
     args = argparse.Namespace(
         path=None,
@@ -223,12 +317,7 @@ def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(
     rc = worktree_issues.cmd_worktree_resume(args)
 
     assert rc == 0
-    assert called["path"] == wt.path
-    assert called["agent"] is None
-    assert called["agent_mode"] is None
-    assert called["handoff"] is None
-    assert called["print_only_override"] is False
-    assert called["mux"] is None
+    assert opened == [wt.path]
 
 
 def test_cmd_worktree_resume_shell_only_opens_shell_directly(monkeypatch):
@@ -474,6 +563,79 @@ def test_cmd_worktree_next_existing_worktree_shell_only_opens_shell_directly(mon
     assert opened == [existing.path]
 
 
+def test_cmd_worktree_next_with_random_agent_uses_random_default_agent(monkeypatch):
+    root = Path("/tmp/repo")
+    repo = "owner/repo"
+    issue_33 = _issue(
+        number=33,
+        task_id="TASK-026",
+        seq=260,
+        labels=["type:task", "status:not-started", "ready"],
+    )
+    launched: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: repo)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_repo_issues",
+        lambda *_args, **_kwargs: [issue_33],
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "build_queue",
+        lambda _issues, **_kwargs: worktree_issues.QueueSelection(
+            source_mode="open-task",
+            items=[worktree_issues.QueueItem(issue=issue_33, runnable=True)],
+        ),
+    )
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "create_worktree_for_issue",
+        lambda **kwargs: Path("/tmp/worktrees/wt33"),
+    )
+    monkeypatch.setattr(worktree_issues, "choose_default_launch_agent", lambda: "gemini")
+    monkeypatch.setattr(
+        worktree_issues,
+        "handoff_to_agent_or_shell",
+        lambda **kwargs: launched.update(kwargs),
+    )
+
+    args = argparse.Namespace(
+        repo=None,
+        stream_label=None,
+        from_issue=None,
+        mode="auto",
+        choose=False,
+        allow_blocked=False,
+        base_dir=None,
+        base_ref=None,
+        scope=None,
+        slug=None,
+        name=None,
+        no_claim=False,
+        no_preflight=False,
+        dry_run=False,
+        open_shell=False,
+        shell_only=False,
+        agent="random",
+        agent_mode="yolo",
+        handoff="execute-now",
+        print_only=False,
+        tmux=None,
+        zellij=True,
+        no_mux=False,
+    )
+
+    rc = worktree_issues.cmd_worktree_next(args)
+
+    assert rc == 0
+    assert launched["agent"] == "gemini"
+    assert launched["agent_mode"] == "yolo"
+    assert launched["handoff"] == "execute-now"
+
+
 def test_create_worktree_for_issue_attaches_existing_local_branch(monkeypatch, tmp_path):
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
@@ -541,12 +703,24 @@ def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requ
 
     prompt = worktree_issues.build_agent_prompt_for_worktree(wt, root, "owner/repo")
 
-    assert "issue #53" in prompt
-    assert "wt/infra/53-explicit-dod" in prompt
+    assert "Context: issue #53;" in prompt
+    assert "repo owner/repo;" in prompt
+    assert "branch wt/infra/53-explicit-dod;" in prompt
+    assert f"worktree {wt};" in prompt
+    assert "labels type:task." in prompt
+    assert "Read: CLAUDE.md; docs/ARCHITECTURE.md;" in prompt
+    assert "CLAUDE.md" in prompt
     assert "docs/ARCHITECTURE.md" in prompt
+    assert "Scope: only this issue. Do not broaden scope." in prompt
+    assert "Use: prefer GitNexus when available." in prompt
+    assert "context/impact before editing shared symbols" in prompt
+    assert "detect_changes before commit" in prompt
+    assert "If GitNexus is unavailable, use rg and direct file reads." in prompt
+    assert "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done." in prompt
     assert "make preflight-session" in prompt
-    assert "make pre-validate-session" in prompt
-    assert "validation evidence" in prompt
+    assert "Push gate: make pre-validate-session must pass before push." in prompt
+    assert "Done: merged PR; closed issue; cleaned worktree and branch; validation evidence recorded; make finish-worktree-close completed." in prompt
+    assert "Pause only if:" in prompt
     assert "report the blocker" in prompt
 
 
@@ -1452,6 +1626,7 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
         is_primary=True,
     )
     edits: list[list[str]] = []
+    comments: list[list[str]] = []
     cleanup_calls: list[tuple[list[str], Path | None]] = []
     branch_deleted = False
 
@@ -1482,10 +1657,14 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     )
 
     def _gh_text(args, *, root):
-        edits.append(args)
+        if args[:2] == ["issue", "comment"]:
+            comments.append(args)
+        else:
+            edits.append(args)
         return ""
 
     monkeypatch.setattr(worktree_issues, "gh_text", _gh_text)
+    monkeypatch.setattr(worktree_issues, "issue_has_handback_comment", lambda **_kwargs: False)
     monkeypatch.setattr(worktree_issues, "ensure_label_exists", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         worktree_issues,
@@ -1503,6 +1682,19 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(worktree_issues, "run", _run)
+
+    worktree_issues.record_issue_handoff_event(
+        root=root,
+        repo="owner/repo",
+        issue_number=153,
+        issue_title=target.branch,
+        branch=target.branch,
+        worktree_path=target.path,
+        event_type="worktree-resumed",
+        state="worktree-ready",
+        details={"source": "test"},
+        idempotency_key="resume:153:test",
+    )
 
     worktree_issues.close_issue_done(root, path=target.path, force=False)
     out = capsys.readouterr().out
@@ -1522,6 +1714,10 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
             "status:in-progress",
         ]
     ]
+    assert len(comments) == 1
+    assert comments[0][:5] == ["issue", "comment", "153", "-R", "owner/repo"]
+    assert "Execution evidence: PASS" in comments[0][6]
+    assert "Evidence hash:" in comments[0][6]
     assert cleanup_calls == [
         (["git", "worktree", "remove", str(target.path)], root),
         (["git", "branch", "-d", "wt/task/153-sample"], root),
@@ -1555,6 +1751,79 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
     assert report["events"][-1]["message"] == "cleanup verified"
     assert all(isinstance(event["ts"], str) for event in report["events"])
     assert all(isinstance(event["pid"], int) for event in report["events"])
+    state_path = root / ".build" / "worktree-state" / "issue-153.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["state"] == "done"
+    assert state["last_event_type"] == "handback-complete"
+    assert [event["event_type"] for event in state["events"]] == [
+        "worktree-resumed",
+        "closeout-started",
+        "closeout-complete",
+        "handback-audited",
+        "handback-complete",
+    ]
+
+
+def test_cmd_agent_handoff_defaults_to_codex_yolo_execute_now(monkeypatch):
+    root = Path("/tmp/repo")
+    wt = Path("/tmp/worktrees/wt314")
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(worktree_issues, "repo_root", lambda: root)
+    monkeypatch.setattr(worktree_issues, "origin_repo_slug", lambda _root: "owner/repo")
+    monkeypatch.setattr(worktree_issues, "current_path", lambda: wt)
+    monkeypatch.setattr(
+        worktree_issues,
+        "current_branch",
+        lambda _path: "wt/task/314-reserved-platform-tenant-and-control-plane-agent-model",
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "handoff_to_agent_or_shell",
+        lambda **kwargs: recorded.update(kwargs),
+    )
+
+    rc = worktree_issues.cmd_agent_handoff(
+        argparse.Namespace(
+            repo=None,
+            path=None,
+            agent=None,
+            agent_mode=None,
+            handoff=None,
+            print_only=False,
+            tmux=None,
+            zellij=None,
+            no_mux=False,
+        )
+    )
+
+    assert rc == 0
+    assert recorded["path"] == wt
+    assert recorded["agent"] == "codex"
+    assert recorded["agent_mode"] == "yolo"
+    assert recorded["handoff"] == "execute-now"
+
+
+def test_append_issue_handback_comment_skips_existing_hash(monkeypatch):
+    posted: list[list[str]] = []
+
+    monkeypatch.setattr(
+        worktree_issues,
+        "gh_json",
+        lambda *_args, **_kwargs: {
+            "comments": [{"body": "Execution evidence: PASS\nEvidence hash: abc123"}]
+        },
+    )
+    monkeypatch.setattr(worktree_issues, "gh_text", lambda args, **kwargs: posted.append(args) or "")
+
+    worktree_issues.append_issue_handback_comment(
+        root=Path("/tmp/repo"),
+        repo="owner/repo",
+        issue_id=153,
+        summary={"evidence_hash": "abc123"},
+    )
+
+    assert posted == []
 
 
 def test_cmd_finish_close_json_prints_closeout_report(monkeypatch, capsys, tmp_path):
