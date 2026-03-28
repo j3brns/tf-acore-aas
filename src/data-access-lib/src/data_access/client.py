@@ -26,14 +26,12 @@ from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.parameters import AppConfigProvider
 from boto3.dynamodb.conditions import ConditionBase, Key
 
-from data_access.exceptions import TenantAccessViolation
-from data_access.models import (
+from data_access.domains.capability import (
     CapabilityRollout,
-    PaginatedItems,
     TenantCapabilityPolicy,
-    TenantContext,
-    TenantTier,
 )
+from data_access.domains.tenant import PaginatedItems, TenantContext, TenantTier
+from data_access.exceptions import TenantAccessViolation
 
 logger = Logger(service="data-access-lib")
 

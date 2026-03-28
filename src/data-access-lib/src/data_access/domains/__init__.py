@@ -1,55 +1,57 @@
-"""
-Compatibility facade for data_access domain models.
-
-The canonical definitions now live in `data_access.domains.*`, but this module
-remains as the stable import surface while the codebase migrates gradually.
-"""
-
-from data_access.domains import (
+from data_access.domains.agent import (
     AGENT_STATUS_TRANSITIONS,
-    APPCONFIG_DYNAMIC_CAPABILITY_AREAS,
-    DYNAMODB_TENANT_METADATA_AREAS,
-    INVOCATION_TTL_SECONDS,
     INVOKABLE_AGENT_STATUSES,
-    JITTER_LENGTH,
-    JOB_TTL_SECONDS,
     LEGACY_AGENT_STATUS_ALIASES,
-    OPS_LOCK_TTL_SECONDS,
     REGISTERABLE_AGENT_STATUSES,
-    SESSION_TTL_SECONDS,
-    SSM_PLATFORM_PARAMETER_AREAS,
     AgentRecord,
     AgentStatus,
-    BillingSummaryRecord,
-    CapabilityRollout,
-    ConfigurationStore,
-    InviteRecord,
-    InviteStatus,
     InvocationMode,
+    is_invokable_agent_status,
+    normalize_agent_status,
+)
+from data_access.domains.audit import (
+    INVOCATION_TTL_SECONDS,
+    JITTER_LENGTH,
+    JOB_TTL_SECONDS,
+    OPS_LOCK_TTL_SECONDS,
+    SESSION_TTL_SECONDS,
+    BillingSummaryRecord,
     InvocationRecord,
     InvocationStatus,
     JobRecord,
     JobStatus,
     OpsLockRecord,
-    PaginatedItems,
     SessionRecord,
     SessionStatus,
+    ToolRecord,
+)
+from data_access.domains.capability import (
+    APPCONFIG_DYNAMIC_CAPABILITY_AREAS,
+    DYNAMODB_TENANT_METADATA_AREAS,
+    SSM_PLATFORM_PARAMETER_AREAS,
+    CapabilityRollout,
+    ConfigurationStore,
     TenantCapabilityPolicy,
+    configuration_store_for,
+)
+from data_access.domains.tenant import (
+    InviteRecord,
+    InviteStatus,
+    PaginatedItems,
     TenantContext,
     TenantRecord,
     TenantStatus,
     TenantTier,
-    ToolRecord,
     WebhookRecord,
     WebhookStatus,
-    configuration_store_for,
-    is_invokable_agent_status,
-    normalize_agent_status,
 )
 
 __all__ = [
     "AGENT_STATUS_TRANSITIONS",
     "APPCONFIG_DYNAMIC_CAPABILITY_AREAS",
+    "BillingSummaryRecord",
+    "CapabilityRollout",
+    "ConfigurationStore",
     "DYNAMODB_TENANT_METADATA_AREAS",
     "INVOCATION_TTL_SECONDS",
     "INVOKABLE_AGENT_STATUSES",
@@ -57,14 +59,14 @@ __all__ = [
     "JITTER_LENGTH",
     "LEGACY_AGENT_STATUS_ALIASES",
     "OPS_LOCK_TTL_SECONDS",
+    "PaginatedItems",
     "REGISTERABLE_AGENT_STATUSES",
     "SESSION_TTL_SECONDS",
     "SSM_PLATFORM_PARAMETER_AREAS",
     "AgentRecord",
     "AgentStatus",
     "BillingSummaryRecord",
-    "CapabilityRollout",
-    "ConfigurationStore",
+    "configuration_store_for",
     "InviteRecord",
     "InviteStatus",
     "InvocationMode",
@@ -75,7 +77,6 @@ __all__ = [
     "JobStatus",
     "normalize_agent_status",
     "OpsLockRecord",
-    "PaginatedItems",
     "SessionRecord",
     "SessionStatus",
     "TenantCapabilityPolicy",
@@ -86,5 +87,4 @@ __all__ = [
     "ToolRecord",
     "WebhookRecord",
     "WebhookStatus",
-    "configuration_store_for",
 ]
