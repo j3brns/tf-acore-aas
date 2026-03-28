@@ -6,8 +6,10 @@ from botocore.exceptions import ClientError
 
 try:
     import handler as shared
+    import webhook_registry
 except ImportError:  # pragma: no cover - local package import path
     from src.tenant_api import handler as shared
+    from src.tenant_api import webhook_registry
 
 
 @shared.logger.inject_lambda_context(clear_state=True, log_event=False)
@@ -23,7 +25,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     path = shared._request_path(event)
 
     try:
-        response = shared._dispatch_webhook_routes(path, method, event, caller, deps)
+        response = webhook_registry.dispatch_routes(path, method, event, caller, deps)
         if response:
             return response
         return shared._error(405, "METHOD_NOT_ALLOWED", "Unsupported webhook registry route")

@@ -2232,26 +2232,11 @@ def _dispatch_webhook_routes(
     caller: CallerIdentity,
     deps: TenantApiDependencies,
 ) -> dict[str, Any] | None:
-    path_lower = path.lower()
-    if path_lower == "/v1/webhooks":
-        if caller.tenant_id is None:
-            return _error(400, "BAD_REQUEST", "tenant context required")
-        if method == "GET":
-            return _handle_list_webhooks(caller, deps, tenant_id=caller.tenant_id)
-        if method == "POST":
-            return _handle_register_webhook(event, caller, deps, tenant_id=caller.tenant_id)
-
-    if path_lower.startswith("/v1/webhooks/") and method == "DELETE":
-        parts = path.split("/")
-        if len(parts) == 4:  # /v1/webhooks/{webhookId}
-            if caller.tenant_id is None:
-                return _error(400, "BAD_REQUEST", "tenant context required")
-            webhook_id = parts[3]
-            return _handle_delete_webhook(
-                caller, deps, tenant_id=caller.tenant_id, webhook_id=webhook_id
-            )
-
-    return None
+    try:
+        import webhook_registry
+    except ImportError:  # pragma: no cover - local package import path
+        from src.tenant_api import webhook_registry
+    return webhook_registry.dispatch_routes(path, method, event, caller, deps)
 
 
 def _dispatch_tenant_routes(
@@ -2262,33 +2247,11 @@ def _dispatch_tenant_routes(
     deps: TenantApiDependencies,
     tenant_id: str | None,
 ) -> dict[str, Any] | None:
-    path_lower = path.lower()
-    if path_lower == "/v1/tenants":
-        if method == "POST":
-            return _handle_create(event, caller, deps)
-        if method == "GET":
-            return _handle_list(event, caller, deps)
-
-    if tenant_id is not None:
-        tenant_base = f"/v1/tenants/{tenant_id}"
-        if path_lower == f"{tenant_base}/api-key/rotate" and method == "POST":
-            return _handle_rotate_api_key(caller, deps, tenant_id=tenant_id)
-        if path_lower == f"{tenant_base}/users/invites" and method == "GET":
-            return _handle_list_invites(caller, deps, tenant_id=tenant_id)
-        if path_lower == f"{tenant_base}/users/invite" and method == "POST":
-            return _handle_invite_user(event, caller, deps, tenant_id=tenant_id)
-        if path_lower == f"{tenant_base}/audit-export" and method == "GET":
-            return _handle_audit_export(event, caller, deps, tenant_id=tenant_id)
-
-        if path_lower == tenant_base:
-            if method == "GET":
-                return _handle_read(event, caller, deps, tenant_id=tenant_id)
-            if method in {"PATCH", "PUT"}:
-                return _handle_update(event, caller, deps, tenant_id=tenant_id)
-            if method == "DELETE":
-                return _handle_delete(caller, deps, tenant_id=tenant_id)
-
-    return None
+    try:
+        import tenant_lifecycle
+    except ImportError:  # pragma: no cover - local package import path
+        from src.tenant_api import tenant_lifecycle
+    return tenant_lifecycle.dispatch_routes(path, method, event, caller, deps, tenant_id)
 
 
 @logger.inject_lambda_context(clear_state=True, log_event=False)
@@ -2302,7 +2265,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         app_id = _str_or_none(detail.get("appId")) if isinstance(detail, dict) else None
         logger.append_keys(appid=app_id or "unknown", tenantid=tenant_id or "unknown")
         try:
-            return _handle_tenant_provisioning_event(event, deps)
+            try:
+                import tenant_lifecycle
+            except ImportError:  # pragma: no cover - local package import path
+                from src.tenant_api import tenant_lifecycle
+            return tenant_lifecycle.handle_tenant_provisioning_event(event, deps)
         except ValueError as exc:
             return _error(400, "BAD_REQUEST", str(exc))
         except ClientError as exc:
@@ -2319,9 +2286,17 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     try:
         tenant_id = _validated_path_tenant_id(event)
         if path == "/v1/health" and method == "GET":
-            return _handle_health(deps)
+            try:
+                import tenant_lifecycle
+            except ImportError:  # pragma: no cover - local package import path
+                from src.tenant_api import tenant_lifecycle
+            return tenant_lifecycle.handle_health(deps)
         if path == "/v1/sessions" and method == "GET":
-            return _handle_sessions(event, caller)
+            try:
+                import tenant_lifecycle
+            except ImportError:  # pragma: no cover - local package import path
+                from src.tenant_api import tenant_lifecycle
+            return tenant_lifecycle.handle_sessions(event, caller)
 
         # Dispatch route groups
         response = _dispatch_platform_routes(path, method, event, caller, deps)

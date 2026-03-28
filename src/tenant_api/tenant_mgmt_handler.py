@@ -6,8 +6,10 @@ from botocore.exceptions import ClientError
 
 try:
     import handler as shared
+    import tenant_lifecycle
 except ImportError:  # pragma: no cover - local package import path
     from src.tenant_api import handler as shared
+    from src.tenant_api import tenant_lifecycle
 
 
 @shared.logger.inject_lambda_context(clear_state=True, log_event=False)
@@ -23,7 +25,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         app_id = shared._str_or_none(detail.get("appId")) if isinstance(detail, dict) else None
         shared.logger.append_keys(appid=app_id or "unknown", tenantid=tenant_id or "unknown")
         try:
-            return shared._handle_tenant_provisioning_event(event, deps)
+            return tenant_lifecycle.handle_tenant_provisioning_event(event, deps)
         except ValueError as exc:
             return shared._error(400, "BAD_REQUEST", str(exc))
         except ClientError as exc:
@@ -43,11 +45,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     try:
         tenant_id = shared._validated_path_tenant_id(event)
         if path == "/v1/health" and method == "GET":
-            return shared._handle_health(deps)
+            return tenant_lifecycle.handle_health(deps)
         if path == "/v1/sessions" and method == "GET":
-            return shared._handle_sessions(event, caller)
+            return tenant_lifecycle.handle_sessions(event, caller)
 
-        response = shared._dispatch_tenant_routes(path, method, event, caller, deps, tenant_id)
+        response = tenant_lifecycle.dispatch_routes(path, method, event, caller, deps, tenant_id)
         if response:
             return response
 
