@@ -340,18 +340,57 @@ class TenantScopedDynamoDB:
         expression_attribute_names: dict[str, str] | None = None,
         expression_attribute_values: dict[str, Any] | None = None,
     ) -> PaginatedItems:
-        """Scan a table.
+        """Scanning is intentionally unsupported on tenant-scoped clients."""
+        _ = (
+            table_name,
+            filter_expression,
+            limit,
+            exclusive_start_key,
+            expression_attribute_names,
+            expression_attribute_values,
+        )
+        raise RuntimeError(
+            "TenantScopedDynamoDB.scan is not permitted; use ControlPlaneDynamoDB "
+            "for explicit administrative scans."
+        )
 
-        SECURITY: Scanning is an administrative operation.  Isolation is
-        NOT enforced by this method — it will return items from all
-        tenants if they exist in the scanned table.
+    def scan_all(
+        self,
+        table_name: str,
+        *,
+        filter_expression: ConditionBase | str | None = None,
+        expression_attribute_names: dict[str, str] | None = None,
+        expression_attribute_values: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Scanning is intentionally unsupported on tenant-scoped clients."""
+        _ = (
+            table_name,
+            filter_expression,
+            expression_attribute_names,
+            expression_attribute_values,
+        )
+        raise RuntimeError(
+            "TenantScopedDynamoDB.scan_all is not permitted; use ControlPlaneDynamoDB "
+            "for explicit administrative scans."
+        )
 
-        Lambda handlers must perform their own authorization (e.g. roles claim
-        check) before calling this method.
 
-        Returns a PaginatedItems object. Pass result.last_evaluated_key
-        to exclusive_start_key for subsequent pages.
-        """
+class ControlPlaneDynamoDB(TenantScopedDynamoDB):
+    """Administrative DynamoDB client for explicit control-plane scans and writes."""
+
+    def _validate_pk(self, key: dict[str, Any]) -> None:
+        _ = key
+
+    def scan(
+        self,
+        table_name: str,
+        *,
+        filter_expression: ConditionBase | str | None = None,
+        limit: int | None = None,
+        exclusive_start_key: dict[str, Any] | None = None,
+        expression_attribute_names: dict[str, str] | None = None,
+        expression_attribute_values: dict[str, Any] | None = None,
+    ) -> PaginatedItems:
         table = self._dynamodb.Table(table_name)
         kwargs: dict[str, Any] = {}
         if filter_expression is not None:
@@ -379,13 +418,6 @@ class TenantScopedDynamoDB:
         expression_attribute_names: dict[str, str] | None = None,
         expression_attribute_values: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Scan all items in a table, handling pagination.
-
-        SECURITY: Scanning is an administrative operation. Isolation is
-        NOT enforced by this method.
-
-        Returns a flat list of all items.
-        """
         items: list[dict[str, Any]] = []
         exclusive_start_key = None
         while True:

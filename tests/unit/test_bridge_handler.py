@@ -233,8 +233,7 @@ def test_list_agents_returns_openapi_shape_and_tier_filtered(setup_data):
 
 
 def test_list_agents_handles_multiple_scan_pages(setup_data):
-
-    # Mock TenantScopedDynamoDB.scan to return two pages
+    # Discovery scans are now explicit control-plane reads.
     mock_db = MagicMock()
     mock_db.scan_all.return_value = [
         {
@@ -251,7 +250,7 @@ def test_list_agents_handles_multiple_scan_pages(setup_data):
         },
     ]
 
-    with patch("src.bridge.handler.TenantScopedDynamoDB", return_value=mock_db):
+    with patch("src.bridge.handler.ControlPlaneDynamoDB", return_value=mock_db):
         event = {
             "httpMethod": "GET",
             "path": "/v1/agents",

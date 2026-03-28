@@ -25,7 +25,7 @@ import boto3
 from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import ConditionBase, Key
 from botocore.exceptions import ClientError
-from data_access import TenantContext, TenantScopedDynamoDB, TenantScopedS3
+from data_access import ControlPlaneDynamoDB, TenantContext, TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     AGENT_STATUS_TRANSITIONS,
     REGISTERABLE_AGENT_STATUSES,
@@ -211,13 +211,13 @@ def _path_tenant_id(event: dict[str, Any]) -> str | None:
     return _str_or_none(path_params.get("tenantId") or path_params.get("id"))
 
 
-def _validated_path_tenant_id(event: dict[str, Any]) -> str | None:
+def _validated_path_tenant_id(event: dict[str, Any], *, allow_reserved: bool = False) -> str | None:
     tenant_id = _path_tenant_id(event)
     if tenant_id is None:
         return None
     # Path-based tenant routes use the same canonicalization and validation
     # contract as tenant creation so auth decisions never depend on raw casing.
-    return _canonical_tenant_id(tenant_id)
+    return _canonical_tenant_id(tenant_id, allow_reserved=allow_reserved)
 
 
 def _tenant_pk(tenant_id: str) -> str:
@@ -228,7 +228,7 @@ def _tenant_key(tenant_id: str) -> dict[str, str]:
     return {"PK": _tenant_pk(tenant_id), "SK": "METADATA"}
 
 
-def _canonical_tenant_id(value: Any) -> str:
+def _canonical_tenant_id(value: Any, *, allow_reserved: bool = False) -> str:
     tenant_id = _str_or_none(value)
     if tenant_id is None:
         raise ValueError("tenantId is required")
@@ -238,7 +238,7 @@ def _canonical_tenant_id(value: Any) -> str:
         raise ValueError("tenantId must be 3-32 characters")
     if "--" in normalized:
         raise ValueError("tenantId must not contain consecutive hyphens")
-    if normalized in _RESERVED_TENANT_IDS:
+    if normalized in _RESERVED_TENANT_IDS and not (allow_reserved and normalized == "platform"):
         raise ValueError("tenantId is reserved")
     if not _TENANT_ID_PATTERN.fullmatch(normalized):
         raise ValueError("tenantId must match ^[a-z](?:[a-z0-9-]{1,30}[a-z0-9])$")
@@ -500,12 +500,13 @@ def _tenant_s3_for_scope(
     return TenantScopedS3(tenant_context)
 
 
-def _control_plane_db(caller: CallerIdentity) -> TenantScopedDynamoDB:
-    return _db_for_tenant(
-        tenant_id=caller.tenant_id or "platform-admin",
+def _control_plane_db(caller: CallerIdentity) -> ControlPlaneDynamoDB:
+    tenant_context = _tenant_context_for_scope(
+        tenant_id=caller.tenant_id or "control-plane",
         caller=caller,
-        app_id=caller.app_id or "platform-admin",
+        app_id=caller.app_id or "control-plane",
     )
+    return ControlPlaneDynamoDB(tenant_context)
 
 
 def _normalize_tier(value: Any) -> str:
@@ -1000,7 +1001,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     path = _request_path(event)
 
     try:
-        tenant_id = _validated_path_tenant_id(event)
+        tenant_id = _validated_path_tenant_id(event, allow_reserved=caller.is_admin)
         if path == "/v1/health" and method == "GET":
             try:
                 import tenant_lifecycle

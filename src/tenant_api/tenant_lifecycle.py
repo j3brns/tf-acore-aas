@@ -112,7 +112,7 @@ def handle_tenant_provisioning_event(
     if not isinstance(detail, dict):
         raise ValueError("Event detail must be an object")
 
-    tenant_id = shared._canonical_tenant_id(detail.get("tenantId"))
+    tenant_id = shared._canonical_tenant_id(detail.get("tenantId"), allow_reserved=True)
     app_id = shared._str_or_none(detail.get("appId"))
     caller = system_caller_for_tenant(tenant_id, app_id)
     existing = shared._read_tenant_record(tenant_id=tenant_id, caller=caller, app_id=app_id)
@@ -204,11 +204,7 @@ def handle_list(
     limit = min(int(query_params.get("limit", 50)), 100)
     next_token = query_params.get("nextToken")
 
-    db = shared._db_for_tenant(
-        tenant_id=caller.tenant_id or "system",
-        caller=caller,
-        app_id=caller.app_id or "system",
-    )
+    db = shared._control_plane_db(caller)
 
     scan_params: dict[str, Any] = {"limit": limit}
     if next_token:

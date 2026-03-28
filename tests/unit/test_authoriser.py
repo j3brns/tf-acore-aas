@@ -627,6 +627,27 @@ def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_get_
     assert binding == {"tenant_id": "t-test-001", "app_id": "app-001", "tier": "basic"}
 
 
+@patch("src.authoriser.handler.get_dynamodb")
+def test_resolve_sigv4_tenant_binding_uses_filter_and_projection(mock_get_dynamodb, mock_env):
+    from src.authoriser import handler as authoriser_handler
+    from src.authoriser.handler import resolve_sigv4_tenant_binding
+
+    mock_table = MagicMock()
+    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_table.scan.return_value = {"Items": [], "LastEvaluatedKey": None}
+    authoriser_handler._sigv4_binding_cache.clear()
+
+    resolve_sigv4_tenant_binding(
+        "arn:aws:sts::123456789012:assumed-role/platform-tenant-t-test-001-execution-role/machine-session"
+    )
+
+    kwargs = mock_table.scan.call_args.kwargs
+    assert "FilterExpression" in kwargs
+    assert "ProjectionExpression" in kwargs
+    assert "executionRoleArn" in kwargs["ProjectionExpression"]
+    assert "execution_role_arn" in kwargs["ProjectionExpression"]
+
+
 @patch("src.authoriser.handler.get_jwk_client")
 def test_handler_unexpected_error(mock_get_jwk_client, mock_env, lambda_context):
     mock_get_jwk_client.side_effect = Exception("Crash")
@@ -655,3 +676,43 @@ def test_get_tenant_status_error(mock_get_db, mock_get_jwk_client, mock_env, lam
     with patch("jwt.decode", return_value=payload):
         result = handler(event, lambda_context)
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
+@patch("src.authoriser.handler.logger")
+@patch("src.authoriser.handler.get_jwk_client")
+def test_handler_missing_claims_logs_present_claims_only(
+    mock_get_jwk_client, mock_logger, mock_env, lambda_context
+):
+    token = "valid.token"
+    event = {"methodArn": "arn", "authorizationToken": f"Bearer {token}"}
+
+    mock_jwk_client = MagicMock()
+    mock_get_jwk_client.return_value = mock_jwk_client
+    mock_jwk_client.get_signing_key_from_jwt.return_value = MagicMock(key="key")
+
+    with patch("jwt.decode", return_value={"sub": "user", "roles": ["Agent.Invoke"]}):
+        result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+    _, kwargs = mock_logger.error.call_args
+    assert kwargs["extra"]["present_claims"] == ["roles", "sub"]
+    assert "payload" not in kwargs["extra"]
+
+
+@patch("src.authoriser.handler.logger")
+@patch("src.authoriser.handler.get_jwk_client")
+def test_handler_invalid_jwt_logs_structured_error(
+    mock_get_jwk_client, mock_logger, mock_env, lambda_context
+):
+    token = "valid.token"
+    event = {"methodArn": "arn", "authorizationToken": f"Bearer {token}"}
+
+    mock_jwk_client = MagicMock()
+    mock_get_jwk_client.return_value = mock_jwk_client
+    mock_jwk_client.get_signing_key_from_jwt.return_value = MagicMock(key="key")
+
+    with patch("jwt.decode", side_effect=jwt.InvalidTokenError("bad token")):
+        result = handler(event, lambda_context)
+
+    assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+    mock_logger.warning.assert_called_with("Invalid JWT", extra={"error": "bad token"})

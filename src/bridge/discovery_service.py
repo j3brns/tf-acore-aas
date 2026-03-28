@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
-from data_access import TenantScopedDynamoDB, TenantScopedS3
+from data_access import ControlPlaneDynamoDB, TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import (
     InvocationMode,
     JobStatus,
@@ -78,7 +78,7 @@ def list_agents(
     tenant_context: TenantContext,
     *,
     agents_table: str,
-    db_factory: Any = TenantScopedDynamoDB,
+    db_factory: Any = ControlPlaneDynamoDB,
 ) -> dict[str, Any]:
     db = db_factory(tenant_context)
     items = db.scan_all(agents_table)

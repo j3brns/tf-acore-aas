@@ -30,7 +30,12 @@ from botocore.exceptions import (
     EndpointConnectionError,
     ReadTimeoutError,
 )
-from data_access import TenantCapabilityClient, TenantScopedDynamoDB, TenantScopedS3
+from data_access import (
+    ControlPlaneDynamoDB,
+    TenantCapabilityClient,
+    TenantScopedDynamoDB,
+    TenantScopedS3,
+)
 from data_access.models import (
     AgentRecord,
     AgentStatus,
@@ -876,7 +881,7 @@ def _handler_core(
         return discovery_list_agents(
             tenant_context,
             agents_table=AGENTS_TABLE,
-            db_factory=TenantScopedDynamoDB,
+            db_factory=ControlPlaneDynamoDB,
         )
     if (
         method == "GET"

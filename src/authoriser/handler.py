@@ -19,6 +19,7 @@ import boto3
 import jwt
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
+from boto3.dynamodb.conditions import Attr
 from jwt import PyJWKClient
 
 logger = Logger(service="authoriser")
@@ -148,7 +149,13 @@ def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
     candidate_role_arns = _sigv4_caller_role_arns(caller_arn)
     table = get_dynamodb().Table(TENANTS_TABLE)
     matches: dict[str, dict[str, str]] = {}
-    scan_kwargs: dict[str, Any] = {}
+    scan_kwargs: dict[str, Any] = {
+        "FilterExpression": Attr("executionRoleArn").is_in(list(candidate_role_arns))
+        | Attr("execution_role_arn").is_in(list(candidate_role_arns)),
+        "ProjectionExpression": (
+            "tenantId, tenant_id, appId, app_id, tier, executionRoleArn, execution_role_arn"
+        ),
+    }
 
     try:
         while True:
@@ -347,7 +354,10 @@ def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
         roles = payload.get("roles", [])
 
         if not tenant_id or not app_id:
-            logger.error("Missing tenantid or appid in token", extra={"payload": payload})
+            logger.error(
+                "Missing tenantid or appid in token",
+                extra={"present_claims": sorted(str(key) for key in payload.keys())},
+            )
             return generate_policy(sub, "Deny", method_arn, {})
 
         # Check tenant status (Isolation Layer 1)
@@ -385,7 +395,7 @@ def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
         logger.warning("JWT has expired")
         return generate_policy("user", "Deny", method_arn, {})
     except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid JWT: {str(e)}")
+        logger.warning("Invalid JWT", extra={"error": str(e)})
         return generate_policy("user", "Deny", method_arn, {})
     except Exception:
         logger.exception("Unexpected error during JWT validation")

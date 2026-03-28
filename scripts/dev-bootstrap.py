@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import secrets
 import sys
 import urllib.error
 import urllib.request
@@ -51,6 +50,7 @@ _DEFAULT_MOCK_JWKS_URL = "http://localhost:8766"
 _DEFAULT_REGION = "eu-west-2"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_ENV_TEST_PATH = _REPO_ROOT / ".env.test"
+_LOCAL_SCOPED_TOKEN_SIGNING_KEY = "local-dev-scoped-token-signing-key-32-bytes-minimum"
 
 # ---------------------------------------------------------------------------
 # DynamoDB table definitions
@@ -200,6 +200,28 @@ TENANT_FIXTURES: list[dict[str, Any]] = [
     },
 ]
 
+
+def _with_tenant_aliases(item: dict[str, Any]) -> dict[str, Any]:
+    """Mirror the current production bootstrap tenant attribute aliases in local fixtures."""
+    aliased = dict(item)
+    aliases = {
+        "tenant_id": "tenantId",
+        "app_id": "appId",
+        "created_at": "createdAt",
+        "updated_at": "updatedAt",
+        "owner_email": "ownerEmail",
+        "owner_team": "ownerTeam",
+        "account_id": "accountId",
+        "execution_role_arn": "executionRoleArn",
+        "display_name": "displayName",
+        "monthly_budget_usd": "monthlyBudgetUsd",
+    }
+    for legacy_key, canonical_key in aliases.items():
+        if legacy_key in item:
+            aliased[canonical_key] = item[legacy_key]
+    return aliased
+
+
 AGENT_FIXTURES: list[dict[str, Any]] = [
     {
         "PK": "AGENT#echo-agent",
@@ -287,7 +309,11 @@ def _seed_items(ddb_resource: Any, table_name: str, items: list[dict[str, Any]])
 
 def seed_tenants(ddb_resource: Any) -> None:
     """Upsert two test tenant records (basic-tier and premium-tier)."""
-    _seed_items(ddb_resource, "platform-tenants", TENANT_FIXTURES)
+    _seed_items(
+        ddb_resource,
+        "platform-tenants",
+        [_with_tenant_aliases(item) for item in TENANT_FIXTURES],
+    )
 
 
 def seed_agents(ddb_resource: Any) -> None:
@@ -371,10 +397,10 @@ def write_env_test(tokens: dict[str, str], env_test_path: Path) -> None:
         "API_AUDIENCE=api://platform-local",
         "API_ISSUER=http://localhost:8766",
         "PLATFORM_ENV=local",
-        f"SCOPED_TOKEN_SIGNING_KEY={secrets.token_hex(32)}",
-        "BASIC_TENANT_ID=t-basic-001",
-        "PREMIUM_TENANT_ID=t-premium-001",
-        "ADMIN_TENANT_ID=t-basic-001",
+        f"SCOPED_TOKEN_SIGNING_KEY={_LOCAL_SCOPED_TOKEN_SIGNING_KEY}",
+        "BASIC_TENANT_ID=t-test-001",
+        "PREMIUM_TENANT_ID=t-test-002",
+        "ADMIN_TENANT_ID=t-test-001",
         "",
     ]
     if tokens:

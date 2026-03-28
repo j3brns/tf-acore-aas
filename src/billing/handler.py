@@ -23,7 +23,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.parameters import SSMProvider
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
-from data_access.client import TenantScopedDynamoDB
+from data_access.client import ControlPlaneDynamoDB, TenantScopedDynamoDB
 from data_access.models import (
     TenantContext,
     TenantStatus,
@@ -137,7 +137,7 @@ def _get_active_tenants() -> list[dict[str, Any]]:
         tier=TenantTier.PREMIUM,
         sub="billing-pipeline",
     )
-    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_get_dynamodb())
+    db = ControlPlaneDynamoDB(ctx, dynamodb_resource=_get_dynamodb())
     # CR001: FilterExpression requires Attr() conditions, not Key() conditions.
     # Key() is only valid in KeyConditionExpression.
     return db.scan_all(

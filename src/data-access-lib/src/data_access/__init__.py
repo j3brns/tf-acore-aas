@@ -8,13 +8,19 @@ Implemented in TASK-013.
 ADRs: ADR-012
 """
 
-from data_access.client import TenantCapabilityClient, TenantScopedDynamoDB, TenantScopedS3
+from data_access.client import (
+    ControlPlaneDynamoDB,
+    TenantCapabilityClient,
+    TenantScopedDynamoDB,
+    TenantScopedS3,
+)
 from data_access.exceptions import TenantAccessViolation
 from data_access.models import PaginatedItems, TenantCapabilityPolicy, TenantContext
 
 __all__ = [
     "TenantContext",
     "TenantAccessViolation",
+    "ControlPlaneDynamoDB",
     "TenantScopedDynamoDB",
     "TenantScopedS3",
     "TenantCapabilityClient",

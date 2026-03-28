@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from data_access import TenantAccessViolation, TenantScopedDynamoDB
+from data_access import ControlPlaneDynamoDB, TenantAccessViolation, TenantScopedDynamoDB
 from moto import mock_aws
 
 from .conftest import OTHER_TENANT_ID, TABLE_NAME, TENANT_ID, make_dynamo_db
@@ -289,21 +289,43 @@ class TestTenantScopedDynamoDBQuery:
 
 
 class TestTenantScopedDynamoDBScan:
-    def test_scan_returns_all_items_regardless_of_tenant(self, ctx, mock_cw: MagicMock) -> None:
+    def test_scan_is_rejected_for_tenant_scoped_client(self, ctx, mock_cw: MagicMock) -> None:
         with mock_aws():
             db, dynamo = make_dynamo_db(ctx, cw=mock_cw)
             table = dynamo.Table(TABLE_NAME)
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001"})
             table.put_item(Item={"PK": f"TENANT#{OTHER_TENANT_ID}", "SK": "INV#002"})
-            result = db.scan(TABLE_NAME)
-        assert len(result.items) == 2
+            with pytest.raises(RuntimeError, match="ControlPlaneDynamoDB"):
+                db.scan(TABLE_NAME)
 
-    def test_scan_with_limit_and_pagination(self, ctx, mock_cw: MagicMock) -> None:
+    def test_scan_all_is_rejected_for_tenant_scoped_client(self, ctx, mock_cw: MagicMock) -> None:
         with mock_aws():
             db, dynamo = make_dynamo_db(ctx, cw=mock_cw)
             table = dynamo.Table(TABLE_NAME)
             for i in range(5):
                 table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
+            with pytest.raises(RuntimeError, match="ControlPlaneDynamoDB"):
+                db.scan_all(TABLE_NAME)
+
+
+class TestControlPlaneDynamoDBScan:
+    def test_scan_returns_all_items_regardless_of_tenant(self, ctx, mock_cw: MagicMock) -> None:
+        with mock_aws():
+            _, dynamo = make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001"})
+            table.put_item(Item={"PK": f"TENANT#{OTHER_TENANT_ID}", "SK": "INV#002"})
+            db = ControlPlaneDynamoDB(ctx, dynamodb_resource=dynamo, cloudwatch_client=mock_cw)
+            result = db.scan(TABLE_NAME)
+        assert len(result.items) == 2
+
+    def test_scan_with_limit_and_pagination(self, ctx, mock_cw: MagicMock) -> None:
+        with mock_aws():
+            _, dynamo = make_dynamo_db(ctx, cw=mock_cw)
+            table = dynamo.Table(TABLE_NAME)
+            for i in range(5):
+                table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
+            db = ControlPlaneDynamoDB(ctx, dynamodb_resource=dynamo, cloudwatch_client=mock_cw)
             result1 = db.scan(TABLE_NAME, limit=2)
             assert len(result1.items) == 2
             assert result1.last_evaluated_key is not None
@@ -318,20 +340,22 @@ class TestTenantScopedDynamoDBScan:
         from boto3.dynamodb.conditions import Attr
 
         with mock_aws():
-            db, dynamo = make_dynamo_db(ctx, cw=mock_cw)
+            _, dynamo = make_dynamo_db(ctx, cw=mock_cw)
             table = dynamo.Table(TABLE_NAME)
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001", "status": "ok"})
             table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": "INV#002", "status": "fail"})
+            db = ControlPlaneDynamoDB(ctx, dynamodb_resource=dynamo, cloudwatch_client=mock_cw)
             result = db.scan(TABLE_NAME, filter_expression=Attr("status").eq("ok"))
         assert len(result.items) == 1
         assert result.items[0]["SK"] == "INV#001"
 
     def test_scan_all_paginates(self, ctx, mock_cw: MagicMock) -> None:
         with mock_aws():
-            db, dynamo = make_dynamo_db(ctx, cw=mock_cw)
+            _, dynamo = make_dynamo_db(ctx, cw=mock_cw)
             table = dynamo.Table(TABLE_NAME)
             for i in range(5):
                 table.put_item(Item={"PK": f"TENANT#{TENANT_ID}", "SK": f"INV#{i:03d}"})
+            db = ControlPlaneDynamoDB(ctx, dynamodb_resource=dynamo, cloudwatch_client=mock_cw)
             original_scan = db.scan
 
             def mock_scan_side_effect(*args, **kwargs):

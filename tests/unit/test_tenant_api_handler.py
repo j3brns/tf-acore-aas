@@ -460,6 +460,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     monkeypatch.setenv("FALLBACK_REGION_PARAM", "/platform/config/fallback-region")
     monkeypatch.setattr(tenant_api_handler, "_dependencies", lambda: deps)
     monkeypatch.setattr(tenant_api_handler, "_db_for_tenant", lambda **_kwargs: db)
+    monkeypatch.setattr(tenant_api_handler, "_control_plane_db", lambda *_args, **_kwargs: db)
     monkeypatch.setattr(tenant_api_handler, "_now_utc", lambda: fixed_now)
     return {"db": db, "deps": deps}
 
@@ -693,6 +694,48 @@ def test_tenant_provisioning_failed_event_updates_tenant_record(fake_state: dict
     assert tenant["provisioningError"] == "ROLLBACK_COMPLETE"
 
 
+def test_reserved_platform_provisioning_event_is_accepted(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#platform", "METADATA")] = {
+        "PK": "TENANT#platform",
+        "SK": "METADATA",
+        "tenantId": "platform",
+        "appId": "platform-internal",
+        "displayName": "Platform Internal",
+        "tier": "premium",
+        "status": "active",
+        "provisioningStatus": "pending",
+        "createdAt": "2026-03-28T12:00:00Z",
+        "updatedAt": "2026-03-28T12:00:00Z",
+        "ownerEmail": "platform@example.invalid",
+        "ownerTeam": "platform",
+        "accountId": "123456789012",
+    }
+
+    context = MagicMock()
+    context.function_name = "tenant-api"
+    context.memory_limit_in_mb = 512
+    context.invoked_function_arn = "arn:aws:lambda:eu-west-2:123456789012:function:tenant-api"
+    context.aws_request_id = "req-platform"
+    response = tenant_api_handler.lambda_handler(
+        {
+            "source": "platform.tenant_provisioner",
+            "detail-type": "tenant.provisioned",
+            "detail": {
+                "tenantId": "platform",
+                "appId": "platform-internal",
+                "ExecutionRoleArn": "arn:platform-role",
+            },
+        },
+        context,
+    )
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["tenantId"] == "platform"
+    assert tenant["executionRoleArn"] == "arn:platform-role"
+    assert tenant["provisioningStatus"] == "ready"
+
+
 def test_create_tenant_normalizes_tenant_id_to_lowercase(fake_state: dict[str, Any]) -> None:
     response = _invoke(
         _event(
@@ -750,6 +793,25 @@ def test_create_tenant_rejects_invalid_tenant_id_values(
     error = _body(response)["error"]
     assert error["code"] == "BAD_REQUEST"
     assert error["message"] == expected_error
+
+
+def test_admin_can_read_reserved_platform_tenant(fake_state: dict[str, Any]) -> None:
+    fake_state["db"].items[("TENANT#platform", "METADATA")] = {
+        "PK": "TENANT#platform",
+        "SK": "METADATA",
+        "tenant_id": "platform",
+        "tenantId": "platform",
+        "app_id": "platform-internal",
+        "appId": "platform-internal",
+        "tier": "premium",
+        "status": "active",
+    }
+
+    response = _invoke(_event(method="GET", tenant_id="platform"))
+
+    assert response["statusCode"] == 200
+    tenant = _body(response)["tenant"]
+    assert tenant["tenantId"] == "platform"
 
 
 def test_create_tenant_detects_collision_after_tenant_id_normalization(
