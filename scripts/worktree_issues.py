@@ -2492,6 +2492,54 @@ def issue_state_info(root: Path, repo: str, issue_id: int) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def find_latest_closeout_report(root: Path, issue_id: int) -> Path | None:
+    closeout_root = root / WORKTREE_CLOSEOUT_DIR
+    if not closeout_root.exists():
+        return None
+    matches = sorted(
+        closeout_root.glob(f"issue-{issue_id}-*.json"),
+        key=lambda candidate: candidate.stat().st_mtime,
+    )
+    return matches[-1] if matches else None
+
+
+def issue_evidence_summary(root: Path, issue_id: int) -> dict[str, object]:
+    linked = find_linked_worktree_for_issue(root, issue_id)
+    state_path = issue_state_path(root, issue_id)
+    state = read_json_file(state_path) if state_path.exists() else None
+    closeout_path = find_latest_closeout_report(root, issue_id)
+    closeout = read_closeout_report(closeout_path) if closeout_path else None
+    return {
+        "issue_number": issue_id,
+        "linked_worktree": str(linked.path) if linked is not None else None,
+        "linked_branch": linked.branch if linked is not None else None,
+        "state_path": str(state_path) if state_path.exists() else None,
+        "state": state,
+        "closeout_path": str(closeout_path) if closeout_path is not None else None,
+        "closeout": closeout,
+    }
+
+
+def evidence_drift_findings(root: Path, issues: list[Issue]) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+    for issue in queue_task_issues(issues):
+        if issue.state != "open" or lifecycle_status(issue) != "in-progress":
+            continue
+        evidence = issue_evidence_summary(root, issue.number)
+        if evidence["linked_worktree"] is None and evidence["state_path"] is None:
+            findings.append(
+                AuditFinding(
+                    severity="warning",
+                    issue_number=issue.number,
+                    message=(
+                        "status:in-progress but no local linked worktree "
+                        "or .build evidence in this clone"
+                    ),
+                )
+            )
+    return findings
+
+
 def finish_stage(root: Path, wt: WorktreeInfo, repo: str | None) -> str:
     dirty = run(["git", "status", "--porcelain"], cwd=wt.path).stdout.strip()
     if dirty:
@@ -3023,11 +3071,44 @@ def cmd_issue_queue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_issue_evidence(args: argparse.Namespace) -> int:
+    root = repo_root()
+    issue_id = args.issue
+    if issue_id is None:
+        issue_id = worktree_issue_id(Path(args.path).resolve() if args.path else current_path())
+    if issue_id is None:
+        raise CliError("Could not determine issue id; pass --issue or run inside an issue worktree")
+    summary = issue_evidence_summary(root, issue_id)
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0
+    print(f"Issue evidence: #{issue_id}")
+    print(f"  linked_worktree: {summary['linked_worktree'] or '-'}")
+    print(f"  linked_branch:   {summary['linked_branch'] or '-'}")
+    print(f"  state_path:      {summary['state_path'] or '-'}")
+    state = summary.get("state")
+    if isinstance(state, dict):
+        print(f"  state:           {state.get('state', '-')}")
+        print(f"  last_event:      {state.get('last_event_type', '-')}")
+        print(f"  last_updated:    {state.get('last_updated_at', '-')}")
+    else:
+        print("  state:           -")
+    print(f"  closeout_path:   {summary['closeout_path'] or '-'}")
+    closeout = summary.get("closeout")
+    if isinstance(closeout, dict):
+        print(f"  closeout_stage:  {closeout.get('stage', '-')}")
+        print(f"  cleanup_verified:{closeout.get('cleanup_verified', '-')}")
+    else:
+        print("  closeout_stage:  -")
+    return 0
+
+
 def cmd_issues_audit(args: argparse.Namespace) -> int:
     root = repo_root()
     repo = args.repo or origin_repo_slug(root)
     issues = fetch_repo_issues(root, repo, state="all")
     findings = audit_issues(issues)
+    findings.extend(evidence_drift_findings(root, issues))
     errors = [f for f in findings if f.severity == "error"]
     warnings = [f for f in findings if f.severity == "warning"]
 
@@ -3948,6 +4029,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Also emit JSON payload after human-readable output"
     )
     q.set_defaults(func=cmd_issue_queue)
+
+    ev = sub.add_parser(
+        "issue-evidence",
+        parents=[common_repo],
+        help="Show local linked-worktree and .build evidence for an issue",
+    )
+    ev.add_argument("--issue", type=int, help="Issue number (default: infer from current worktree)")
+    ev.add_argument("--path", help="Path to infer issue number from (default: current path)")
+    ev.add_argument("--json", action="store_true", help="Emit JSON output")
+    ev.set_defaults(func=cmd_issue_evidence)
 
     aud = sub.add_parser(
         "issues-audit",

@@ -26,7 +26,7 @@
 .PHONY: logs-bridge logs-authoriser logs-tenant-api logs-bff
 .PHONY: plan-dev
 .PHONY: task-next task-list task-start task-resume task-finish task-prompt
-.PHONY: worktree wt-go wt-batch issue-queue worktree-next-issue worktree-create-issue worktree-resume-issue
+.PHONY: worktree wt-go wt-batch issue-queue issue-evidence worktree-next-issue worktree-create-issue worktree-resume-issue
 .PHONY: preflight-session pre-validate-session worktree-push-issue finish-worktree-summary finish-worktree-close finish-worktree-close-json
 .PHONY: issues-audit issues-reconcile agent-handoff install-git-hooks hooks-status gitnexus-refresh
 
@@ -787,6 +787,14 @@ issue-queue:
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),) \
 		$(if $(LIMIT),--limit $(LIMIT),)
+
+## issue-evidence: Show local linked-worktree and .build evidence for an issue
+## Usage: make issue-evidence ISSUE=314 [JSON=1]
+issue-evidence:
+	$(if $(ISSUE),,@echo "ERROR: ISSUE required. Usage: make issue-evidence ISSUE=314" && exit 1)
+	uv run python scripts/worktree_issues.py issue-evidence \
+		--issue $(ISSUE) \
+		$(if $(JSON),--json,)
 
 ## issues-audit: Objective issue-state/queue invariants check (fails on drift)
 ## Usage: make issues-audit [JSON=1]

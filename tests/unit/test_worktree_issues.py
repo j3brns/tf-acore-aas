@@ -188,6 +188,27 @@ def test_audit_issues_passes_clean_state_with_next_startable():
     assert warnings == []
 
 
+def test_evidence_drift_findings_warns_for_in_progress_issue_without_local_evidence(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    issue = _issue(
+        number=22,
+        task_id="TASK-015",
+        seq=150,
+        labels=["type:task", "status:in-progress"],
+    )
+
+    monkeypatch.setattr(worktree_issues, "find_linked_worktree_for_issue", lambda *_args: None)
+
+    findings = worktree_issues.evidence_drift_findings(root, [issue])
+
+    assert len(findings) == 1
+    assert findings[0].severity == "warning"
+    assert "no local linked worktree or .build evidence" in findings[0].message
+
+
 def test_reconcile_issue_label_changes_closed_in_progress_moves_to_done():
     issue = _issue(
         number=40,
@@ -283,6 +304,53 @@ def test_record_issue_handoff_event_resets_completed_session_on_new_start(tmp_pa
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert [event["event_type"] for event in payload["events"]] == ["worktree-created"]
     assert payload["branch"] == "wt/task/33-new"
+
+
+def test_issue_evidence_summary_reports_state_and_closeout(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    wt = tmp_path / "worktrees" / "wt33"
+    wt.mkdir(parents=True, exist_ok=True)
+    state_dir = root / ".build" / "worktree-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    closeout_dir = root / ".build" / "worktree-closeouts"
+    closeout_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "issue-33.json"
+    closeout_path = closeout_dir / "issue-33-wt_task_33-test.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "issue_number": 33,
+                "state": "done",
+                "last_event_type": "handback-complete",
+                "last_updated_at": "2026-01-01T00:00:00Z",
+                "events": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    closeout_path.write_text(
+        json.dumps({"stage": "complete", "cleanup_verified": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        worktree_issues,
+        "find_linked_worktree_for_issue",
+        lambda *_args: worktree_issues.WorktreeInfo(
+            path=wt,
+            head="abc123",
+            branch="wt/task/33-test",
+            is_primary=False,
+        ),
+    )
+
+    summary = worktree_issues.issue_evidence_summary(root, 33)
+
+    assert summary["linked_worktree"] == str(wt)
+    assert summary["state_path"] == str(state_path)
+    assert summary["closeout_path"] == str(closeout_path)
+    assert summary["state"]["last_event_type"] == "handback-complete"
+    assert summary["closeout"]["cleanup_verified"] is True
 
 
 def test_cmd_worktree_resume_open_shell_tolerates_missing_agent_namespace_attrs(monkeypatch):

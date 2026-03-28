@@ -153,6 +153,9 @@ Parent `CR-*` issues are roadmap/design containers, not runnable tasks.
 They must not carry `type:task`, and they do not enter the issue queue.
 Only atomic child task issues are queueable and should carry `Seq:` / `Depends on:`.
 Parent `CR-*` issues do not count toward WIP limits; WIP is tracked on child task issues only.
+PR merge is delivery truth. Local `.build` artifacts are execution evidence for this clone.
+Use `make issue-evidence ISSUE=<n>` to inspect linked worktree and `.build` state for an issue.
+Missing local `.build` evidence must never auto-close or auto-reopen a GitHub issue by itself.
 
 ### Queue and worktree commands (preferred)
 
