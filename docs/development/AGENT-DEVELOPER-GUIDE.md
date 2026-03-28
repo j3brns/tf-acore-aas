@@ -19,11 +19,17 @@ vim agents/my-agent/pyproject.toml
 # 3. Develop logic locally (fast, no AWS required)
 make test-agent AGENT=my-agent               # Run unit + golden tests
 
-# 4. (Optional) Test platform integration locally (requires Docker)
+# 4. (Optional) Test the agent directly with the AgentCore starter toolkit
+make agentcore-dev AGENT=my-agent            # Start the local AgentCore dev server
+make agentcore-invoke-dev AGENT=my-agent     # Invoke the local dev server
+make agentcore-launch AGENT=my-agent         # Launch directly with the toolkit
+make agentcore-invoke-runtime AGENT=my-agent # Invoke the toolkit-managed runtime
+
+# 5. (Optional) Test platform integration locally (requires Docker)
 make dev                                    # Start local environment (LocalStack + mocks)
 make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=local  # Invoke via local bridge
 
-# 5. Validate locally, then push to AWS dev (real compute)
+# 6. Validate locally, then push through A5C to AWS dev (real compute)
 make agent-push AGENT=my-agent ENV=dev      # Package, run agent tests, deploy to Runtime, and register
 make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
 ```
@@ -33,8 +39,36 @@ make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
 | Phase | Tooling | Environment | Purpose |
 |-------|---------|-------------|---------|
 | **Logic** | `pytest` | Local | Rapidly iterate on prompt engineering, tools, and business logic. |
+| **Runtime inner loop** | `make agentcore-*` | Local or direct AgentCore Runtime | Iterate with the Bedrock AgentCore starter toolkit without going through the A5C control plane. |
 | **Integration** | `make dev` | Local (Docker) | Verify that headers, auth, and platform-level routing are correct. |
 | **Validation** | `make agent-push` | AWS (dev) | Final end-to-end verification on real AgentCore Runtime compute. |
+
+## AgentCore CLI Pilot
+
+The repository now exposes a narrow `agentcore` CLI path for agent authors:
+
+```bash
+make agentcore-dev AGENT=my-agent
+make agentcore-invoke-dev AGENT=my-agent PAYLOAD='{"prompt":"Hello"}'
+make agentcore-launch AGENT=my-agent
+make agentcore-invoke-runtime AGENT=my-agent PAYLOAD='{"prompt":"Tell me a joke"}'
+make agentcore-stop-session AGENT=my-agent
+make agentcore-destroy AGENT=my-agent
+```
+
+This pilot is for agent-side runtime iteration only.
+
+- It uses the Amazon Bedrock AgentCore starter toolkit directly from `agents/<agent>/`.
+- It does not register the agent in the A5C control plane.
+- It does not replace `make agent-push`, `scripts/deploy_agent.py`, or `scripts/register_agent.py`.
+- It is the fastest sanctioned path for checking that an agent package behaves correctly in the AgentCore runtime itself.
+
+Use `make agent-push` when you need the full A5C contract:
+
+- package and dependency handling
+- runtime deployment
+- platform registration
+- invocation through the Bridge
 
 ## Project Structure (per agent)
 
@@ -194,6 +228,8 @@ To add a dependency:
 uv add some-package                # Adds to [project.dependencies], updates uv.lock
 make agent-push AGENT=my-agent    # Detects hash change, triggers cold push automatically
 ```
+
+If you are using the toolkit pilot, run the command from the agent directory through the Make targets above so the local virtual environment and `.bedrock_agentcore.yaml` stay agent-scoped.
 
 **Constraints**:
 - Use `--only-binary=:all:` (enforced by build script) — source-only packages may not compile for arm64.

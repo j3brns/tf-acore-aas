@@ -327,11 +327,17 @@ make worktree-push-issue      # Push with preflight and validation enforced
 
 ```bash
 make agent-test AGENT=my-agent              # 1. Local logic and golden tests (fast)
-make agent-push AGENT=my-agent ENV=dev      # 2. Push to AWS dev compute (real compute)
-make agent-invoke AGENT=my-agent ENV=dev    # 3. Invoke on real AWS
+make agentcore-dev AGENT=my-agent           # 2. Optional: run with the AgentCore CLI locally
+make agentcore-invoke-dev AGENT=my-agent    # 3. Optional: invoke the local AgentCore dev server
+make agentcore-launch AGENT=my-agent        # 4. Optional: launch directly with the starter toolkit
+make agentcore-invoke-runtime AGENT=my-agent # 5. Optional: invoke the toolkit-managed runtime
+make agent-push AGENT=my-agent ENV=dev      # 6. Push through A5C (deploy + register)
+make agent-invoke AGENT=my-agent ENV=dev    # 7. Invoke through the A5C platform
 ```
 
-`make agent-push` uses the fast path when dependencies are unchanged, which keeps the inner loop quick without bypassing the platform boundary entirely. Local development of agent logic is done via `pytest` and `make agent-test`.
+Use the `agentcore-*` targets for agent-side iteration only. They exercise the Bedrock AgentCore starter toolkit directly and do not register the runtime in the A5C control plane.
+
+Use `make agent-push` when you need the real platform path: package, deploy, register, and then invoke through the Bridge. `make agent-push` still uses the fast path when dependencies are unchanged, which keeps the inner loop quick without bypassing the platform boundary entirely.
 
 ### Frontend developer inner loop
 

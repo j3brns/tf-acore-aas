@@ -17,6 +17,8 @@
 .PHONY: bootstrap-cdk bootstrap-secrets bootstrap-gitlab-oidc
 .PHONY: bootstrap-post-deploy bootstrap-verify bootstrap-delete-iam-user
 .PHONY: agent-push agent-invoke agent-logs agent-test agent-rollback
+.PHONY: agentcore-dev agentcore-invoke-dev agentcore-launch agentcore-invoke-runtime
+.PHONY: agentcore-stop-session agentcore-destroy
 .PHONY: spa-dev spa-build spa-push
 .PHONY: ops-login ops-top-tenants ops-tenant-sessions ops-suspend-tenant
 .PHONY: ops-reinstate-tenant ops-quota-report ops-invocation-report
@@ -521,6 +523,42 @@ agent-push:
 	@echo "==> Registering agent"
 	uv run python scripts/register_agent.py $(AGENT) --env $(ENV)
 	@echo "==> Agent $(AGENT) deployed successfully to $(ENV)"
+
+## agentcore-dev: Start AgentCore local dev server inside an agent project
+## Usage: make agentcore-dev AGENT=my-agent
+agentcore-dev:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-dev AGENT=my-agent" && exit 1)
+	cd agents/$(AGENT) && uv run agentcore dev
+
+## agentcore-invoke-dev: Invoke the local AgentCore dev server for an agent
+## Usage: make agentcore-invoke-dev AGENT=my-agent [PAYLOAD='{"prompt":"hello"}']
+agentcore-invoke-dev:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-invoke-dev AGENT=my-agent" && exit 1)
+	cd agents/$(AGENT) && uv run agentcore invoke --dev '$(or $(PAYLOAD),{"prompt":"Hello"})'
+
+## agentcore-launch: Launch an agent directly with the AgentCore starter toolkit
+## Usage: make agentcore-launch AGENT=my-agent
+agentcore-launch:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-launch AGENT=my-agent" && exit 1)
+	cd agents/$(AGENT) && uv run agentcore launch
+
+## agentcore-invoke-runtime: Invoke a toolkit-launched runtime directly
+## Usage: make agentcore-invoke-runtime AGENT=my-agent [PAYLOAD='{"prompt":"hello"}']
+agentcore-invoke-runtime:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-invoke-runtime AGENT=my-agent" && exit 1)
+	cd agents/$(AGENT) && uv run agentcore invoke '$(or $(PAYLOAD),{"prompt":"Hello"})'
+
+## agentcore-stop-session: Stop the active toolkit-managed runtime session
+## Usage: make agentcore-stop-session AGENT=my-agent
+agentcore-stop-session:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-stop-session AGENT=my-agent" && exit 1)
+	cd agents/$(AGENT) && uv run agentcore stop-session
+
+## agentcore-destroy: Destroy toolkit-managed runtime resources for an agent
+## Usage: make agentcore-destroy AGENT=my-agent
+agentcore-destroy:
+	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-destroy AGENT=my-agent" && exit 1)
+	cd agents/$(AGENT) && uv run agentcore destroy
 
 ## agent-invoke: Invoke a deployed agent
 ## Usage: make agent-invoke AGENT=my-agent TENANT=t-abc123 [PROMPT="hello"] [MODE=sync]

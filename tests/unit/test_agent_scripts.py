@@ -122,6 +122,29 @@ def test_agent_push_runs_tests_before_deploy_and_register():
     assert test_index < deploy_index < register_index
 
 
+def test_agentcore_dev_target_runs_toolkit_in_agent_directory():
+    recipe_lines = _makefile_recipe_lines("agentcore-dev")
+    assert recipe_lines[-1] == "cd agents/$(AGENT) && uv run agentcore dev"
+
+
+def test_agentcore_launch_target_runs_toolkit_launch_in_agent_directory():
+    recipe_lines = _makefile_recipe_lines("agentcore-launch")
+    assert recipe_lines[-1] == "cd agents/$(AGENT) && uv run agentcore launch"
+
+
+def test_agentcore_invoke_targets_use_toolkit_commands():
+    invoke_dev_lines = _makefile_recipe_lines("agentcore-invoke-dev")
+    invoke_runtime_lines = _makefile_recipe_lines("agentcore-invoke-runtime")
+
+    assert invoke_dev_lines[-1] == (
+        "cd agents/$(AGENT) && uv run agentcore invoke --dev "
+        '\'$(or $(PAYLOAD),{"prompt":"Hello"})\''
+    )
+    assert invoke_runtime_lines[-1] == (
+        'cd agents/$(AGENT) && uv run agentcore invoke \'$(or $(PAYLOAD),{"prompt":"Hello"})\''
+    )
+
+
 # ---------------------------------------------------------------------------
 # deploy_agent.py tests
 # ---------------------------------------------------------------------------
