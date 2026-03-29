@@ -211,7 +211,7 @@ The pre-push hook runs `make validate-pre-push` (fast path; no CDK synth).
 - Closed task issues must always be `status:done` and must never retain `status:in-progress`, `status:not-started`, or `ready`.
 - Parent `CR-*` issues must not carry `type:task`; if they do, the issue audit must fail.
 - Parent `CR-*` issues must not carry `status:in-progress`; active implementation is tracked on child task issues.
-- `make finish-worktree-close` is the required close path even if the issue was already closed manually; it is the normalization step for lifecycle labels.
+- `make finish-worktree-close` is the required close path even if the issue was already closed manually; it is the normalization and hand-back step for lifecycle labels and `.build` evidence.
 - If issue state or labels drift, run `make issues-reconcile` immediately, then re-run `make issues-audit` until it passes.
 
 ### Issue Definition of Done (mandatory)
@@ -223,9 +223,10 @@ An issue is done only when all items below are true:
 4. `make preflight-session` and `make pre-validate-session` pass on the final branch state.
 5. Branch is pushed and PR is open with validation evidence and issue linkage.
 6. PR is merged (not just opened).
-7. Issue is closed only after merge verification (`make finish-worktree-close`).
-8. `make issues-audit` passes after close; if not, run `make issues-reconcile` and re-audit before declaring the issue complete.
-9. Worktree cleanup is complete (`git worktree remove ...`, `git branch -d ...`, `git worktree prune`).
+7. `.build` hand-back evidence is finalized; do not leave the issue in partial local state such as `agent-launching` or an incomplete closeout.
+8. Issue is closed and normalized only after merge verification (`make finish-worktree-close`).
+9. `make issues-audit` passes after close; if not, run `make issues-reconcile` and re-audit before declaring the issue complete.
+10. Cleanup residue is reported explicitly if present, but worktree or branch deletion is not part of semantic completion and must not block done status by itself.
 
 ### Merge Conflict Rule (mandatory)
 
