@@ -5,6 +5,7 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as oam from 'aws-cdk-lib/aws-oam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
@@ -30,9 +31,33 @@ export interface ObservabilityStackProps extends cdk.StackProps {
 }
 
 export class ObservabilityStack extends cdk.Stack {
+  public readonly metricsBucket: s3.IBucket;
+
   constructor(scope: Construct, id: string, props: ObservabilityStackProps) {
     super(scope, id, props);
     const alarmNamePrefix = this.stackName;
+    const env = this.node.tryGetContext('env') as string;
+
+    // --- 0. Metrics Storage Sink ---
+
+    this.metricsBucket = new s3.Bucket(this, 'PlatformMetricsBucket', {
+      bucketName: `platform-metrics-${env}-${this.region}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      versioned: true,
+    });
+
+    new cdk.CfnOutput(this, 'PlatformMetricsBucketName', {
+      value: this.metricsBucket.bucketName,
+      description: 'S3 bucket name for aggregated platform metrics',
+    });
+
+    new cdk.CfnOutput(this, 'PlatformMetricsBucketArn', {
+      value: this.metricsBucket.bucketArn,
+      description: 'S3 bucket ARN for aggregated platform metrics',
+    });
 
     // --- 1. Platform Operations Dashboard ---
 

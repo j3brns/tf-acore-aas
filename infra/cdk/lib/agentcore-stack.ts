@@ -10,6 +10,9 @@
  * ADRs: ADR-001, ADR-009
  */
 import * as cdk from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kinesisfirehose from 'aws-cdk-lib/aws-kinesisfirehose';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { resolveEntraConfiguration } from './entra-config';
@@ -21,6 +24,8 @@ import {
 export interface AgentCoreStackProps extends cdk.StackProps {
   readonly homeRegion: string;
   readonly runtimeNetworkPosture: 'PUBLIC_WITH_COMPENSATING_CONTROLS';
+  readonly metricsBucketName: string;
+  readonly metricsBucketArn: string;
 }
 
 export class AgentCoreStack extends cdk.Stack {
@@ -52,19 +57,60 @@ export class AgentCoreStack extends cdk.Stack {
       type: 'String',
       description: 'S3 key prefix for the runtime artifact object',
     });
-    const metricStreamFirehoseArn = new cdk.CfnParameter(this, 'AgentCoreMetricStreamFirehoseArn', {
-      type: 'String',
-      description:
-        'Firehose delivery stream ARN in eu-west-1 that forwards AgentCore metrics to eu-west-2 observability sinks',
-    });
-    const metricStreamRoleArn = new cdk.CfnParameter(this, 'AgentCoreMetricStreamRoleArn', {
-      type: 'String',
-      description:
-        'IAM role ARN assumed by CloudWatch metric streams for firehose:PutRecord and firehose:PutRecordBatch',
-    });
 
     const runtimeName = this.runtimeName(envName);
     const runtimeEndpointName = this.runtimeEndpointName(envName);
+
+    // --- 1. Observability Dependencies (Firehose + IAM) ---
+
+    const metricStreamRole = new iam.Role(this, 'AgentCoreMetricStreamRole', {
+      assumedBy: new iam.ServicePrincipal('streams.metrics.cloudwatch.amazonaws.com'),
+      description: 'IAM role for CloudWatch Metric Stream to put records into Firehose',
+    });
+
+    const firehoseRole = new iam.Role(this, 'AgentCoreMetricFirehoseRole', {
+      assumedBy: new iam.ServicePrincipal('firehose.amazonaws.com'),
+      description: 'IAM role for Kinesis Firehose to deliver metrics to S3',
+    });
+
+    const firehose = new kinesisfirehose.CfnDeliveryStream(this, 'AgentCoreMetricFirehose', {
+      deliveryStreamName: `${this.stackName}-metrics`,
+      deliveryStreamType: 'DirectPut',
+      s3DestinationConfiguration: {
+        bucketArn: props.metricsBucketArn,
+        roleArn: firehoseRole.roleArn,
+        bufferingHints: {
+          intervalInSeconds: 60,
+          sizeInMBs: 1,
+        },
+        compressionFormat: 'GZIP',
+        errorOutputPrefix: 'errors/',
+        prefix: 'metrics/',
+      },
+    });
+
+    firehoseRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowS3Delivery',
+        actions: [
+          's3:AbortMultipartUpload',
+          's3:GetBucketLocation',
+          's3:GetObject',
+          's3:ListBucket',
+          's3:ListBucketMultipartUploads',
+          's3:PutObject',
+        ],
+        resources: [props.metricsBucketArn, `${props.metricsBucketArn}/*`],
+      }),
+    );
+
+    metricStreamRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowFirehosePut',
+        actions: ['firehose:PutRecord', 'firehose:PutRecordBatch'],
+        resources: [firehose.attrArn],
+      }),
+    );
 
     const runtime = new cdk.CfnResource(this, 'AgentCoreRuntime', {
       type: 'AWS::BedrockAgentCore::Runtime',
@@ -162,8 +208,8 @@ export class AgentCoreStack extends cdk.Stack {
       properties: {
         Name: `${this.stackName}-agentcore-metrics`,
         OutputFormat: 'json',
-        FirehoseArn: metricStreamFirehoseArn.valueAsString,
-        RoleArn: metricStreamRoleArn.valueAsString,
+        FirehoseArn: firehose.attrArn,
+        RoleArn: metricStreamRole.roleArn,
         IncludeFilters: [
           {
             Namespace: 'AWS/BedrockAgentCore',

@@ -191,6 +191,29 @@ describe('ObservabilityStack (TASK-026)', () => {
     });
   });
 
+  test('creates a platform metrics bucket', () => {
+    const template = synthStack();
+    template.resourceCountIs('AWS::S3::Bucket', 1);
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: Match.stringLikeRegexp('platform-metrics-dev-eu-west-2'),
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          {
+            ServerSideEncryptionByDefault: {
+              SSEAlgorithm: 'AES256',
+            },
+          },
+        ],
+      },
+    });
+  });
+
   test('every documented FM (1-10) has a corresponding alarm', () => {
     const template = synthStack();
     const documentedFMs = [

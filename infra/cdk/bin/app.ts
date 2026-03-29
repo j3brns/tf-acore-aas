@@ -88,7 +88,7 @@ new TenantStack(app, stackId, {
 });
 
 // 5. ObservabilityStack
-new ObservabilityStack(app, `platform-observability-${env}`, {
+const observabilityStack = new ObservabilityStack(app, `platform-observability-${env}`, {
   env: awsEnv,
   description: `Platform observability — ${env}`,
   api: platformStack.api,
@@ -116,4 +116,6 @@ new AgentCoreStack(app, `platform-agentcore-${env}`, {
   description: `Platform AgentCore configuration (${PRIMARY_RUNTIME_REGION}) — ${env}`,
   homeRegion: HOME_REGION,
   runtimeNetworkPosture: 'PUBLIC_WITH_COMPENSATING_CONTROLS',
+  metricsBucketName: observabilityStack.metricsBucket.bucketName,
+  metricsBucketArn: observabilityStack.metricsBucket.bucketArn,
 });
