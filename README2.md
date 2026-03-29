@@ -213,7 +213,7 @@ flowchart LR
 
 Design rules:
 
-- REST remains the canonical machine and B2B API.
+- REST remains the canonical machine and E2B API.
 - AG-UI is only for selected interactive agents.
 - AG-UI must remain platform-mediated, not direct browser bypass.
 - AG-UI is per-agent, not a shared runtime.

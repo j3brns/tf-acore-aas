@@ -4,7 +4,7 @@
 ## Date: 2026-02-24
 
 ## Context
-The platform serves B2B tenants who are predominantly Microsoft enterprise customers.
+The platform serves B2E users and E2B integrations for organisations that are predominantly Microsoft enterprise customers.
 Authentication must support OIDC/JWT, role-based access, and enterprise SSO.
 
 ## Decision

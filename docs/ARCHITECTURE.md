@@ -4,7 +4,7 @@
 
 ## System Context
 
-The platform exposes a REST API over which B2B tenants invoke AI agents. Each tenant
+The platform exposes a REST API over which B2E users and E2B integrations invoke AI agents. Each tenant
 is a business customer with their own isolated data, memory, and tool access. Internally,
 agent developer teams push specialised agents to the platform independently of platform
 infrastructure releases. Platform operators monitor, scale, and respond to incidents.
@@ -163,7 +163,7 @@ AgentCore Runtime.
 
 AgentCore AG-UI is a proposed additive path for human interactive experiences in
 the SPA. It is not a replacement for the REST bridge and is not the canonical
-public API for B2B tenant integrations.
+public API for E2B tenant integrations.
 
 Proposed AG-UI shape:
 

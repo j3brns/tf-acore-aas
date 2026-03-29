@@ -21,7 +21,7 @@ bootstrap and policy layer in front of it.
 
 The repository also carries two hard constraints that shape the design:
 - No Cognito anywhere; human auth remains Entra ID OIDC/JWT
-- The existing REST bridge remains the canonical public API for B2B tenants and
+- The existing REST bridge remains the canonical public API for E2B integrations and
   machine integrations
 
 ## Decision

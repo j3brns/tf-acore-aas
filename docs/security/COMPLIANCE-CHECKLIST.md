@@ -4,7 +4,7 @@
 
 | Requirement                               | Implementation                             | Status   |
 |-------------------------------------------|--------------------------------------------|----------|
-| Lawful basis for processing               | Contract (B2B service agreement)           | Document |
+| Lawful basis for processing               | Contract (enterprise service agreement)    | Document |
 | Data minimisation                         | Only necessary data collected/stored       | By design|
 | Purpose limitation                        | Invocation data used only for billing/audit| By design|
 | Storage limitation                        | TTL on invocations (90d), sessions (24h)   | Implemented|

@@ -7,7 +7,7 @@
 
 ## Vision
 
-A fully managed, self-service Agent as a Service platform enabling B2B tenants to invoke
+A fully managed, self-service Agent as a Service platform enabling B2E users and E2B integrations to invoke
 specialised AI agents without managing infrastructure. Enterprise-grade isolation,
 compliance, and billing. Operable by a small team without platform engineers on-call 24/7.
 
@@ -237,7 +237,7 @@ Results delivered via webhook or poll endpoint.
 Current maturity baseline as of 2026-03-10:
 
 - Engineering MVP: approximately 65%
-- Production B2B portal: approximately 40%
+- Production B2E and E2B portal: approximately 40%
 - Ideal-state product/site: approximately 25-30%
 
 The gap is not that the SPA is absent. The gap is that the current SPA is still

@@ -6,7 +6,7 @@ If this repository also contains a `GEMINI.md`, read it alongside this file.
 ## What This Platform Is
 
 A production multi-tenant Agent as a Service platform on Amazon Bedrock AgentCore.
-B2B tenants invoke AI agents via REST API. The platform manages isolation, identity,
+B2E users and E2B integrations invoke AI agents via REST API. The platform manages isolation, identity,
 memory, tool access, billing, and observability. This is a production system — not
 a prototype — with real tenants, real data, and real compliance obligations.
 

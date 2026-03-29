@@ -1,7 +1,7 @@
 # Roadmap
 
 ## North Star
-A fully managed, self-service Agent as a Service platform. B2B tenants invoke
+A fully managed, self-service Agent as a Service platform. B2E users and E2B integrations invoke
 specialised AI agents without managing infrastructure. Enterprise-grade isolation,
 compliance, and billing. Operable by a small team without developers on-call.
 
