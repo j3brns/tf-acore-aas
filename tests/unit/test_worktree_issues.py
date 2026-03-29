@@ -848,18 +848,25 @@ def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requ
     assert "context/impact before editing shared symbols" in prompt
     assert "detect_changes before commit" in prompt
     assert "If GitNexus is unavailable, use rg and direct file reads." in prompt
-    assert (
-        "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done."
-        in prompt
-    )
+    assert "Loop: inspect; plan; implement; run make preflight-session; fix; repeat;" in prompt
+    assert "Do not stop at PR creation" in prompt
     assert "make preflight-session" in prompt
     assert "Push gate: make pre-validate-session must pass before push." in prompt
     assert (
-        "Done: merged PR; closed issue; cleaned worktree and branch; "
-        "validation evidence recorded; make finish-worktree-close completed." in prompt
+        "Done: only when the PR is merged to the target branch; the issue is closed "
+        "and normalized; the worktree and branch are cleaned up; validation evidence "
+        "is recorded; and make finish-worktree-close has completed successfully." in prompt
     )
     assert "Pause only if:" in prompt
-    assert "report the blocker" in prompt
+    assert "Otherwise estimate reasonably, keep moving" in prompt
+    assert "report a blocker with the exact next command" in prompt
+
+
+def test_auto_detect_mux_prefers_tmux_over_zellij(monkeypatch):
+    monkeypatch.setattr(worktree_issues, "tmux_available", lambda: True)
+    monkeypatch.setattr(worktree_issues, "zellij_available", lambda: True)
+
+    assert worktree_issues.auto_detect_mux() == "tmux"
 
 
 def test_finish_summary_prints_explicit_dod_conflict_and_cleanup_steps(monkeypatch, capsys):

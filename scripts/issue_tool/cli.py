@@ -1842,16 +1842,22 @@ def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) ->
                 "Run detect_changes before commit. "
                 "If GitNexus is unavailable, use rg and direct file reads."
             ),
-            "Loop: inspect; plan; implement; run make preflight-session; fix; repeat until done.",
+            (
+                "Loop: inspect; plan; implement; run make preflight-session; fix; repeat; "
+                "continue until done. Do not stop at PR creation, the first passing test, "
+                "or a partial implementation."
+            ),
             "Push gate: make pre-validate-session must pass before push.",
             (
-                "Done: merged PR; closed issue; cleaned worktree and branch; "
-                "validation evidence recorded; make finish-worktree-close completed."
+                "Done: only when the PR is merged to the target branch; the issue is closed "
+                "and normalized; the worktree and branch are cleaned up; validation evidence "
+                "is recorded; and make finish-worktree-close has completed successfully."
             ),
             (
                 "Pause only if: explicit policy or security blocker; "
                 "missing required permission; external decision cannot be inferred safely. "
-                "If blocked, report the blocker and the exact next command."
+                "Otherwise estimate reasonably, keep moving, and only report a blocker with "
+                "the exact next command when truly blocked."
             ),
         ]
     )
@@ -2414,10 +2420,10 @@ def resolve_mux_flag(args: argparse.Namespace) -> str | None:
 
 
 def auto_detect_mux() -> str:
-    if zellij_available():
-        return "zellij"
     if tmux_available():
         return "tmux"
+    if zellij_available():
+        return "zellij"
     return "none"
 
 

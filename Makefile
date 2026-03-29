@@ -66,7 +66,7 @@ help:
 		echo ""; \
 		echo "  Worktrees / issues"; \
 		ex "worktree" "open the interactive issue queue"; \
-		ex "wt-go" "launch the next runnable issue in zellij"; \
+		ex "wt-go" "launch the next runnable issue in tmux"; \
 		ex "wt-batch [COUNT=${c_def}3${c_rst}] [AGENTS=${c_def}gemini${c_rst}] [AGENT_MODE=${c_def}yolo${c_rst}] [INTERACTIVE=1]" "start detached runs or use tmux for interactive agent sessions"; \
 		ex "worktree-next-issue" "create a worktree for the next queued issue"; \
 		ex "worktree-create-issue" "create a worktree for a specific issue"; \
@@ -860,12 +860,12 @@ worktree:
 		$(if $(STREAM),--stream-label "$(STREAM)",) \
 		$(if $(FROM_ISSUE),--from-issue $(FROM_ISSUE),)
 
-## wt-go: Start the next runnable issue worktree and launch an explicit or random agent in zellij
+## wt-go: Start the next runnable issue worktree and launch an explicit or random agent in tmux
 ## Usage: make wt-go [QUEUE_MODE=auto|ready|open-task] [FROM_ISSUE=310] [AGENT=random|codex|gemini|claude] [AGENT_MODE=yolo]
 wt-go:
 	$(MAKE) --no-print-directory worktree-next-issue \
 		HANDOFF=execute-now \
-		ZELLIJ=1 \
+		TMUX=1 \
 		$(if $(QUEUE_MODE),QUEUE_MODE=$(QUEUE_MODE),) \
 		$(if $(STREAM),STREAM=$(STREAM),) \
 		$(if $(FROM_ISSUE),FROM_ISSUE=$(FROM_ISSUE),) \
