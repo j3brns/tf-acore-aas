@@ -709,4 +709,111 @@ describe('PlatformStack (TASK-023)', () => {
       },
     });
   });
+
+  test('sets explicit TLS minimum protocol version on CloudFront even without custom domain', () => {
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        ViewerCertificate: Match.objectLike({
+          CloudFrontDefaultCertificate: true,
+          MinimumProtocolVersion: 'TLSv1.2_2021',
+        }),
+      }),
+    });
+  });
+
+  test('configures CloudFront with custom domain, ACM certificate, and TLS policy when context provided', () => {
+    const customDomainTemplate = synthTemplate('prod', {
+      spaDomainName: 'app.example.com',
+      spaCertificateArn: 'arn:aws:acm:us-east-1:123456789012:certificate/abcd-1234',
+    });
+
+    customDomainTemplate.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Aliases: ['app.example.com'],
+        ViewerCertificate: Match.objectLike({
+          AcmCertificateArn: 'arn:aws:acm:us-east-1:123456789012:certificate/abcd-1234',
+          MinimumProtocolVersion: 'TLSv1.2_2021',
+          SslSupportMethod: 'sni-only',
+        }),
+      }),
+    });
+
+    customDomainTemplate.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/platform/spa/prod/domain-name',
+      Value: 'app.example.com',
+    });
+
+    customDomainTemplate.hasOutput('SpaDomainName', {
+      Value: 'app.example.com',
+    });
+  });
+
+  test('uses CloudFront generated domain for CORS when no custom domain is set', () => {
+    const distributions = template.findResources('AWS::CloudFront::Distribution');
+    expect(Object.keys(distributions)).toHaveLength(1);
+
+    const optionsMethods = template.findResources('AWS::ApiGateway::Method', {
+      Properties: {
+        HttpMethod: 'OPTIONS',
+      },
+    });
+    for (const method of Object.values(optionsMethods) as Array<{ Properties?: unknown }>) {
+      const properties = method.Properties as {
+        Integration?: { IntegrationResponses?: Array<{ ResponseParameters?: Record<string, unknown> }> };
+      };
+      const responseParameters =
+        properties.Integration?.IntegrationResponses?.[0]?.ResponseParameters ?? {};
+      const allowOrigin = responseParameters['method.response.header.Access-Control-Allow-Origin'];
+      expect(JSON.stringify(allowOrigin)).toContain('DomainName');
+    }
+  });
+
+  test('uses custom domain for CORS origin when spaDomainName is set', () => {
+    const customDomainTemplate = synthTemplate('prod', {
+      spaDomainName: 'app.example.com',
+      spaCertificateArn: 'arn:aws:acm:us-east-1:123456789012:certificate/abcd-1234',
+    });
+
+    const gatewayResponses = customDomainTemplate.findResources('AWS::ApiGateway::GatewayResponse');
+    for (const response of Object.values(gatewayResponses) as Array<{ Properties?: Record<string, unknown> }>) {
+      const headers = response.Properties?.ResponseParameters as Record<string, string> | undefined;
+      if (headers) {
+        const originHeader = headers['gatewayresponse.header.Access-Control-Allow-Origin'];
+        if (originHeader) {
+          expect(originHeader).toBe("'https://app.example.com'");
+        }
+      }
+    }
+  });
+
+  test('configures API Gateway custom domain with TLS 1.2 when context provided', () => {
+    const customDomainTemplate = synthTemplate('prod', {
+      apiDomainName: 'api.example.com',
+      apiCertificateArn: 'arn:aws:acm:eu-west-2:123456789012:certificate/efgh-5678',
+    });
+
+    customDomainTemplate.hasResourceProperties('AWS::ApiGateway::DomainName', {
+      DomainName: 'api.example.com',
+      EndpointConfiguration: {
+        Types: ['REGIONAL'],
+      },
+      SecurityPolicy: 'TLS_1_2',
+    });
+
+    customDomainTemplate.resourceCountIs('AWS::ApiGateway::BasePathMapping', 1);
+
+    customDomainTemplate.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/platform/core/prod/api-domain-name',
+      Value: 'api.example.com',
+    });
+
+    customDomainTemplate.hasOutput('ApiCustomDomainName', {
+      Value: 'api.example.com',
+    });
+  });
+
+  test('does not create API Gateway custom domain when context is absent', () => {
+    template.resourceCountIs('AWS::ApiGateway::DomainName', 0);
+    template.resourceCountIs('AWS::ApiGateway::BasePathMapping', 0);
+  });
 });

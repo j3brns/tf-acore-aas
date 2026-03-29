@@ -138,6 +138,48 @@ headers, while the WAF-enforced northbound boundary starts at REST API Gateway.
 Any future move to attach a CloudFront WebACL must be an explicit architecture change,
 not silent drift in stack code.
 
+### Public Ingress Domain and TLS Posture
+
+The platform exposes two public endpoints to tenants and end users:
+
+| Endpoint | Service | Custom Domain Context | Certificate Region |
+|----------|---------|----------------------|-------------------|
+| SPA (frontend) | CloudFront | `spaDomainName` + `spaCertificateArn` | us-east-1 (CloudFront requirement) |
+| REST API (northbound) | API Gateway (regional) | `apiDomainName` + `apiCertificateArn` | eu-west-2 (same as endpoint) |
+
+**TLS posture:**
+- CloudFront: `TLSv1.2_2021` minimum protocol version, SNI-only when using a custom
+  certificate. This is enforced in CDK and tested regardless of whether a custom domain
+  is configured.
+- API Gateway: `TLS_1_2` security policy when a custom domain is wired.
+- Both endpoints redirect HTTP to HTTPS.
+
+**Domain configuration:**
+- Custom domains are opt-in via CDK context. When absent, CloudFront uses the default
+  `*.cloudfront.net` domain and the API uses the default execute-api endpoint. This is
+  acceptable for dev/test but not for production.
+- For production, set `spaDomainName`, `spaCertificateArn`, `apiDomainName`, and
+  `apiCertificateArn` in the CDK context (e.g. `cdk.json` or `-c` flags).
+- CORS origin configuration automatically uses the custom SPA domain when configured.
+
+**Certificate ownership and renewal:**
+- ACM certificates are AWS-managed. DNS-validated ACM certificates auto-renew as long
+  as the validation CNAME records remain in the hosted zone.
+- The platform team owns certificate provisioning and DNS record management.
+- SPA certificate must be provisioned in **us-east-1** (CloudFront global requirement).
+- API certificate must be provisioned in **eu-west-2** (regional API Gateway requirement).
+- Certificate ARNs are passed as CDK context, not hardcoded — the certificates are
+  provisioned outside this CDK app (manually or via a separate stack) so that certificate
+  lifecycle does not couple to application deployments.
+
+**DNS responsibilities:**
+- SPA: create a CNAME or Route 53 alias record pointing the custom domain to the
+  CloudFront distribution domain name.
+- API: create a CNAME or Route 53 alias record pointing the custom domain to the
+  regional domain name output (`ApiRegionalDomainName`).
+- Both domain names and regional targets are published to SSM Parameter Store for
+  operational reference.
+
 ## Invocation Modes
 
 Three modes, declared in agent `pyproject.toml` under `[tool.agentcore.invocation_mode]`.

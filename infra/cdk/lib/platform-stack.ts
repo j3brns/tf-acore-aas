@@ -14,6 +14,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as codedeploy from 'aws-cdk-lib/aws-codedeploy';
@@ -138,6 +139,16 @@ export class PlatformStack extends cdk.Stack {
     const bridgeCanaryPolicy = this.resolveBridgeCanaryPolicy(env);
     const gatewayPolicyConfiguration = this.resolveGatewayPolicyConfiguration(env);
     const entra = resolveEntraConfiguration(this);
+
+    // --- Custom domain configuration (issue #164) ---
+    // When spaDomainName + spaCertificateArn are set in CDK context, the CloudFront
+    // distribution uses a custom domain with an ACM certificate provisioned in
+    // us-east-1 (CloudFront requirement). When absent, the distribution uses the
+    // default *.cloudfront.net certificate — suitable for dev/test only.
+    const spaDomainName = this.node.tryGetContext('spaDomainName') as string | undefined;
+    const spaCertificateArn = this.node.tryGetContext('spaCertificateArn') as string | undefined;
+    const apiDomainName = this.node.tryGetContext('apiDomainName') as string | undefined;
+    const apiCertificateArn = this.node.tryGetContext('apiCertificateArn') as string | undefined;
 
     // --- Secrets ---
 
@@ -383,9 +394,21 @@ export class PlatformStack extends cdk.Stack {
             restrictionType: 'none',
           },
         },
-        viewerCertificate: {
-          cloudFrontDefaultCertificate: true,
-        },
+        ...(spaDomainName && spaCertificateArn
+          ? {
+              aliases: [spaDomainName],
+              viewerCertificate: {
+                acmCertificateArn: spaCertificateArn,
+                minimumProtocolVersion: 'TLSv1.2_2021',
+                sslSupportMethod: 'sni-only',
+              },
+            }
+          : {
+              viewerCertificate: {
+                cloudFrontDefaultCertificate: true,
+                minimumProtocolVersion: 'TLSv1.2_2021',
+              },
+            }),
         // No WebACLId is wired here by design. A CloudFront-scope WAF must be managed
         // via a dedicated global/us-east-1 path, which this repository has not yet
         // approved under the current ADR-009 region topology.
@@ -436,7 +459,22 @@ export class PlatformStack extends cdk.Stack {
       description: 'CloudFront distribution ID for the platform SPA',
     });
 
-    const spaAllowedOrigin = cdk.Fn.join('', ['https://', this.spaDistribution.attrDomainName]);
+    if (spaDomainName) {
+      new ssm.StringParameter(this, 'SpaDomainNameParam', {
+        parameterName: `/platform/spa/${env}/domain-name`,
+        stringValue: spaDomainName,
+        description: 'Custom domain name for the platform SPA CloudFront distribution',
+      });
+
+      new cdk.CfnOutput(this, 'SpaDomainName', {
+        value: spaDomainName,
+        description: 'Custom domain name for the platform SPA',
+      });
+    }
+
+    const spaAllowedOrigin = spaDomainName
+      ? `https://${spaDomainName}`
+      : cdk.Fn.join('', ['https://', this.spaDistribution.attrDomainName]);
 
     // API Access Log Group (TASK-165)
     const apiAccessLogGroup = new logs.LogGroup(this, 'ApiAccessLogGroup', {
@@ -868,6 +906,48 @@ export class PlatformStack extends cdk.Stack {
       resourceArn: this.api.deploymentStage.stageArn,
       webAclArn: this.apiWebAcl.attrArn,
     });
+
+    // --- API Gateway custom domain (issue #164) ---
+    // When apiDomainName + apiCertificateArn are provided, a regional custom domain
+    // is added to the REST API. The ACM certificate must be in the same region
+    // (eu-west-2) for regional API Gateway endpoints. The caller is responsible for
+    // creating a CNAME or alias DNS record pointing apiDomainName to the regional
+    // domain name output.
+    if (apiDomainName && apiCertificateArn) {
+      const apiCustomDomain = new apigateway.DomainName(this, 'ApiCustomDomain', {
+        domainName: apiDomainName,
+        certificate: acm.Certificate.fromCertificateArn(this, 'ApiCertificate', apiCertificateArn),
+        endpointType: apigateway.EndpointType.REGIONAL,
+        securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+      });
+
+      new apigateway.BasePathMapping(this, 'ApiBasePathMapping', {
+        domainName: apiCustomDomain,
+        restApi: this.api,
+      });
+
+      new ssm.StringParameter(this, 'ApiDomainNameParam', {
+        parameterName: `/platform/core/${env}/api-domain-name`,
+        stringValue: apiDomainName,
+        description: 'Custom domain name for the platform REST API',
+      });
+
+      new ssm.StringParameter(this, 'ApiRegionalDomainNameParam', {
+        parameterName: `/platform/core/${env}/api-regional-domain-name`,
+        stringValue: apiCustomDomain.domainNameAliasDomainName,
+        description: 'Regional domain name for DNS CNAME/alias target',
+      });
+
+      new cdk.CfnOutput(this, 'ApiCustomDomainName', {
+        value: apiDomainName,
+        description: 'Custom domain name for the platform REST API',
+      });
+
+      new cdk.CfnOutput(this, 'ApiRegionalDomainName', {
+        value: apiCustomDomain.domainNameAliasDomainName,
+        description: 'Regional domain name — point DNS here',
+      });
+    }
 
     const agentCoreGatewayRole = new iam.Role(this, 'AgentCoreGatewayExecutionRole', {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),

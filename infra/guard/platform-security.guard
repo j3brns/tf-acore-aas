@@ -71,6 +71,8 @@ rule no_wildcard_iam_resource {
 rule check_resource_wildcard(res, act) {
     let exempted_actions = [
         "cloudwatch:PutMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "servicequotas:ListServiceQuotas",
         "bedrock-agentcore:CreateMemory",
         "bedrock-agentcore:UpdateMemory",
         "bedrock-agentcore:DeleteMemory",
