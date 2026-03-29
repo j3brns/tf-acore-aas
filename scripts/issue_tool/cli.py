@@ -1850,8 +1850,10 @@ def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) ->
             "Push gate: make pre-validate-session must pass before push.",
             (
                 "Done: only when the PR is merged to the target branch; the issue is closed "
-                "and normalized; the worktree and branch are cleaned up; validation evidence "
-                "is recorded; and make finish-worktree-close has completed successfully."
+                "and normalized; validation evidence is recorded; .build hand-back evidence "
+                "is finalized; and make finish-worktree-close has completed successfully. "
+                "Report any cleanup residue explicitly, but do not treat worktree or branch "
+                "deletion as part of semantic completion."
             ),
             (
                 "Pause only if: explicit policy or security blocker; "

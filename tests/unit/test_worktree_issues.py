@@ -854,9 +854,10 @@ def test_build_agent_prompt_for_worktree_includes_explicit_dod_and_conflict_requ
     assert "Push gate: make pre-validate-session must pass before push." in prompt
     assert (
         "Done: only when the PR is merged to the target branch; the issue is closed "
-        "and normalized; the worktree and branch are cleaned up; validation evidence "
-        "is recorded; and make finish-worktree-close has completed successfully." in prompt
+        "and normalized; validation evidence is recorded; .build hand-back evidence "
+        "is finalized; and make finish-worktree-close has completed successfully." in prompt
     )
+    assert "do not treat worktree or branch deletion as part of semantic completion" in prompt
     assert "Pause only if:" in prompt
     assert "Otherwise estimate reasonably, keep moving" in prompt
     assert "report a blocker with the exact next command" in prompt
