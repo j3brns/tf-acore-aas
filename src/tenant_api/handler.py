@@ -526,7 +526,8 @@ def _normalize_status(value: Any) -> str:
     try:
         return TenantStatus(status_text.lower()).value
     except ValueError as exc:
-        raise ValueError("status must be one of: active, suspended, deleted") from exc
+        allowed = ", ".join(status.value for status in TenantStatus)
+        raise ValueError(f"status must be one of: {allowed}") from exc
 
 
 def _normalize_agent_status(value: Any) -> AgentStatus:

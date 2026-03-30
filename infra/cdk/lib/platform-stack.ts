@@ -27,6 +27,8 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as sfn_tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import { Template } from 'aws-cdk-lib/assertions';
