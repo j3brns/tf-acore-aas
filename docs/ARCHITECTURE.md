@@ -476,6 +476,67 @@ Approved cross-tenant actions must:
 This preserves the rule that normal tenant data access remains structurally
 tenant-scoped even when initiated by platform-owned automation.
 
+## Platform-Agent Action Classes
+
+The reserved `platform` tenant exists to let platform-owned agents assist operators
+inside the control plane. It does not create a new privileged data path.
+
+Allowed action classes:
+- **Read-only platform diagnostics and runbook guidance** on platform-owned control-plane
+  state and authoritative operational signals
+- **Release-governance assistance** through the existing agent registry lifecycle,
+  including register, approve, promote, and rollback actions that already belong to
+  the control plane
+- **Tenant-operations workflow initiation** through explicit admin routes or
+  orchestrations such as suspend/reinstate, tenant notifications, and other
+  bounded operational remediations
+- **Platform-state summarisation** that helps an operator understand health, drift,
+  or release state without exposing raw customer content as a shortcut
+
+Disallowed action classes:
+- direct reads or writes against arbitrary customer-tenant stores outside approved
+  control-plane workflows
+- treating `tenantid=platform` as implicit authorization to bypass RBAC, audit, or
+  target-tenant validation
+- direct mutation of immutable release artifacts or destructive edits to
+  `platform-agents` outside the ADR-015 lifecycle contract
+- AG-UI bootstrap or browser/runtime session design; that follow-on work is tracked
+  separately under the AG-UI issue set and is not part of the platform-agent backlog
+  defined here
+- policy-sensitive mutations called out in [CLAUDE.md](../CLAUDE.md) as stop-and-ask
+  changes, including IAM trust changes, KMS key policy changes, and authoriser
+  validation logic changes
+
+Required boundary rules:
+- every platform-agent route must require explicit platform RBAC
+- every cross-tenant action must capture acting principal, acting tenant, target tenant,
+  operation type, and outcome
+- mutation flows must reuse documented admin/control-plane APIs or workflows instead of
+  inventing a parallel data-plane path
+- customer invocation content is never exposed merely because the caller is internal;
+  access must stay within the documented control-plane contract
+
+### Follow-On Backlog For Platform-Agent Operations
+
+Issue [#318](https://github.com/j3brns/tf-acore-aas/issues/318) closes only after the
+follow-on implementation backlog is explicit. The scoped follow-on work is:
+
+| Issue | Focus | Why it exists |
+|-------|-------|---------------|
+| [#388](https://github.com/j3brns/tf-acore-aas/issues/388) | Platform-agent auth context and audit envelope | Makes `tenantid=platform` explicit, auditable, and non-bypassable |
+| [#389](https://github.com/j3brns/tf-acore-aas/issues/389) | Read-only diagnostics and runbook assistance | Keeps operator-assistance flows bounded to authoritative read-only signals |
+| [#390](https://github.com/j3brns/tf-acore-aas/issues/390) | Tenant operational workflows | Forces target-tenant actions through explicit admin workflows with validation and audit |
+| [#391](https://github.com/j3brns/tf-acore-aas/issues/391) | Release-governance workflows | Reuses the ADR-015 lifecycle instead of hidden scripts or direct table mutation |
+
+Out of scope for this backlog:
+- AG-UI bootstrap, runtime session contracts, and SPA integration, which are already
+  tracked separately in issues [#381](https://github.com/j3brns/tf-acore-aas/issues/381),
+  [#382](https://github.com/j3brns/tf-acore-aas/issues/382), [#383](https://github.com/j3brns/tf-acore-aas/issues/383),
+  [#384](https://github.com/j3brns/tf-acore-aas/issues/384), and
+  [#385](https://github.com/j3brns/tf-acore-aas/issues/385)
+- any design that weakens the reserved-tenant guardrails from ADR-016 or the stop-and-ask
+  security boundaries in [CLAUDE.md](../CLAUDE.md)
+
 ### Cross-Account Tenant Provisioning (Option B/C)
 
 ```mermaid

@@ -163,6 +163,10 @@ be weakened or bypassed.
 - `platform` is a reserved internal tenant, not a super-tenant
 - `tenantid=platform` must never act as an implicit authorization bypass
 - cross-tenant actions must go through explicit control-plane APIs or workflows
+- allowed platform-agent action classes are limited to:
+  - read-only diagnostics and runbook assistance on authoritative platform signals
+  - bounded tenant operational workflows through explicit admin APIs
+  - release-governance actions through the ADR-015 agent-registry lifecycle
 - all such actions must record:
   - acting principal
   - acting tenant (`platform`)
@@ -173,6 +177,16 @@ be weakened or bypassed.
 - no wildcard IAM permissions introduced for platform-agent flows
 - platform-agent routes require explicit platform RBAC
 - tests must prove platform-agent flows cannot bypass tenant isolation
+
+### Explicitly Disallowed Platform-Agent Behaviors
+- direct reads or writes against arbitrary customer-tenant stores outside approved
+  control-plane workflows
+- exposing raw customer invocation content as a convenience path for internal users
+- mutating immutable release artifacts or bypassing the canonical `platform-agents`
+  status/evidence lifecycle
+- treating AG-UI or direct browser/runtime connectivity as part of the reserved-tenant
+  control-plane model; those flows require their own bootstrap and policy boundary
+- using `tenantid=platform` to justify broader IAM, audit, or target-validation bypass
 
 ### Detection
 - audit events containing `tenantid=platform`
