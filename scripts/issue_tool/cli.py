@@ -1911,12 +1911,20 @@ def handoff_to_agent_or_shell(
     sys.stdout.flush()
 
     if mux == "zellij" and handoff_val == "execute-now":
-        launch_zellij_session(path=path, agent_command=command)
-        return
+        try:
+            launch_zellij_session(path=path, agent_command=command)
+            return
+        except (subprocess.CalledProcessError, OSError) as exc:
+            eprint(f"WARNING: zellij launch failed ({exc}); falling back to direct shell execution")
+            mux = "none"
 
     if mux == "tmux" and handoff_val == "execute-now":
-        launch_tmux_session(path=path, agent_command=command)
-        return
+        try:
+            launch_tmux_session(path=path, agent_command=command)
+            return
+        except (subprocess.CalledProcessError, OSError) as exc:
+            eprint(f"WARNING: tmux launch failed ({exc}); falling back to direct shell execution")
+            mux = "none"
 
     if handoff_val == "execute-now":
         path_q = shell_quote(str(path))

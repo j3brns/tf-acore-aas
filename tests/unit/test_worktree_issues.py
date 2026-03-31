@@ -1722,6 +1722,55 @@ def test_launch_tmux_session_uses_reported_initial_window_index(monkeypatch, cap
     assert attached["args"] == ["tmux", "attach-session", "-t", "wt318"]
 
 
+def test_handoff_to_agent_or_shell_falls_back_when_tmux_launch_fails(monkeypatch, tmp_path, capsys):
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    wt = tmp_path / "worktrees" / "wt381"
+    wt.mkdir(parents=True, exist_ok=True)
+    execvp_call: dict[str, object] = {}
+
+    def _run_prompt(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, "wt/task/381-something\n", "")
+
+    def _execvp(bin_path, args):
+        execvp_call["bin_path"] = bin_path
+        execvp_call["args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(worktree_issues, "run", _run_prompt)
+    monkeypatch.setattr(worktree_issues, "worktree_issue_id", lambda _path: 381)
+    monkeypatch.setattr(
+        worktree_issues,
+        "fetch_issue_labels_for_prompt",
+        lambda _root, _repo, _issue: "enhancement|type:task|status:in-progress",
+    )
+    monkeypatch.setattr(worktree_issues, "ensure_uv_venv", lambda _path: None)
+    monkeypatch.setattr(
+        worktree_issues,
+        "launch_tmux_session",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, ["tmux", "list-panes"])
+        ),
+    )
+    monkeypatch.setattr(worktree_issues.os, "execvp", _execvp)
+
+    with pytest.raises(SystemExit):
+        worktree_issues.handoff_to_agent_or_shell(
+            path=wt,
+            root=root,
+            repo="owner/repo",
+            agent="codex",
+            agent_mode="yolo",
+            handoff="execute-now",
+            mux="tmux",
+        )
+
+    captured = capsys.readouterr()
+    assert "WARNING: tmux launch failed" in captured.err
+    assert execvp_call["bin_path"] == "bash"
+    assert execvp_call["args"][0:2] == ["bash", "-lc"]
+
+
 def test_launch_zellij_session_adds_layout_to_existing_session(monkeypatch, capsys):
     path = Path("/tmp/worktrees/wt33")
     captured: dict[str, object] = {}
