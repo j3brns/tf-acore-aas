@@ -170,6 +170,43 @@ paths:
         "504":
           $ref: "#/components/responses/GatewayTimeout"
 
+  /v1/agents/{agentName}/bootstrap:
+    post:
+      tags: [Agents]
+      operationId: bootstrapAgentAgUi
+      summary: Bootstrap an AG-UI session
+      description: >
+        Validates tenant identity, tier, capability policy, and per-agent AG-UI support before
+        returning constrained AG-UI connection material for human interactive sessions.
+        Successful bootstraps persist session audit metadata in `platform-sessions`.
+      parameters:
+        - $ref: "#/components/parameters/AgentName"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentBootstrapRequest"
+      responses:
+        "200":
+          description: AG-UI bootstrap contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAgUiBootstrapResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /v1/tenants:
     post:
       tags: [Tenants]
@@ -1281,6 +1318,7 @@ components:
         - tierMinimum
         - invocationMode
         - streamingEnabled
+        - agUi
       properties:
         agentName:
           type: string
@@ -1297,6 +1335,8 @@ components:
           minimum: 0
         ownerTeam:
           type: string
+        agUi:
+          $ref: "#/components/schemas/AgentAgUi"
 
     AgentDetail:
       allOf:
@@ -1317,6 +1357,31 @@ components:
                     $ref: "#/components/schemas/InvocationMode"
                   streamingEnabled:
                     type: boolean
+                  agUi:
+                    $ref: "#/components/schemas/AgentAgUiVersion"
+
+    AgentAgUi:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        transport:
+          type: string
+          enum: [sse, websocket]
+        bootstrapPath:
+          type: string
+          format: uri-reference
+
+    AgentAgUiVersion:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        transport:
+          type: string
+          enum: [sse, websocket]
 
     AgentRecord:
       type: object
@@ -1352,6 +1417,18 @@ components:
           $ref: "#/components/schemas/InvocationMode"
         streamingEnabled:
           type: boolean
+        agUi:
+          type: object
+          required: [enabled]
+          properties:
+            enabled:
+              type: boolean
+            transport:
+              type: string
+              enum: [sse, websocket]
+            endpoint:
+              type: [string, "null"]
+              format: uri
         status:
           $ref: "#/components/schemas/AgentStatus"
         approvedBy:
@@ -1519,6 +1596,73 @@ components:
         webhookDelivery:
           type: string
           enum: [registered, not_registered]
+
+    AgentBootstrapRequest:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          description: Optional caller-supplied platform session identifier for reconnect flows.
+        runtimeSessionId:
+          type: string
+          description: Optional runtime-facing session identifier when reconnecting an existing AG-UI session.
+
+    AgentAgUiBootstrapResponse:
+      type: object
+      required:
+        - agentName
+        - agentVersion
+        - sessionId
+        - runtimeSessionId
+        - startedAt
+        - expiresAt
+        - transport
+        - connectUrl
+        - tokenRefreshPath
+        - sessionKeepalivePath
+        - auth
+      properties:
+        agentName:
+          type: string
+        agentVersion:
+          type: string
+        sessionId:
+          type: string
+        runtimeSessionId:
+          type: string
+        startedAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        expiresAt:
+          $ref: "#/components/schemas/UtcTimestamp"
+        transport:
+          type: string
+          enum: [sse, websocket]
+        connectUrl:
+          type: string
+          format: uri
+        tokenRefreshPath:
+          type: string
+          format: uri-reference
+        sessionKeepalivePath:
+          type: string
+          format: uri-reference
+        auth:
+          type: object
+          required: [type, scopeNames, scopes]
+          properties:
+            type:
+              type: string
+              enum: [oauth2_obo]
+            audience:
+              type: [string, "null"]
+            scopeNames:
+              type: array
+              items:
+                type: string
+            scopes:
+              type: array
+              items:
+                type: string
 
     SessionSummary:
       type: object

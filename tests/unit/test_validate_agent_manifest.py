@@ -274,6 +274,11 @@ class TestRequiredFields:
             [tool.agentcore.evaluations]
             threshold = 0.9
             evaluation_region = "eu-west-1"
+
+            [tool.agentcore.ag_ui]
+            enabled = true
+            transport = "websocket"
+            endpoint = "https://ag-ui.example.com/connect"
         """,
         )
 
@@ -288,6 +293,9 @@ class TestRequiredFields:
         assert manifest.llm.max_tokens == 2048
         assert manifest.evaluations.threshold == pytest.approx(0.9)
         assert manifest.evaluations.evaluation_region == "eu-west-1"
+        assert manifest.ag_ui.enabled is True
+        assert manifest.ag_ui.transport.value == "websocket"
+        assert manifest.ag_ui.endpoint == "https://ag-ui.example.com/connect"
 
 
 _MINIMAL_TOML = """\
@@ -412,6 +420,29 @@ class TestDeploymentSectionValidation:
         _write_manifest(tmp_path, "my-agent", toml)
         manifest = load_agent_manifest("my-agent", tmp_path)
         assert manifest.deployment.type == "container"
+
+    def test_ag_ui_requires_container_deployment(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.ag_ui]\nenabled = true\nendpoint = "https://ag-ui.example.com"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("AG-UI" in e for e in exc_info.value.errors)
+
+    def test_ag_ui_enabled_requires_endpoint(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "container"\n'
+            "\n[tool.agentcore.ag_ui]\nenabled = true\n"
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("ag_ui].endpoint" in e for e in exc_info.value.errors)
 
 
 class TestEvaluationsSectionValidation:

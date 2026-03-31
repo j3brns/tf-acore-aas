@@ -274,6 +274,14 @@ owner_team = "platform"
 tier_minimum = "basic"
 handler = "handler:invoke"
 invocation_mode = "sync"
+
+[tool.agentcore.deployment]
+type = "container"
+
+[tool.agentcore.ag_ui]
+enabled = true
+transport = "sse"
+endpoint = "https://ag-ui.example.com/connect"
 """)
     stored_items: list[dict[str, object]] = []
     latest_version_writes: list[dict[str, object]] = []
@@ -319,6 +327,11 @@ invocation_mode = "sync"
     assert item["version"] == "1.2.3"
     assert item["layerHash"] == "hash123"
     assert item["scriptS3Key"] == "scripts/custom-key.zip"
+    assert item["agUi"] == {
+        "enabled": True,
+        "transport": "sse",
+        "endpoint": "https://ag-ui.example.com/connect",
+    }
 
     assert latest_version_writes == [
         {

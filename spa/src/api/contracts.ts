@@ -1,3 +1,9 @@
+export type AgentAgUiDto = {
+  enabled: boolean;
+  transport?: "sse" | "websocket";
+  bootstrapPath?: string;
+};
+
 export type AgentSummaryDto = {
   agentName: string;
   latestVersion: string;
@@ -6,6 +12,7 @@ export type AgentSummaryDto = {
   streamingEnabled: boolean;
   estimatedDurationSeconds?: number | null;
   ownerTeam?: string;
+  agUi?: AgentAgUiDto;
 };
 
 export type AgentsListResponseDto = {
@@ -17,10 +24,30 @@ export type AgentDetailVersionDto = {
   deployedAt: string;
   invocationMode?: "sync" | "streaming" | "async";
   streamingEnabled?: boolean;
+  agUi?: AgentAgUiDto;
 };
 
 export type AgentDetailDto = AgentSummaryDto & {
   versions?: AgentDetailVersionDto[];
+};
+
+export type AgentAgUiBootstrapResponseDto = {
+  agentName: string;
+  agentVersion: string;
+  sessionId: string;
+  runtimeSessionId: string;
+  startedAt: string;
+  expiresAt: string;
+  transport: "sse" | "websocket";
+  connectUrl: string;
+  tokenRefreshPath: string;
+  sessionKeepalivePath: string;
+  auth: {
+    type: "oauth2_obo";
+    audience?: string | null;
+    scopeNames: string[];
+    scopes: string[];
+  };
 };
 
 export type AgentCatalogueItem = {
@@ -276,6 +303,7 @@ export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
       "tierMinimum",
       "invocationMode",
       "streamingEnabled",
+      "agUi.enabled",
     ],
   },
   {
@@ -289,6 +317,7 @@ export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
       "tierMinimum",
       "invocationMode",
       "streamingEnabled",
+      "agUi.enabled",
       "versions",
     ],
   },

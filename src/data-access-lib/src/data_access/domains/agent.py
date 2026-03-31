@@ -12,6 +12,11 @@ class InvocationMode(StrEnum):
     ASYNC = "async"
 
 
+class AgUiTransport(StrEnum):
+    SSE = "sse"
+    WEBSOCKET = "websocket"
+
+
 class AgentStatus(StrEnum):
     BUILT = "built"
     DEPLOYED_STAGING = "deployed_staging"
@@ -71,6 +76,13 @@ def is_invokable_agent_status(value: AgentStatus | str | None) -> bool:
 
 
 @dataclass(frozen=True)
+class AgentAgUiConfig:
+    enabled: bool = False
+    transport: AgUiTransport = AgUiTransport.SSE
+    endpoint: str | None = None
+
+
+@dataclass(frozen=True)
 class AgentRecord:
     agent_name: str
     version: str
@@ -95,6 +107,7 @@ class AgentRecord:
     evaluation_report_url: str | None = None
     rolled_back_by: str | None = None
     rolled_back_at: str | None = None
+    ag_ui: AgentAgUiConfig = AgentAgUiConfig()
 
     @property
     def pk(self) -> str:

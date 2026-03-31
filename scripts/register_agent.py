@@ -134,6 +134,11 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
         "commitSha": os.environ.get("CI_COMMIT_SHA"),
         "pipelineUrl": os.environ.get("CI_PIPELINE_URL"),
         "jobId": os.environ.get("CI_JOB_ID"),
+        "agUi": {
+            "enabled": manifest.ag_ui.enabled,
+            "transport": manifest.ag_ui.transport.value,
+            "endpoint": manifest.ag_ui.endpoint,
+        },
     }
 
     # Resolve API Base URL and Token

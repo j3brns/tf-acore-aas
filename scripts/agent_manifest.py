@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from data_access.models import InvocationMode, TenantTier
+from data_access.models import AgentAgUiConfig, AgUiTransport, InvocationMode, TenantTier
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EVALUATION_REGION = "eu-central-1"
@@ -31,11 +31,13 @@ _MANIFEST_KEYS = frozenset(
         "llm",
         "deployment",
         "evaluations",
+        "ag_ui",
     }
 )
 _LLM_KEYS = frozenset({"model_id", "max_tokens"})
 _DEPLOYMENT_KEYS = frozenset({"type"})
 _EVALUATIONS_KEYS = frozenset({"threshold", "evaluation_region"})
+_AG_UI_KEYS = frozenset({"enabled", "transport", "endpoint"})
 
 
 class ManifestValidationError(ValueError):
@@ -77,6 +79,7 @@ class AgentManifest:
     deployment: AgentDeploymentConfig = AgentDeploymentConfig()
     llm: AgentLlmConfig = AgentLlmConfig()
     evaluations: AgentEvaluationsConfig = AgentEvaluationsConfig()
+    ag_ui: AgentAgUiConfig = AgentAgUiConfig()
 
 
 def load_agent_manifest(agent_name: str, repo_root: Path | None = None) -> AgentManifest:
@@ -216,6 +219,57 @@ def load_agent_manifest(agent_name: str, repo_root: Path | None = None) -> Agent
     if threshold is not None and not 0.0 <= threshold <= 1.0:
         errors.append("Invalid threshold: [tool.agentcore.evaluations].threshold must be 0.0-1.0")
 
+    ag_ui_raw = _optional_table(
+        manifest_raw,
+        "ag_ui",
+        errors,
+        table="[tool.agentcore.ag_ui]",
+    )
+    _check_unknown_keys(
+        ag_ui_raw,
+        _AG_UI_KEYS,
+        errors,
+        table="[tool.agentcore.ag_ui]",
+    )
+    ag_ui_enabled = _optional_bool(
+        ag_ui_raw,
+        "enabled",
+        default=False,
+        errors=errors,
+        table="[tool.agentcore.ag_ui]",
+    )
+    ag_ui_transport_raw = _optional_string(
+        ag_ui_raw,
+        "transport",
+        default=AgUiTransport.SSE.value,
+        errors=errors,
+        table="[tool.agentcore.ag_ui]",
+    )
+    ag_ui_endpoint = _optional_string(
+        ag_ui_raw,
+        "endpoint",
+        default=None,
+        errors=errors,
+        table="[tool.agentcore.ag_ui]",
+    )
+    try:
+        ag_ui_transport = AgUiTransport(ag_ui_transport_raw or AgUiTransport.SSE.value)
+    except ValueError:
+        options = ", ".join(mode.value for mode in AgUiTransport)
+        errors.append(
+            f"Invalid transport: [tool.agentcore.ag_ui].transport must be one of: {options}"
+        )
+        ag_ui_transport = AgUiTransport.SSE
+    if ag_ui_enabled and deployment_type != "container":
+        errors.append(
+            "Invalid AG-UI configuration: [tool.agentcore.ag_ui].enabled requires "
+            '[tool.agentcore.deployment].type = "container"'
+        )
+    if ag_ui_enabled and ag_ui_endpoint is None:
+        errors.append(
+            "Missing required field: [tool.agentcore.ag_ui].endpoint when AG-UI is enabled"
+        )
+
     if errors:
         raise ManifestValidationError(errors)
 
@@ -234,6 +288,11 @@ def load_agent_manifest(agent_name: str, repo_root: Path | None = None) -> Agent
         evaluations=AgentEvaluationsConfig(
             threshold=threshold,
             evaluation_region=evaluation_region or DEFAULT_EVALUATION_REGION,
+        ),
+        ag_ui=AgentAgUiConfig(
+            enabled=ag_ui_enabled,
+            transport=ag_ui_transport,
+            endpoint=ag_ui_endpoint,
         ),
     )
 

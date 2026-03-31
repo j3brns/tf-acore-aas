@@ -214,7 +214,7 @@ SPA
   → Platform bootstrap endpoint
       Validates Entra identity and tenant context
       Confirms agent is AG-UI-capable
-      Records audit/session metadata
+      Records AG-UI bootstrap/session metadata in platform-sessions
       Returns constrained AG-UI connection details
   → Per-agent AgentCore AG-UI runtime
       SSE or WebSocket interactive session
@@ -437,6 +437,8 @@ Operational consumers:
 **platform-sessions** — active session tracking
 - PK: `TENANT#{tenantId}`, SK: `SESSION#{sessionId}`
 - Attributes: sessionId, runtimeSessionId, agentName, startedAt, lastActivityAt, status
+- AG-UI bootstrap records may also include appId, bootstrapRequestId, transport,
+  and connectUrl so the control plane retains session start evidence with appid+tenantid.
 - Session liveness and last-activity state belong here, not in `platform-tenants`.
 - TTL: 24 hours after last activity
 

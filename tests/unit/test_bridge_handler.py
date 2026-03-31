@@ -103,6 +103,18 @@ def setup_data(mock_aws_services):
         BillingMode="PAY_PER_REQUEST",
     )
     ddb.create_table(
+        TableName="platform-sessions",
+        KeySchema=[
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    ddb.create_table(
         TableName="platform-tenants",
         KeySchema=[
             {"AttributeName": "PK", "KeyType": "HASH"},
@@ -131,6 +143,8 @@ def setup_data(mock_aws_services):
             "deployed_at": "2026-01-01T00:00:00Z",
             "invocation_mode": "sync",
             "streaming_enabled": True,
+            "ag_ui_enabled": False,
+            "ag_ui_transport": "sse",
         }
     )
 
@@ -230,6 +244,7 @@ def test_list_agents_returns_openapi_shape_and_tier_filtered(setup_data):
     assert len(body["items"]) == 1
     assert body["items"][0]["agentName"] == "echo-agent"
     assert body["items"][0]["latestVersion"] == "1.0.0"
+    assert body["items"][0]["agUi"]["enabled"] is False
 
 
 def test_list_agents_handles_multiple_scan_pages(setup_data):
@@ -314,8 +329,118 @@ def test_get_agent_detail_returns_latest_version_and_versions(setup_data):
     body = json.loads(response["body"])
     assert body["agentName"] == "echo-agent"
     assert body["latestVersion"] == "1.1.0"
+    assert body["agUi"]["enabled"] is False
     assert len(body["versions"]) == 2
     assert body["versions"][0]["version"] == "1.1.0"
+
+
+def test_get_agent_detail_masks_ag_ui_when_tenant_capability_disabled(
+    setup_data, mock_capabilities
+):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.2.0",
+            "agent_name": "echo-agent",
+            "version": "1.2.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "4444",
+            "layer_s3_key": "k5",
+            "script_s3_key": "s5",
+            "deployed_at": "2026-01-05T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+            "status": "promoted",
+            "ag_ui_enabled": True,
+            "ag_ui_transport": "sse",
+            "ag_ui_endpoint": "https://ag-ui.example.com/connect",
+        }
+    )
+    mock_capabilities.return_value.fetch_policy.return_value.is_enabled.side_effect = (
+        lambda capability, **_: capability != "agents.ag_ui"
+    )
+
+    event = {
+        "httpMethod": "GET",
+        "path": "/v1/agents/echo-agent",
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+    }
+
+    response = handler(event, FakeLambdaContext())
+    body = json.loads(response["body"])
+    assert body["agUi"] == {"enabled": False}
+
+
+def test_agent_bootstrap_returns_connection_contract_and_persists_session(
+    setup_data, mock_capabilities, monkeypatch
+):
+    ddb = boto3.resource("dynamodb", region_name="eu-west-2")
+    table = ddb.Table("platform-agents")
+    table.put_item(
+        Item={
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.3.0",
+            "agent_name": "echo-agent",
+            "version": "1.3.0",
+            "owner_team": "platform-test",
+            "tier_minimum": "basic",
+            "layer_hash": "5555",
+            "layer_s3_key": "k6",
+            "script_s3_key": "s6",
+            "deployed_at": "2026-01-06T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+            "status": "promoted",
+            "ag_ui_enabled": True,
+            "ag_ui_transport": "sse",
+            "ag_ui_endpoint": "https://ag-ui.example.com/connect",
+        }
+    )
+    monkeypatch.setattr(bridge_handler, "ENTRA_AUDIENCE", "api://platform-dev")
+
+    event = {
+        "httpMethod": "POST",
+        "path": "/v1/agents/echo-agent/bootstrap",
+        "pathParameters": {"agentName": "echo-agent"},
+        "requestContext": {
+            "authorizer": {
+                "tenantid": "t-001",
+                "appid": "app-001",
+                "tier": "basic",
+                "sub": "user-1",
+            }
+        },
+        "body": json.dumps({}),
+    }
+
+    response = handler(event, FakeLambdaContext())
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["agentName"] == "echo-agent"
+    assert body["transport"] == "sse"
+    assert body["connectUrl"] == "https://ag-ui.example.com/connect"
+    assert body["tokenRefreshPath"] == "/v1/bff/token-refresh"
+    assert body["sessionKeepalivePath"] == "/v1/bff/session-keepalive"
+    assert body["auth"]["scopes"] == ["api://platform-dev/Agent.AgUi.Connect"]
+
+    session = ddb.Table("platform-sessions").get_item(
+        Key={"PK": "TENANT#t-001", "SK": f"SESSION#{body['sessionId']}"}
+    )["Item"]
+    assert session["app_id"] == "app-001"
+    assert session["runtime_session_id"] == body["runtimeSessionId"]
+    assert session["bootstrap_type"] == "ag_ui"
 
 
 def test_list_agents_ignores_built_version_when_newer_semver_exists(setup_data):

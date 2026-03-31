@@ -11,6 +11,32 @@ except ImportError:  # pragma: no cover - local package import path
     from src.tenant_api import handler as shared
 
 
+def _normalize_ag_ui_metadata(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        return {
+            "ag_ui_enabled": False,
+            "ag_ui_transport": "sse",
+            "ag_ui_endpoint": None,
+        }
+    if not isinstance(raw_value, dict):
+        raise ValueError("agUi must be an object when provided")
+
+    enabled = bool(raw_value.get("enabled", False))
+    transport = shared._str_or_none(raw_value.get("transport")) or "sse"
+    endpoint = shared._str_or_none(raw_value.get("endpoint"))
+
+    if transport not in {"sse", "websocket"}:
+        raise ValueError("agUi.transport must be 'sse' or 'websocket'")
+    if enabled and endpoint is None:
+        raise ValueError("agUi.endpoint is required when AG-UI is enabled")
+
+    return {
+        "ag_ui_enabled": enabled,
+        "ag_ui_transport": transport,
+        "ag_ui_endpoint": endpoint,
+    }
+
+
 def handle_list_agents(
     event: dict[str, Any],
     caller: shared.CallerIdentity,
@@ -68,6 +94,7 @@ def handle_register_agent(
         "pipeline_url": shared._str_or_none(body.get("pipelineUrl")),
         "job_id": shared._str_or_none(body.get("jobId")),
     }
+    item.update(_normalize_ag_ui_metadata(body.get("agUi")))
     if status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
         item["approved_by"] = caller.sub
         item["approved_at"] = shared._iso(shared._now_utc())
@@ -139,6 +166,8 @@ def handle_update_agent_version(
         attrs["evaluation_score"] = float(body["evaluationScore"])
     if body.get("evaluationReportUrl") is not None:
         attrs["evaluation_report_url"] = str(body["evaluationReportUrl"])
+    if body.get("agUi") is not None:
+        attrs.update(_normalize_ag_ui_metadata(body.get("agUi")))
 
     update_expression, expr_names, expr_values = shared._build_update_expression(attrs)
     db.update_item(

@@ -14,7 +14,7 @@ import secrets
 import time
 import urllib.parse
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -37,13 +37,18 @@ from data_access import (
     TenantScopedS3,
 )
 from data_access.models import (
+    SESSION_TTL_SECONDS,
+    AgentAgUiConfig,
     AgentRecord,
     AgentStatus,
+    AgUiTransport,
     InvocationMode,
     InvocationRecord,
     InvocationStatus,
     JobRecord,
     JobStatus,
+    SessionRecord,
+    SessionStatus,
     TenantContext,
     TenantTier,
     is_invokable_agent_status,
@@ -77,8 +82,13 @@ TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "platform-tenants")
 AGENTS_TABLE = os.environ.get("AGENTS_TABLE", "platform-agents")
 INVOCATIONS_TABLE = os.environ.get("INVOCATIONS_TABLE", "platform-invocations")
 JOBS_TABLE = os.environ.get("JOBS_TABLE", "platform-jobs")
+SESSIONS_TABLE = os.environ.get("SESSIONS_TABLE", "platform-sessions")
 OPS_LOCKS_TABLE = os.environ.get("OPS_LOCKS_TABLE", "platform-ops-locks")
 JOB_RESULTS_BUCKET = os.environ.get("JOB_RESULTS_BUCKET")
+ENTRA_AUDIENCE = os.environ.get("ENTRA_AUDIENCE")
+AG_UI_SCOPE_NAME = os.environ.get("AG_UI_SCOPE_NAME", "Agent.AgUi.Connect")
+BFF_TOKEN_REFRESH_PATH = "/v1/bff/token-refresh"
+BFF_SESSION_KEEPALIVE_PATH = "/v1/bff/session-keepalive"
 
 RUNTIME_REGION_PARAM = os.environ.get("RUNTIME_REGION_PARAM", "/platform/config/runtime-region")
 MOCK_RUNTIME_URL_PARAM = os.environ.get(
@@ -435,6 +445,13 @@ def get_agent_record(agent_name: str, version: str | None = None) -> AgentRecord
             evaluation_report_url=_coerce_optional_string(item.get("evaluation_report_url")),
             rolled_back_by=_coerce_optional_string(item.get("rolled_back_by")),
             rolled_back_at=_coerce_optional_string(item.get("rolled_back_at")),
+            ag_ui=AgentAgUiConfig(
+                enabled=bool(item.get("ag_ui_enabled", False)),
+                transport=AgUiTransport(
+                    _coerce_optional_string(item.get("ag_ui_transport")) or "sse"
+                ),
+                endpoint=_coerce_optional_string(item.get("ag_ui_endpoint")),
+            ),
         )
     except Exception:
         logger.exception("Failed to fetch agent record", extra={"agent_name": agent_name})
@@ -878,22 +895,41 @@ def _handler_core(
             db_factory=TenantScopedDynamoDB,
         )
     if method == "GET" and path.endswith("/v1/agents"):
+        capability_policy = get_capability_client().fetch_policy()
         return discovery_list_agents(
             tenant_context,
             agents_table=AGENTS_TABLE,
             db_factory=ControlPlaneDynamoDB,
+            capability_policy=capability_policy,
         )
     if (
         method == "GET"
         and _coerce_optional_string(path_params.get("agentName"))
         and not path.endswith("/invoke")
+        and not path.endswith("/bootstrap")
     ):
+        capability_policy = get_capability_client().fetch_policy()
         return discovery_get_agent_detail(
             path_params,
             request_id,
             agents_table=AGENTS_TABLE,
             get_dynamodb=get_dynamodb,
             error_response=error_response,
+            tenant_context=tenant_context,
+            capability_policy=capability_policy,
+        )
+    if method == "POST" and path.endswith("/bootstrap"):
+        return handle_agent_bootstrap(
+            event=event,
+            request_id=request_id,
+            tenant_context=tenant_context,
+            path=path,
+            path_params=path_params,
+            error_response=error_response,
+            parse_body=_parse_body,
+            coerce_optional_string=_coerce_optional_string,
+            get_agent_record=get_agent_record,
+            get_capability_client=get_capability_client,
         )
 
     # 3. Contracted invoke route: POST /v1/agents/{agentName}/invoke.
@@ -988,6 +1024,173 @@ def _is_jobs_contract_path(path: str, job_id: str | None) -> bool:
     if not route_job_id:
         return False
     return job_id is None or route_job_id == job_id
+
+
+def _is_bootstrap_contract_path(path: str, agent_name: str | None) -> bool:
+    normalized = str(path).rstrip("/")
+    segments = [segment for segment in normalized.split("/") if segment]
+    if len(segments) < 4:
+        return False
+    if segments[-4] != "v1" or segments[-3] != "agents" or segments[-1] != "bootstrap":
+        return False
+
+    route_agent_name = segments[-2].strip()
+    if not route_agent_name:
+        return False
+    return agent_name is None or route_agent_name == agent_name
+
+
+def _tier_rank(tier: TenantTier) -> int:
+    return {
+        TenantTier.BASIC: 0,
+        TenantTier.STANDARD: 1,
+        TenantTier.PREMIUM: 2,
+    }.get(tier, 0)
+
+
+def _ag_ui_scopes() -> list[str]:
+    if not ENTRA_AUDIENCE:
+        return []
+    return [f"{ENTRA_AUDIENCE.rstrip('/')}/{AG_UI_SCOPE_NAME}"]
+
+
+def log_session_bootstrap(
+    tenant_context: TenantContext,
+    *,
+    agent: AgentRecord,
+    session_id: str,
+    runtime_session_id: str,
+    request_id: str,
+) -> None:
+    try:
+        db = TenantScopedDynamoDB(tenant_context)
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
+        record = SessionRecord(
+            session_id=session_id,
+            tenant_id=tenant_context.tenant_id,
+            runtime_session_id=runtime_session_id,
+            agent_name=agent.agent_name,
+            started_at=now_iso,
+            last_activity_at=now_iso,
+            status=SessionStatus.ACTIVE,
+            ttl=int(now.timestamp()) + SESSION_TTL_SECONDS,
+        )
+        db.put_item(
+            SESSIONS_TABLE,
+            {
+                "PK": record.pk,
+                "SK": record.sk,
+                "session_id": record.session_id,
+                "tenant_id": record.tenant_id,
+                "app_id": tenant_context.app_id,
+                "runtime_session_id": record.runtime_session_id,
+                "agent_name": record.agent_name,
+                "started_at": record.started_at,
+                "last_activity_at": record.last_activity_at,
+                "status": str(record.status),
+                "ttl": record.ttl,
+                "bootstrap_request_id": request_id,
+                "bootstrap_type": "ag_ui",
+                "transport": agent.ag_ui.transport.value,
+                "connect_url": agent.ag_ui.endpoint,
+            },
+        )
+    except Exception:
+        logger.exception("Failed to log AG-UI bootstrap session")
+
+
+def handle_agent_bootstrap(
+    *,
+    event: dict[str, Any],
+    request_id: str,
+    tenant_context: TenantContext,
+    path: str,
+    path_params: dict[str, Any],
+    error_response: Any,
+    parse_body: Any,
+    coerce_optional_string: Any,
+    get_agent_record: Any,
+    get_capability_client: Any,
+) -> dict[str, Any]:
+    agent_name = coerce_optional_string(path_params.get("agentName"))
+    if path and not _is_bootstrap_contract_path(path, agent_name):
+        return error_response(404, "NOT_FOUND", "Route not found", request_id)
+    if not agent_name:
+        return error_response(400, "INVALID_REQUEST", "Missing agentName in path", request_id)
+
+    try:
+        body = parse_body(event)
+    except ValueError:
+        return error_response(400, "INVALID_REQUEST", "Invalid JSON in request body", request_id)
+
+    agent = get_agent_record(agent_name)
+    if not agent:
+        return error_response(404, "NOT_FOUND", f"Agent '{agent_name}' not found", request_id)
+    if not agent.ag_ui.enabled or not agent.ag_ui.endpoint:
+        return error_response(
+            409,
+            "CONFLICT",
+            f"Agent '{agent_name}' does not support AG-UI bootstrap",
+            request_id,
+        )
+    if _tier_rank(tenant_context.tier) < _tier_rank(agent.tier_minimum):
+        return error_response(
+            403, "FORBIDDEN", "Tenant tier insufficient for this agent", request_id
+        )
+
+    capability_client = get_capability_client()
+    policy = capability_client.fetch_policy()
+    for capability, message in (
+        ("agents.invoke", "Agent invocation capability disabled"),
+        (f"agents.{agent_name}", f"Access to agent '{agent_name}' is not enabled for this tenant"),
+        ("agents.ag_ui", "AG-UI capability disabled"),
+        (f"agents.{agent_name}.ag_ui", f"AG-UI access to agent '{agent_name}' is not enabled"),
+    ):
+        if not policy.is_enabled(
+            capability,
+            tenant_id=tenant_context.tenant_id,
+            tenant_tier=tenant_context.tier,
+        ):
+            return error_response(403, "FORBIDDEN", message, request_id)
+
+    session_id = coerce_optional_string(body.get("sessionId")) or str(uuid.uuid4())
+    runtime_session_id = coerce_optional_string(body.get("runtimeSessionId")) or session_id
+    log_session_bootstrap(
+        tenant_context,
+        agent=agent,
+        session_id=session_id,
+        runtime_session_id=runtime_session_id,
+        request_id=request_id,
+    )
+
+    now = datetime.now(UTC)
+    response_body = {
+        "agentName": agent.agent_name,
+        "agentVersion": agent.version,
+        "sessionId": session_id,
+        "runtimeSessionId": runtime_session_id,
+        "startedAt": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "expiresAt": (now + timedelta(seconds=SESSION_TTL_SECONDS))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "transport": agent.ag_ui.transport.value,
+        "connectUrl": agent.ag_ui.endpoint,
+        "tokenRefreshPath": BFF_TOKEN_REFRESH_PATH,
+        "sessionKeepalivePath": BFF_SESSION_KEEPALIVE_PATH,
+        "auth": {
+            "type": "oauth2_obo",
+            "audience": ENTRA_AUDIENCE,
+            "scopeNames": [AG_UI_SCOPE_NAME],
+            "scopes": _ag_ui_scopes(),
+        },
+    }
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(response_body),
+    }
 
 
 def _parse_body(event: dict[str, Any]) -> dict[str, Any]:

@@ -24,14 +24,20 @@ def _coerce_optional_string(value: Any) -> str | None:
 
 
 def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:
+    agent_name = str(item.get("agent_name", ""))
     return {
-        "agentName": str(item.get("agent_name", "")),
+        "agentName": agent_name,
         "latestVersion": str(item.get("version", "")),
         "tierMinimum": str(item.get("tier_minimum", TenantTier.BASIC.value)),
         "invocationMode": str(item.get("invocation_mode", InvocationMode.SYNC.value)),
         "streamingEnabled": bool(item.get("streaming_enabled", False)),
         "estimatedDurationSeconds": item.get("estimated_duration_seconds"),
         "ownerTeam": str(item.get("owner_team", "")),
+        "agUi": {
+            "enabled": bool(item.get("ag_ui_enabled", False)),
+            "transport": str(item.get("ag_ui_transport", "sse")),
+            "bootstrapPath": f"/v1/agents/{agent_name}/bootstrap",
+        },
     }
 
 
@@ -79,6 +85,7 @@ def list_agents(
     *,
     agents_table: str,
     db_factory: Any = ControlPlaneDynamoDB,
+    capability_policy: Any = None,
 ) -> dict[str, Any]:
     db = db_factory(tenant_context)
     items = db.scan_all(agents_table)
@@ -106,7 +113,20 @@ def list_agents(
             tier_minimum = TenantTier.BASIC
         if caller_tier_rank < tier_order[tier_minimum]:
             continue
-        summaries.append(_agent_summary_from_item(item))
+        summary = _agent_summary_from_item(item)
+        if capability_policy is not None and summary["agUi"]["enabled"]:
+            ag_ui_enabled = capability_policy.is_enabled(
+                "agents.ag_ui",
+                tenant_id=tenant_context.tenant_id,
+                tenant_tier=tenant_context.tier,
+            ) and capability_policy.is_enabled(
+                f"agents.{summary['agentName']}.ag_ui",
+                tenant_id=tenant_context.tenant_id,
+                tenant_tier=tenant_context.tier,
+            )
+            if not ag_ui_enabled:
+                summary["agUi"] = {"enabled": False}
+        summaries.append(summary)
 
     summaries.sort(key=lambda summary: str(summary["agentName"]))
     return {
@@ -123,6 +143,8 @@ def get_agent_detail(
     agents_table: str,
     get_dynamodb: Any,
     error_response: Any,
+    tenant_context: TenantContext | None = None,
+    capability_policy: Any = None,
 ) -> dict[str, Any]:
     agent_name = _coerce_optional_string(path_params.get("agentName"))
     if not agent_name:
@@ -144,12 +166,28 @@ def get_agent_detail(
     sorted_items = sorted(promoted_items, key=_agent_record_sort_key, reverse=True)
     latest = sorted_items[0]
     detail = _agent_summary_from_item(latest)
+    if capability_policy is not None and tenant_context is not None and detail["agUi"]["enabled"]:
+        ag_ui_enabled = capability_policy.is_enabled(
+            "agents.ag_ui",
+            tenant_id=tenant_context.tenant_id,
+            tenant_tier=tenant_context.tier,
+        ) and capability_policy.is_enabled(
+            f"agents.{detail['agentName']}.ag_ui",
+            tenant_id=tenant_context.tenant_id,
+            tenant_tier=tenant_context.tier,
+        )
+        if not ag_ui_enabled:
+            detail["agUi"] = {"enabled": False}
     detail["versions"] = [
         {
             "version": str(item.get("version", "")),
             "deployedAt": str(item.get("deployed_at", "")),
             "invocationMode": str(item.get("invocation_mode", InvocationMode.SYNC.value)),
             "streamingEnabled": bool(item.get("streaming_enabled", False)),
+            "agUi": {
+                "enabled": bool(item.get("ag_ui_enabled", False)),
+                "transport": str(item.get("ag_ui_transport", "sse")),
+            },
         }
         for item in sorted_items
     ]

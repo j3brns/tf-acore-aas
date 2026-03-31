@@ -3,8 +3,10 @@ from data_access.domains.agent import (
     INVOKABLE_AGENT_STATUSES,
     LEGACY_AGENT_STATUS_ALIASES,
     REGISTERABLE_AGENT_STATUSES,
+    AgentAgUiConfig,
     AgentRecord,
     AgentStatus,
+    AgUiTransport,
     InvocationMode,
     is_invokable_agent_status,
     normalize_agent_status,
@@ -48,6 +50,7 @@ from data_access.domains.tenant import (
 
 __all__ = [
     "AGENT_STATUS_TRANSITIONS",
+    "AgUiTransport",
     "APPCONFIG_DYNAMIC_CAPABILITY_AREAS",
     "BillingSummaryRecord",
     "CapabilityRollout",
@@ -63,6 +66,7 @@ __all__ = [
     "REGISTERABLE_AGENT_STATUSES",
     "SESSION_TTL_SECONDS",
     "SSM_PLATFORM_PARAMETER_AREAS",
+    "AgentAgUiConfig",
     "AgentRecord",
     "AgentStatus",
     "BillingSummaryRecord",
