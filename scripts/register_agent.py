@@ -101,21 +101,34 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
     aws_region = require_aws_region()
     ssm = boto3.client("ssm", region_name=aws_region)
 
-    layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
-    layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
-    script_s3_key = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/script-s3-key")
-
-    if not layer_hash or not layer_s3_key or not script_s3_key:
+    runtime_arn = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/runtime-arn")
+    if not runtime_arn:
         logger.error(
-            f"Deployment metadata not found for agent '{agent_name}' in env '{env}'. "
-            "Run build_layer and deploy_agent first."
+            f"Runtime ARN not found for agent '{agent_name}' in env '{env}'. "
+            "Run deploy_agent first."
         )
         return False
+
+    deployment_type = manifest.deployment.type
+    if deployment_type == "container":
+        layer_hash = ""
+        layer_s3_key = ""
+        script_s3_key = ""
+    else:
+        layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
+        layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
+        script_s3_key = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/script-s3-key")
+
+        if not layer_hash or not layer_s3_key or not script_s3_key:
+            logger.error(
+                f"Deployment metadata not found for agent '{agent_name}' in env '{env}'. "
+                "Run build_layer and deploy_agent first."
+            )
+            return False
 
     deployed_at = datetime.datetime.now(datetime.UTC).isoformat()
     # Default status: PENDING for prod (requires approval), RELEASED for others
     default_status = "pending" if env == "prod" else "released"
-    runtime_arn = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/runtime-arn")
 
     body = {
         "agentName": agent_name,

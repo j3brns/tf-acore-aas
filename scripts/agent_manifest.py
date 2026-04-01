@@ -18,6 +18,13 @@ from data_access.models import AgentAgUiConfig, AgUiTransport, InvocationMode, T
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EVALUATION_REGION = "eu-central-1"
 VALID_DEPLOYMENT_TYPES = frozenset({"zip", "container"})
+VALID_RUNTIME_PROTOCOLS = frozenset({"http", "mcp", "a2a", "agui"})
+DEFAULT_PROTOCOL_PORTS = {
+    "http": 8080,
+    "mcp": 8000,
+    "a2a": 9000,
+    "agui": 8080,
+}
 
 _MANIFEST_KEYS = frozenset(
     {
@@ -30,12 +37,14 @@ _MANIFEST_KEYS = frozenset(
         "estimated_duration_seconds",
         "llm",
         "deployment",
+        "runtime",
         "evaluations",
         "ag_ui",
     }
 )
 _LLM_KEYS = frozenset({"model_id", "max_tokens"})
 _DEPLOYMENT_KEYS = frozenset({"type"})
+_RUNTIME_KEYS = frozenset({"entrypoint", "protocol", "port"})
 _EVALUATIONS_KEYS = frozenset({"threshold", "evaluation_region"})
 _AG_UI_KEYS = frozenset({"enabled", "transport", "endpoint"})
 
@@ -60,6 +69,13 @@ class AgentLlmConfig:
 
 
 @dataclass(frozen=True)
+class AgentRuntimeConfig:
+    entrypoint: str | None = None
+    protocol: str = "http"
+    port: int = 8080
+
+
+@dataclass(frozen=True)
 class AgentEvaluationsConfig:
     threshold: float = 0.8
     evaluation_region: str = DEFAULT_EVALUATION_REGION
@@ -77,6 +93,7 @@ class AgentManifest:
     streaming_enabled: bool = False
     estimated_duration_seconds: int = 5
     deployment: AgentDeploymentConfig = AgentDeploymentConfig()
+    runtime: AgentRuntimeConfig = AgentRuntimeConfig()
     llm: AgentLlmConfig = AgentLlmConfig()
     evaluations: AgentEvaluationsConfig = AgentEvaluationsConfig()
     ag_ui: AgentAgUiConfig = AgentAgUiConfig()
@@ -190,6 +207,73 @@ def load_agent_manifest(agent_name: str, repo_root: Path | None = None) -> Agent
         options = ", ".join(sorted(VALID_DEPLOYMENT_TYPES))
         errors.append(f"Invalid deployment type: '{deployment_type}'. Must be one of: {options}")
 
+    runtime_raw = _optional_table(
+        manifest_raw,
+        "runtime",
+        errors,
+        table="[tool.agentcore.runtime]",
+    )
+    _check_unknown_keys(
+        runtime_raw,
+        _RUNTIME_KEYS,
+        errors,
+        table="[tool.agentcore.runtime]",
+    )
+    runtime_entrypoint = _optional_string(
+        runtime_raw,
+        "entrypoint",
+        default=None,
+        errors=errors,
+        table="[tool.agentcore.runtime]",
+    )
+    runtime_protocol = _optional_string(
+        runtime_raw,
+        "protocol",
+        default="http",
+        errors=errors,
+        table="[tool.agentcore.runtime]",
+    )
+    runtime_port = _optional_int(
+        runtime_raw,
+        "port",
+        default=None,
+        errors=errors,
+        table="[tool.agentcore.runtime]",
+    )
+    if runtime_protocol not in VALID_RUNTIME_PROTOCOLS:
+        options = ", ".join(sorted(VALID_RUNTIME_PROTOCOLS))
+        errors.append(f"Invalid runtime protocol: '{runtime_protocol}'. Must be one of: {options}")
+    if runtime_port is not None and not 1 <= runtime_port <= 65535:
+        errors.append("Invalid runtime port: [tool.agentcore.runtime].port must be 1-65535")
+
+    resolved_runtime_protocol = runtime_protocol or "http"
+    resolved_runtime_port = runtime_port or DEFAULT_PROTOCOL_PORTS.get(
+        resolved_runtime_protocol, 8080
+    )
+    non_http_protocol = resolved_runtime_protocol in {"mcp", "a2a", "agui"}
+    if deployment_type == "zip" and non_http_protocol:
+        errors.append(
+            "Invalid runtime protocol: ZIP deployment only supports "
+            "[tool.agentcore.runtime].protocol = 'http'"
+        )
+    if deployment_type == "zip" and runtime_entrypoint:
+        errors.append(
+            "Invalid runtime entrypoint: [tool.agentcore.runtime].entrypoint is only supported "
+            "for container deployments"
+        )
+    if deployment_type == "container" and non_http_protocol and not runtime_entrypoint:
+        errors.append(
+            "Missing runtime entrypoint: [tool.agentcore.runtime].entrypoint is required "
+            "for non-HTTP container deployments"
+        )
+    expected_port = DEFAULT_PROTOCOL_PORTS.get(resolved_runtime_protocol)
+    if expected_port is not None and resolved_runtime_port != expected_port:
+        errors.append(
+            "Invalid runtime port: "
+            f"[tool.agentcore.runtime].protocol '{resolved_runtime_protocol}' requires "
+            f"port {expected_port}"
+        )
+
     evaluations_raw = _optional_table(
         manifest_raw,
         "evaluations",
@@ -284,6 +368,11 @@ def load_agent_manifest(agent_name: str, repo_root: Path | None = None) -> Agent
         streaming_enabled=streaming_enabled,
         estimated_duration_seconds=estimated_duration_seconds or 5,
         deployment=AgentDeploymentConfig(type=deployment_type or "zip"),
+        runtime=AgentRuntimeConfig(
+            entrypoint=runtime_entrypoint,
+            protocol=resolved_runtime_protocol,
+            port=resolved_runtime_port,
+        ),
         llm=AgentLlmConfig(model_id=model_id, max_tokens=max_tokens),
         evaluations=AgentEvaluationsConfig(
             threshold=threshold,
