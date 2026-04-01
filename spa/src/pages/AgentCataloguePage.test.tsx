@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getApiClient } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 import { createApiClientMock, createAuthContextValue } from "../test/mockFactories";
-import { catalogueMixedAgents } from "../test/testData";
+import { catalogueMixedAgents, catalogueWithAgUiAgent } from "../test/testData";
 import { AgentCataloguePage } from "./AgentCataloguePage";
 
 vi.mock("../api/client", () => ({
@@ -82,6 +82,26 @@ describe("AgentCataloguePage", () => {
       expect(screen.getByText("catalogue failed")).toBeInTheDocument();
     });
     spy.mockRestore();
+  });
+
+  it("renders AG-UI badge for AG-UI-capable agents", async () => {
+    const request = vi.fn().mockResolvedValue(catalogueWithAgUiAgent);
+    vi.mocked(getApiClient).mockReturnValue(createApiClientMock({
+      request,
+    }) as never);
+
+    render(
+      <MemoryRouter>
+        <AgentCataloguePage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("interactive-agent")).toBeInTheDocument();
+      expect(screen.getByText("rest-only-agent")).toBeInTheDocument();
+      // Only the AG-UI-capable agent should have the badge
+      expect(screen.getAllByText("AG-UI")).toHaveLength(1);
+    });
   });
 
   it("does not fetch catalogue when user is unauthenticated", async () => {

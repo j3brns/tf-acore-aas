@@ -4,6 +4,7 @@ import { vi } from "vitest";
 type ApiClientMock = {
   request: ReturnType<typeof vi.fn>;
   stream: ReturnType<typeof vi.fn>;
+  bootstrapAgUiSession: ReturnType<typeof vi.fn>;
 };
 
 export function createAuthContextValue(
@@ -27,6 +28,7 @@ export function createApiClientMock(
   return {
     request: vi.fn(),
     stream: vi.fn(),
+    bootstrapAgUiSession: vi.fn(),
     ...overrides,
   };
 }

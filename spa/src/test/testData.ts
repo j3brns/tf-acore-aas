@@ -1,4 +1,5 @@
 import type {
+  AgentAgUiBootstrapResponseDto,
   AgentDetailDto,
   AgentsListResponseDto,
   HealthResponseDto,
@@ -132,7 +133,10 @@ export const quotaRows: PlatformQuotaResponseDto = {
   ],
 };
 
-export function buildAgent(invocationMode: AgentDetailDto["invocationMode"]): AgentDetailDto {
+export function buildAgent(
+  invocationMode: AgentDetailDto["invocationMode"],
+  options?: { agUiEnabled?: boolean },
+): AgentDetailDto {
   return {
     agentName: "echo-agent",
     latestVersion: "1.0.0",
@@ -141,12 +145,14 @@ export function buildAgent(invocationMode: AgentDetailDto["invocationMode"]): Ag
     invocationMode: invocationMode,
     streamingEnabled: invocationMode === "streaming",
     estimatedDurationSeconds: 5,
+    agUi: { enabled: options?.agUiEnabled === true },
     versions: [
       {
         version: "1.0.0",
         deployedAt: "2026-03-08T00:00:00Z",
         invocationMode,
         streamingEnabled: invocationMode === "streaming",
+        agUi: { enabled: options?.agUiEnabled === true },
       },
     ],
   };
@@ -157,4 +163,46 @@ export const asyncAccepted: AgentInvokeResponse = {
   status: "accepted",
   mode: "async",
   pollUrl: "/v1/jobs/job-777",
+};
+
+export const agUiBootstrapResponse: AgentAgUiBootstrapResponseDto = {
+  agentName: "echo-agent",
+  agentVersion: "1.0.0",
+  sessionId: "sess-agui-001",
+  runtimeSessionId: "rt-sess-001",
+  startedAt: "2026-04-01T10:00:00Z",
+  expiresAt: "2026-04-01T10:15:00Z",
+  transport: "sse",
+  connectUrl: "https://runtime.example.test/ag-ui/sess-agui-001",
+  tokenRefreshPath: "/v1/bff/token-refresh",
+  sessionKeepalivePath: "/v1/bff/session-keepalive",
+  auth: {
+    type: "oauth2_obo",
+    audience: "api://platform-dev",
+    scopeNames: ["Agent.Invoke"],
+    scopes: ["api://platform-dev/Agent.Invoke"],
+  },
+};
+
+export const catalogueWithAgUiAgent: AgentsListResponseDto = {
+  items: [
+    {
+      agentName: "interactive-agent",
+      latestVersion: "1.0.0",
+      tierMinimum: "standard",
+      invocationMode: "streaming",
+      streamingEnabled: true,
+      ownerTeam: "ai-team",
+      agUi: { enabled: true, transport: "sse", bootstrapPath: "/v1/agents/interactive-agent/bootstrap" },
+    },
+    {
+      agentName: "rest-only-agent",
+      latestVersion: "2.0.0",
+      tierMinimum: "basic",
+      invocationMode: "sync",
+      streamingEnabled: false,
+      ownerTeam: "platform-team",
+      agUi: { enabled: false },
+    },
+  ],
 };

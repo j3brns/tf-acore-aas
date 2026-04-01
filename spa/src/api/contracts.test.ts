@@ -25,6 +25,7 @@ describe("contracts adapters", () => {
       invocationMode: "streaming",
       streamingEnabled: true,
       ownerTeam: "team-platform",
+      agUiEnabled: false,
     });
   });
 
