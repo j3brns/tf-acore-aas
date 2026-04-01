@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 import boto3
+import yaml
 from botocore.exceptions import ClientError
 
 try:
@@ -25,6 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_DIR = REPO_ROOT / ".build"
+TOOLKIT_CONFIG = ".bedrock_agentcore.yaml"
 
 
 def require_aws_region() -> str:
@@ -69,6 +72,70 @@ def update_agentcore_runtime(
     return runtime_arn
 
 
+def _agent_dir(agent_name: str) -> Path:
+    return REPO_ROOT / "agents" / agent_name
+
+
+def _toolkit_command(agent_name: str, *args: str) -> list[str]:
+    return ["uv", "run", "--project", str(_agent_dir(agent_name)), "agentcore", *args]
+
+
+def _load_toolkit_runtime_arn(agent_name: str) -> str:
+    config_path = _agent_dir(agent_name) / TOOLKIT_CONFIG
+    if not config_path.exists():
+        raise RuntimeError(f"Toolkit config not found after deploy: {config_path}")
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+
+    agent_config = (config.get("agents") or {}).get(agent_name) or {}
+    runtime_arn = ((agent_config.get("bedrock_agentcore") or {}).get("agent_arn") or "").strip()
+    if not runtime_arn:
+        raise RuntimeError(f"Toolkit deploy did not persist agent ARN for '{agent_name}'")
+    return str(runtime_arn)
+
+
+def _deploy_container_runtime(agent_name: str, manifest, aws_region: str) -> str:
+    if not manifest.runtime.entrypoint:
+        raise RuntimeError(
+            "Container deployment requires [tool.agentcore.runtime].entrypoint in pyproject.toml"
+        )
+
+    agent_dir = _agent_dir(agent_name)
+    configure_cmd = _toolkit_command(
+        agent_name,
+        "configure",
+        "--entrypoint",
+        manifest.runtime.entrypoint,
+        "--name",
+        agent_name,
+        "--protocol",
+        manifest.runtime.protocol.upper(),
+        "--deployment-type",
+        "container",
+        "--region",
+        aws_region,
+        "--non-interactive",
+    )
+
+    execution_role_arn = os.environ.get("BEDROCK_AGENTCORE_EXECUTION_ROLE_ARN", "").strip()
+    if execution_role_arn:
+        configure_cmd.extend(["--execution-role", execution_role_arn])
+
+    ecr_repository_uri = os.environ.get("BEDROCK_AGENTCORE_ECR_REPOSITORY_URI", "").strip()
+    if ecr_repository_uri:
+        configure_cmd.extend(["--ecr", ecr_repository_uri])
+
+    logger.info("Configuring AgentCore toolkit for '%s' container deployment", agent_name)
+    subprocess.run(configure_cmd, cwd=agent_dir, check=True)
+
+    deploy_cmd = _toolkit_command(agent_name, "deploy", "--auto-update-on-conflict")
+    logger.info("Deploying '%s' container runtime via AgentCore toolkit", agent_name)
+    subprocess.run(deploy_cmd, cwd=agent_dir, check=True)
+
+    return _load_toolkit_runtime_arn(agent_name)
+
+
 def deploy_agent(agent_name: str, env: str) -> bool:
     try:
         manifest = load_agent_manifest(agent_name, REPO_ROOT)
@@ -78,6 +145,23 @@ def deploy_agent(agent_name: str, env: str) -> bool:
         return False
 
     aws_region = require_aws_region()
+
+    if manifest.deployment.type == "container":
+        try:
+            runtime_arn = _deploy_container_runtime(agent_name, manifest, aws_region)
+        except Exception as e:
+            logger.error("Failed to deploy container runtime for '%s': %s", agent_name, e)
+            return False
+
+        ssm = boto3.client("ssm", region_name=aws_region)
+        ssm.put_parameter(
+            Name=f"/platform/agents/{env}/{agent_name}/runtime-arn",
+            Value=runtime_arn,
+            Type="String",
+            Overwrite=True,
+        )
+        logger.info("Agent '%s' container runtime deployed successfully to %s", agent_name, env)
+        return True
 
     # Resolve bucket (same as build_layer)
     from build_layer import resolve_layer_bucket

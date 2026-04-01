@@ -96,6 +96,22 @@ def read_agent_deps(agent_name: str) -> list[str]:
     return [str(dep) for dep in deps]
 
 
+def read_deployment_type(agent_name: str) -> str:
+    """Read deployment.type from agents/{agent_name}/pyproject.toml."""
+    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
+    if not toml_path.exists():
+        raise FileNotFoundError(f"pyproject.toml not found: {toml_path}")
+
+    with toml_path.open("rb") as fh:
+        data = tomllib.load(fh)
+
+    deployment = data.get("tool", {}).get("agentcore", {}).get("deployment", {})
+    deployment_type = deployment.get("type", "zip")
+    if not isinstance(deployment_type, str):
+        raise ValueError(f"[tool.agentcore.deployment.type] must be a string in {toml_path}")
+    return deployment_type
+
+
 def read_agent_lockfile(agent_name: str) -> str | None:
     """Read uv.lock from agents/{agent_name}/uv.lock if it exists.
 
@@ -263,6 +279,11 @@ def put_layer_metadata(agent_name: str, env: str, dep_hash: str, key: str, aws_r
 
 def run(agent_name: str, env: str) -> int:
     """Run dependency layer build and publish flow."""
+    if read_deployment_type(agent_name) == "container":
+        logger.info("Skipping layer build for container deployment: %s", agent_name)
+        print(f"LAYER_SKIPPED agent={agent_name} deployment=container")
+        return 0
+
     aws_region = require_aws_region()
     deps = read_agent_deps(agent_name)
     lockfile = read_agent_lockfile(agent_name)

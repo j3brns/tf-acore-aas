@@ -48,12 +48,26 @@ class _FakeAgentCoreClient:
         return self._response
 
 
+class _MotoS3Client:
+    def __init__(self, inner: Any):
+        self._inner = inner
+
+    def upload_file(self, filename: str, bucket: str, key: str) -> None:
+        with open(filename, "rb") as handle:
+            self._inner.put_object(Bucket=bucket, Key=key, Body=handle.read())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 def _patch_deploy_agentcore(monkeypatch, fake_client: _FakeAgentCoreClient) -> None:
     real_client = boto3.client
 
     def _client(service_name: str, *args: Any, **kwargs: Any) -> Any:
         if service_name == "bedrock-agentcore":
             return fake_client
+        if service_name == "s3":
+            return _MotoS3Client(real_client(service_name, *args, **kwargs))
         return real_client(service_name, *args, **kwargs)
 
     monkeypatch.setattr(deploy_agent, "boto3", types.SimpleNamespace(client=_client))
@@ -248,6 +262,93 @@ def test_deploy_agent_returns_false_when_runtime_update_fails(tmp_path, monkeypa
         ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/runtime-arn")
 
 
+@mock_aws
+def test_deploy_agent_container_uses_toolkit_and_stores_runtime_arn(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setenv(
+        "BEDROCK_AGENTCORE_EXECUTION_ROLE_ARN",
+        "arn:aws:iam::210987654321:role/agentcore-exec",
+    )
+    monkeypatch.setenv(
+        "BEDROCK_AGENTCORE_ECR_REPOSITORY_URI",
+        "210987654321.dkr.ecr.eu-west-2.amazonaws.com/echo-agent",
+    )
+    monkeypatch.setattr(deploy_agent, "REPO_ROOT", tmp_path)
+
+    agent_name = "echo-agent"
+    env = "dev"
+    agent_dir = tmp_path / "agents" / agent_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+
+[tool.agentcore.deployment]
+type = "container"
+
+[tool.agentcore.runtime]
+entrypoint = "server.py"
+protocol = "agui"
+port = 8080
+""")
+
+    commands: list[tuple[list[str], Path, bool]] = []
+
+    def _fake_run(command: list[str], cwd: Path, check: bool) -> None:
+        commands.append((command, cwd, check))
+
+    monkeypatch.setattr(deploy_agent.subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        deploy_agent,
+        "_load_toolkit_runtime_arn",
+        lambda _agent_name: "arn:aws:bedrock-agentcore:eu-west-2:210987654321:agent/abc:1",
+    )
+
+    assert deploy_agent.deploy_agent(agent_name, env) is True
+
+    assert len(commands) == 2
+    configure_cmd, configure_cwd, configure_check = commands[0]
+    assert configure_cmd[:5] == ["uv", "run", "--project", str(agent_dir), "agentcore"]
+    assert "configure" in configure_cmd
+    assert "--protocol" in configure_cmd
+    assert "AGUI" in configure_cmd
+    assert "--deployment-type" in configure_cmd
+    assert "container" in configure_cmd
+    assert "--execution-role" in configure_cmd
+    assert "arn:aws:iam::210987654321:role/agentcore-exec" in configure_cmd
+    assert "--ecr" in configure_cmd
+    assert "210987654321.dkr.ecr.eu-west-2.amazonaws.com/echo-agent" in configure_cmd
+    assert configure_cwd == agent_dir
+    assert configure_check is True
+
+    deploy_cmd, deploy_cwd, deploy_check = commands[1]
+    assert deploy_cmd == [
+        "uv",
+        "run",
+        "--project",
+        str(agent_dir),
+        "agentcore",
+        "deploy",
+        "--auto-update-on-conflict",
+    ]
+    assert deploy_cwd == agent_dir
+    assert deploy_check is True
+
+    ssm = boto3.client("ssm", region_name=_REGION)
+    runtime_arn_param = ssm.get_parameter(Name=f"/platform/agents/{env}/{agent_name}/runtime-arn")
+    assert runtime_arn_param["Parameter"]["Value"] == (
+        "arn:aws:bedrock-agentcore:eu-west-2:210987654321:agent/abc:1"
+    )
+
+
 # ---------------------------------------------------------------------------
 # register_agent.py tests
 # ---------------------------------------------------------------------------
@@ -315,7 +416,7 @@ endpoint = "https://ag-ui.example.com/connect"
             f"/platform/layers/{env}/{agent_name}/hash": "hash123",
             f"/platform/layers/{env}/{agent_name}/s3-key": "layers/key.zip",
             f"/platform/agents/{env}/{agent_name}/script-s3-key": "scripts/custom-key.zip",
-            f"/platform/agents/{env}/{agent_name}/runtime-arn": None,
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": "arn:runtime:echo-agent",
         }[name],
     )
 
@@ -325,13 +426,15 @@ endpoint = "https://ag-ui.example.com/connect"
     item = stored_items[0]
     assert item["agentName"] == agent_name
     assert item["version"] == "1.2.3"
-    assert item["layerHash"] == "hash123"
-    assert item["scriptS3Key"] == "scripts/custom-key.zip"
+    assert item["layerHash"] == ""
+    assert item["layerS3Key"] == ""
+    assert item["scriptS3Key"] == ""
     assert item["agUi"] == {
         "enabled": True,
         "transport": "sse",
         "endpoint": "https://ag-ui.example.com/connect",
     }
+    assert item["runtimeArn"] == "arn:runtime:echo-agent"
 
     assert latest_version_writes == [
         {
@@ -387,7 +490,7 @@ invocation_mode = "sync"
             f"/platform/layers/{env}/{agent_name}/hash": "hash123",
             f"/platform/layers/{env}/{agent_name}/s3-key": "layers/key.zip",
             f"/platform/agents/{env}/{agent_name}/script-s3-key": "scripts/custom-key.zip",
-            f"/platform/agents/{env}/{agent_name}/runtime-arn": None,
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": "arn:runtime:echo-agent",
         }[name],
     )
 
@@ -444,7 +547,7 @@ invocation_mode = "sync"
             f"/platform/layers/{env}/{agent_name}/hash": "hash123",
             f"/platform/layers/{env}/{agent_name}/s3-key": "layers/key.zip",
             f"/platform/agents/{env}/{agent_name}/script-s3-key": "scripts/custom-key.zip",
-            f"/platform/agents/{env}/{agent_name}/runtime-arn": None,
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": "arn:runtime:echo-agent",
         }[name],
     )
 
@@ -455,6 +558,69 @@ invocation_mode = "sync"
     monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
 
     assert register_agent.register_agent(agent_name, env, None, None) is False
+
+
+def test_register_agent_container_allows_missing_zip_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(register_agent, "REPO_ROOT", tmp_path)
+
+    agent_name = "echo-agent"
+    env = "dev"
+    agent_dir = tmp_path / "agents" / agent_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text("""
+[project]
+name = "echo-agent"
+version = "1.2.3"
+
+[tool.agentcore]
+name = "echo-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+
+[tool.agentcore.deployment]
+type = "container"
+
+[tool.agentcore.runtime]
+entrypoint = "server.py"
+protocol = "agui"
+port = 8080
+""")
+    stored_items: list[dict[str, object]] = []
+
+    fake_ssm = types.SimpleNamespace(put_parameter=lambda **kwargs: None)
+
+    monkeypatch.setattr(
+        register_agent,
+        "boto3",
+        types.SimpleNamespace(client=lambda service_name, **kwargs: fake_ssm),
+    )
+    monkeypatch.setattr(
+        register_agent,
+        "_request_api",
+        lambda url, method, token, body=None: stored_items.append(body) or {"status": "registered"},
+    )
+    monkeypatch.setenv("API_BASE_URL", "http://localhost")
+    monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
+    monkeypatch.setattr(
+        register_agent,
+        "get_ssm_param",
+        lambda ssm, name: {
+            f"/platform/agents/{env}/{agent_name}/runtime-arn": "arn:runtime:echo-agent",
+        }.get(name),
+    )
+
+    assert register_agent.register_agent(agent_name, env, None, None) is True
+
+    assert len(stored_items) == 1
+    item = stored_items[0]
+    assert item["layerHash"] == ""
+    assert item["layerS3Key"] == ""
+    assert item["scriptS3Key"] == ""
+    assert item["runtimeArn"] == "arn:runtime:echo-agent"
 
 
 def test_register_agent_returns_false_when_manifest_invalid_before_aws(tmp_path, monkeypatch):

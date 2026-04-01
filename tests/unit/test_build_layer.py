@@ -156,3 +156,39 @@ def test_run_uploads_zip_and_updates_ssm(tmp_path: Path, monkeypatch: pytest.Mon
     with zipfile.ZipFile(io.BytesIO(body)) as archive:
         wheel_text = archive.read("sample-1.0.0.dist-info/WHEEL").decode("utf-8")
         assert "manylinux2014_aarch64" in wheel_text
+
+
+def test_run_skips_container_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bl, "REPO_ROOT", tmp_path)
+    agent_dir = tmp_path / "agents" / "agui-agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text(
+        """
+[project]
+name = "agui-agent"
+version = "1.0.0"
+
+[tool.agentcore]
+name = "agui-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+
+[tool.agentcore.deployment]
+type = "container"
+
+[tool.agentcore.runtime]
+entrypoint = "server.py"
+protocol = "agui"
+port = 8080
+""",
+        encoding="utf-8",
+    )
+
+    def _unexpected_build(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("build_dependencies should not run for container deployments")
+
+    monkeypatch.setattr(bl, "build_dependencies", _unexpected_build)
+
+    assert bl.run("agui-agent", "dev") == 0
