@@ -367,27 +367,153 @@ def handle_ops_tenant_sessions(
     )
 
 
+def _read_target_tenant(
+    caller: shared.CallerIdentity,
+    tenant_id: str,
+) -> dict[str, Any] | None:
+    """Read a target tenant record using control-plane access."""
+    db = shared._control_plane_db(caller)
+    return db.get_item(shared._tenants_table_name(), shared._tenant_key(tenant_id))
+
+
+def _update_target_tenant(
+    caller: shared.CallerIdentity,
+    tenant_id: str,
+    attributes: dict[str, Any],
+) -> dict[str, Any]:
+    """Update a target tenant record using control-plane access."""
+    db = shared._control_plane_db(caller)
+    expr, names, values = shared._build_update_expression(attributes)
+    return db.update_item(
+        shared._tenants_table_name(),
+        shared._tenant_key(tenant_id),
+        expr,
+        values,
+        expression_attribute_names=names,
+        condition_expression="attribute_exists(PK)",
+    )
+
+
+def _ops_audit_event(
+    deps: shared.TenantApiDependencies,
+    *,
+    caller: shared.CallerIdentity,
+    detail_type: str,
+    target_tenant_id: str,
+    operation_type: str,
+    outcome: str,
+    reason: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Emit an auditable EventBridge event for a platform-agent ops action."""
+    detail: dict[str, Any] = {
+        "schemaVersion": 1,
+        "actorTenantId": caller.tenant_id or "platform",
+        "actorSub": caller.sub,
+        "targetTenantId": target_tenant_id,
+        "operationType": operation_type,
+        "outcome": outcome,
+        "occurredAt": shared._iso(shared._now_utc()),
+    }
+    if reason is not None:
+        detail["reason"] = reason
+    if extra:
+        detail.update(extra)
+    shared._put_event(deps, detail_type=detail_type, detail=detail)
+
+
 def handle_ops_suspend_tenant(
     event: dict[str, Any],
     caller: shared.CallerIdentity,
     deps: shared.TenantApiDependencies,
     tenant_id: str,
 ) -> dict[str, Any]:
-    _ = caller
-    _ = deps
     body = shared._require_json_body(event)
-    reason = body.get("reason", "No reason provided")
+    reason = shared._str_or_none(body.get("reason"))
+    if not reason:
+        raise ValueError("reason is required for tenant suspension")
+
+    record = _read_target_tenant(caller, tenant_id)
+    if record is None:
+        return shared._error(404, "NOT_FOUND", f"Tenant {tenant_id} not found")
+
+    current_status = shared._str_or_none(record.get("status"))
+    if current_status == "suspended":
+        return shared._error(409, "ALREADY_SUSPENDED", f"Tenant {tenant_id} is already suspended")
+    if current_status == "deleted":
+        return shared._error(409, "TENANT_DELETED", f"Tenant {tenant_id} is deleted")
+
+    now = shared._iso(shared._now_utc())
+    _update_target_tenant(caller, tenant_id, {"status": "suspended", "updatedAt": now})
+
+    shared.logger.info(
+        "Tenant suspended via ops workflow",
+        extra={
+            "actor_sub": caller.sub,
+            "actor_tenant_id": caller.tenant_id,
+            "target_tenant_id": tenant_id,
+            "operation_type": "suspend",
+            "reason": reason,
+        },
+    )
+
+    _ops_audit_event(
+        deps,
+        caller=caller,
+        detail_type="tenant.suspended",
+        target_tenant_id=tenant_id,
+        operation_type="suspend",
+        outcome="success",
+        reason=reason,
+    )
+
     return shared._response(200, {"tenantId": tenant_id, "status": "suspended", "reason": reason})
 
 
 def handle_ops_reinstate_tenant(
+    event: dict[str, Any],
     caller: shared.CallerIdentity,
     deps: shared.TenantApiDependencies,
     tenant_id: str,
 ) -> dict[str, Any]:
-    _ = caller
-    _ = deps
-    return shared._response(200, {"tenantId": tenant_id, "status": "active"})
+    body = shared._require_json_body(event)
+    reason = shared._str_or_none(body.get("reason")) or "Reinstated by operator"
+
+    record = _read_target_tenant(caller, tenant_id)
+    if record is None:
+        return shared._error(404, "NOT_FOUND", f"Tenant {tenant_id} not found")
+
+    current_status = shared._str_or_none(record.get("status"))
+    if current_status != "suspended":
+        return shared._error(
+            409, "NOT_SUSPENDED", f"Tenant {tenant_id} is not suspended (current: {current_status})"
+        )
+
+    now = shared._iso(shared._now_utc())
+    _update_target_tenant(caller, tenant_id, {"status": "active", "updatedAt": now})
+
+    shared.logger.info(
+        "Tenant reinstated via ops workflow",
+        extra={
+            "actor_sub": caller.sub,
+            "actor_tenant_id": caller.tenant_id,
+            "target_tenant_id": tenant_id,
+            "operation_type": "reinstate",
+            "reason": reason,
+        },
+    )
+
+    _ops_audit_event(
+        deps,
+        caller=caller,
+        detail_type="tenant.reinstated",
+        target_tenant_id=tenant_id,
+        operation_type="reinstate",
+        outcome="success",
+        reason=reason,
+    )
+
+    return shared._response(200, {"tenantId": tenant_id, "status": "active", "reason": reason})
 
 
 def handle_ops_invocation_report(
@@ -416,10 +542,36 @@ def handle_ops_notify_tenant(
     deps: shared.TenantApiDependencies,
     tenant_id: str,
 ) -> dict[str, Any]:
-    _ = caller
-    _ = deps
     body = shared._require_json_body(event)
-    template = body.get("template")
+    template = shared._str_or_none(body.get("template"))
+    if not template:
+        raise ValueError("template is required for tenant notification")
+
+    record = _read_target_tenant(caller, tenant_id)
+    if record is None:
+        return shared._error(404, "NOT_FOUND", f"Tenant {tenant_id} not found")
+
+    shared.logger.info(
+        "Tenant notification sent via ops workflow",
+        extra={
+            "actor_sub": caller.sub,
+            "actor_tenant_id": caller.tenant_id,
+            "target_tenant_id": tenant_id,
+            "operation_type": "notify",
+            "template": template,
+        },
+    )
+
+    _ops_audit_event(
+        deps,
+        caller=caller,
+        detail_type="tenant.notification_sent",
+        target_tenant_id=tenant_id,
+        operation_type="notify",
+        outcome="success",
+        extra={"template": template},
+    )
+
     return shared._response(200, {"status": "sent", "tenantId": tenant_id, "template": template})
 
 
@@ -429,10 +581,33 @@ def handle_ops_fail_job(
     deps: shared.TenantApiDependencies,
     job_id: str,
 ) -> dict[str, Any]:
-    _ = caller
-    _ = deps
     body = shared._require_json_body(event)
-    reason = body.get("reason")
+    reason = shared._str_or_none(body.get("reason"))
+    if not reason:
+        raise ValueError("reason is required for job failure")
+
+    shared.logger.info(
+        "Job marked failed via ops workflow",
+        extra={
+            "actor_sub": caller.sub,
+            "actor_tenant_id": caller.tenant_id,
+            "operation_type": "fail_job",
+            "job_id": job_id,
+            "reason": reason,
+        },
+    )
+
+    _ops_audit_event(
+        deps,
+        caller=caller,
+        detail_type="job.failed_by_operator",
+        target_tenant_id="unknown",
+        operation_type="fail_job",
+        outcome="success",
+        reason=reason,
+        extra={"jobId": job_id},
+    )
+
     return shared._response(200, {"jobId": job_id, "status": "failed", "reason": reason})
 
 
@@ -593,7 +768,7 @@ def dispatch_ops_routes(
         if subpath == "suspend" and method == "POST":
             return handle_ops_suspend_tenant(event, caller, deps, tenant_id=tenant_id)
         if subpath == "reinstate" and method == "POST":
-            return handle_ops_reinstate_tenant(caller, deps, tenant_id=tenant_id)
+            return handle_ops_reinstate_tenant(event, caller, deps, tenant_id=tenant_id)
         if subpath == "invocations" and method == "GET":
             return handle_ops_invocation_report(event, caller, deps, tenant_id=tenant_id)
         if subpath == "notify" and method == "POST":
