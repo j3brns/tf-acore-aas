@@ -1,5 +1,5 @@
 """
-promote_agent.py — Promote an agent version to RELEASED status using Platform API.
+promote_agent.py — Promote an approved agent version using the Platform API.
 
 Usage:
     uv run python scripts/promote_agent.py <agent_name> <version> --env <env>
@@ -18,18 +18,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import boto3
-from botocore.exceptions import ClientError
-
 logger = logging.getLogger("promote_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-
-def require_aws_region() -> str:
-    region = os.environ.get("AWS_REGION", "").strip()
-    if not region:
-        raise RuntimeError("AWS_REGION must be set")
-    return region
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,8 +74,6 @@ def promote_agent(
     api_base_url: str | None,
     token: str | None,
 ) -> bool:
-    aws_region = require_aws_region()
-
     # Resolve API Base URL and Token
     api_url = api_base_url or os.environ.get("API_BASE_URL") or os.environ.get("VITE_API_BASE_URL")
     if not api_url:
@@ -114,7 +102,7 @@ def promote_agent(
 
     promote_url = f"{api_url.rstrip('/')}/v1/platform/agents/{agent_name}/versions/{version}"
 
-    body: dict[str, Any] = {"status": "released"}
+    body: dict[str, Any] = {"status": "promoted"}
     if notes:
         body["releaseNotes"] = notes
     if score is not None:
@@ -125,15 +113,6 @@ def promote_agent(
     logger.info(f"Promoting agent '{agent_name}' v{version} via API in {env}")
     try:
         _request_api(promote_url, "PATCH", api_token, body)
-
-        # Update latest-version in SSM (as a fallback/convenience for infra)
-        ssm = boto3.client("ssm", region_name=aws_region)
-        ssm.put_parameter(
-            Name=f"/platform/agents/{env}/{agent_name}/latest-version",
-            Value=version,
-            Type="String",
-            Overwrite=True,
-        )
     except Exception as e:
         logger.error(f"Promotion failed: {e}")
         return False

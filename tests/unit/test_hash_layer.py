@@ -183,6 +183,45 @@ def test_run_returns_1_when_no_ssm_parameter(monkeypatch: pytest.MonkeyPatch) ->
     assert exit_code == 1
 
 
+def test_run_returns_0_for_container_deployment_without_ssm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(hl, "REPO_ROOT", tmp_path)
+    agent_dir = tmp_path / "agents" / "agui-agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "pyproject.toml").write_text(
+        """
+[project]
+name = "agui-agent"
+version = "1.0.0"
+
+[tool.agentcore]
+name = "agui-agent"
+owner_team = "platform"
+tier_minimum = "basic"
+handler = "handler:invoke"
+invocation_mode = "sync"
+
+[tool.agentcore.deployment]
+type = "container"
+
+[tool.agentcore.runtime]
+entrypoint = "server.py"
+protocol = "agui"
+port = 8080
+""",
+        encoding="utf-8",
+    )
+
+    def _unexpected_get_ssm_hash(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("get_ssm_hash should not run for container deployments")
+
+    monkeypatch.setattr(hl, "get_ssm_hash", _unexpected_get_ssm_hash)
+
+    assert hl.run("agui-agent", "dev") == 0
+
+
 @mock_aws
 def test_run_returns_0_when_hash_matches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_REGION", _REGION)

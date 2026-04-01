@@ -49,6 +49,7 @@ _SIGV4_TENANT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$")
 _SIGV4_ASSUMED_ROLE_ARN_RE = re.compile(
     r"^arn:aws:sts::(?P<account_id>\d{12}):assumed-role/(?P<role_name>[^/]+)/[^/]+$"
 )
+_PLATFORM_TENANT_ID = "platform"
 
 
 def _aws_region() -> str:
@@ -307,6 +308,14 @@ def is_admin_route(method_arn: str) -> bool:
     return False
 
 
+def is_platform_route(method_arn: str) -> bool:
+    parts = method_arn.split("/", 3)
+    if len(parts) < 4:
+        return False
+    path = str(parts[3]).strip("/")
+    return path.startswith("v1/platform")
+
+
 @logger.inject_lambda_context(correlation_id_path=correlation_paths.API_GATEWAY_REST)
 @tracer.capture_lambda_handler
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -360,10 +369,15 @@ def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
             )
             return generate_policy(sub, "Deny", method_arn, {})
 
+        effective_tenant_id = _PLATFORM_TENANT_ID if is_platform_route(method_arn) else tenant_id
+
         # Check tenant status (Isolation Layer 1)
-        status = get_tenant_status(tenant_id)
+        status = get_tenant_status(effective_tenant_id)
         if status != "active":
-            logger.error("Tenant not active", extra={"tenant_id": tenant_id, "status": status})
+            logger.error(
+                "Tenant not active",
+                extra={"tenant_id": effective_tenant_id, "status": status},
+            )
             return generate_policy(sub, "Deny", method_arn, {})
 
         # RBAC check for admin routes (ADR-013)
@@ -377,18 +391,21 @@ def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
 
         # Prepare authoriser context for downstream Lambdas
         auth_context = {
-            "tenantid": tenant_id,
+            "tenantid": effective_tenant_id,
             "appid": app_id,
             "tier": tier,
             "sub": sub,
             "roles": json.dumps(roles),
-            "usageIdentifierKey": tenant_id,  # Mapped to API Gateway usage plan key
+            "usageIdentifierKey": effective_tenant_id,  # Mapped to API Gateway usage plan key
         }
 
         # Inject context into all subsequent log lines (structured logging mandate)
-        logger.append_keys(tenant_id=tenant_id, app_id=app_id)
+        logger.append_keys(tenant_id=effective_tenant_id, app_id=app_id)
 
-        logger.info("Authentication successful", extra={"tenant_id": tenant_id, "sub": sub})
+        logger.info(
+            "Authentication successful",
+            extra={"tenant_id": effective_tenant_id, "sub": sub},
+        )
         return generate_policy(sub, "Allow", method_arn, auth_context)
 
     except jwt.ExpiredSignatureError:

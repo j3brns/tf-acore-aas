@@ -28,6 +28,7 @@ def handle_platform_failover(
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
     shared._require_admin(caller)
+    shared._require_platform_actor(caller)
     body = shared._require_json_body(event)
     target_region = shared._str_or_none(body.get("targetRegion"))
     lock_id = shared._str_or_none(body.get("lockId"))
@@ -107,7 +108,7 @@ def handle_platform_failover(
                 "changed": False,
             },
         )
-        return shared._response(
+        return shared._platform_control_response(
             200,
             {
                 "status": "completed",
@@ -116,6 +117,8 @@ def handle_platform_failover(
                 "lockId": lock_id,
                 "changed": False,
             },
+            caller=caller,
+            operation_type="runtime_failover",
         )
 
     try:
@@ -150,7 +153,7 @@ def handle_platform_failover(
         },
     )
 
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "status": "completed",
@@ -159,6 +162,8 @@ def handle_platform_failover(
             "lockId": lock_id,
             "changed": True,
         },
+        caller=caller,
+        operation_type="runtime_failover",
     )
 
 
@@ -167,13 +172,19 @@ def handle_platform_quota(
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
     shared._require_admin(caller)
+    shared._require_platform_actor(caller)
     active_region = shared._required_ssm_parameter(deps.ssm, shared._runtime_region_param_name())
     fallback_region = shared._optional_ssm_parameter(deps.ssm, shared._fallback_region_param_name())
     utilisation = deps.platform_quota_client.get_utilisation(
         active_region=active_region,
         fallback_region=fallback_region,
     )
-    return shared._response(200, {"utilisation": utilisation})
+    return shared._platform_control_response(
+        200,
+        {"utilisation": utilisation},
+        caller=caller,
+        operation_type="quota_report",
+    )
 
 
 def handle_platform_split_accounts(
@@ -182,6 +193,7 @@ def handle_platform_split_accounts(
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
     _ = deps
+    shared._require_platform_actor(caller)
     if "Platform.Admin" not in caller.roles:
         raise PermissionError("Platform.Admin role required")
 
@@ -198,7 +210,12 @@ def handle_platform_split_accounts(
         extra={"tier": tier, "target_account_id": target_account_id, "job_id": job_id},
     )
 
-    return shared._response(202, {"status": "initiated", "jobId": job_id})
+    return shared._platform_control_response(
+        202,
+        {"status": "initiated", "jobId": job_id},
+        caller=caller,
+        operation_type="quota_split_accounts",
+    )
 
 
 def handle_platform_service_health(
@@ -207,7 +224,8 @@ def handle_platform_service_health(
 ) -> dict[str, Any]:
     _ = deps
     shared._require_admin(caller)
-    return shared._response(
+    shared._require_platform_actor(caller)
+    return shared._platform_control_response(
         200,
         {
             "status": "healthy",
@@ -221,6 +239,8 @@ def handle_platform_service_health(
                 "Bedrock": "operational",
             },
         },
+        caller=caller,
+        operation_type="service_health_read",
     )
 
 
@@ -230,6 +250,7 @@ def handle_platform_billing_status(
 ) -> dict[str, Any]:
     _ = deps
     shared._require_admin(caller)
+    shared._require_platform_actor(caller)
     year_month = datetime.now(UTC).strftime("%Y-%m")
     db = shared._control_plane_db(caller)
     summaries = db.scan_all(
@@ -241,7 +262,7 @@ def handle_platform_billing_status(
     total_input = sum(int(s.get("total_input_tokens", 0)) for s in summaries)
     total_output = sum(int(s.get("total_output_tokens", 0)) for s in summaries)
 
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "status": "active",
@@ -251,6 +272,8 @@ def handle_platform_billing_status(
             "totalTokens": total_input + total_output,
             "lastUpdated": shared._iso(shared._now_utc()),
         },
+        caller=caller,
+        operation_type="billing_status_read",
     )
 
 
@@ -259,17 +282,18 @@ def handle_ops_top_tenants(
     caller: shared.CallerIdentity,
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
-    _ = caller
     _ = deps
     query = event.get("queryStringParameters") or {}
     n = int(query.get("n", 10))
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "tenants": [
                 {"tenantId": f"t-{i:03d}", "tokens": 1000000 - (i * 10000)} for i in range(1, n + 1)
             ]
         },
+        caller=caller,
+        operation_type="top_tenants_read",
     )
 
 
@@ -279,9 +303,8 @@ def handle_ops_security_events(
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
     _ = event
-    _ = caller
     _ = deps
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "events": [
@@ -293,6 +316,8 @@ def handle_ops_security_events(
                 }
             ]
         },
+        caller=caller,
+        operation_type="security_events_read",
     )
 
 
@@ -301,15 +326,16 @@ def handle_ops_error_rate(
     caller: shared.CallerIdentity,
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
-    _ = caller
     _ = deps
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "errorRate": 0.02,
             "periodMinutes": int((event.get("queryStringParameters") or {}).get("minutes", 5)),
             "threshold": 0.05,
         },
+        caller=caller,
+        operation_type="error_rate_read",
     )
 
 
@@ -318,9 +344,8 @@ def handle_ops_dlq_inspect(
     deps: shared.TenantApiDependencies,
     queue_name: str,
 ) -> dict[str, Any]:
-    _ = caller
     _ = deps
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "queueName": queue_name,
@@ -334,6 +359,8 @@ def handle_ops_dlq_inspect(
                 for i in range(3)
             ],
         },
+        caller=caller,
+        operation_type="dlq_inspect",
     )
 
 
@@ -342,10 +369,14 @@ def handle_ops_dlq_redrive(
     deps: shared.TenantApiDependencies,
     queue_name: str,
 ) -> dict[str, Any]:
-    _ = caller
     _ = deps
     _ = queue_name
-    return shared._response(200, {"status": "initiated", "redriveCount": 3})
+    return shared._platform_control_response(
+        200,
+        {"status": "initiated", "redriveCount": 3},
+        caller=caller,
+        operation_type="dlq_redrive",
+    )
 
 
 def handle_ops_tenant_sessions(
@@ -353,9 +384,8 @@ def handle_ops_tenant_sessions(
     deps: shared.TenantApiDependencies,
     tenant_id: str,
 ) -> dict[str, Any]:
-    _ = caller
     _ = deps
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "tenantId": tenant_id,
@@ -364,6 +394,9 @@ def handle_ops_tenant_sessions(
                 for i in range(2)
             ],
         },
+        caller=caller,
+        operation_type="tenant_sessions_read",
+        target_tenant_id=tenant_id,
     )
 
 
@@ -462,12 +495,18 @@ def handle_ops_suspend_tenant(
         caller=caller,
         detail_type="tenant.suspended",
         target_tenant_id=tenant_id,
-        operation_type="suspend",
+        operation_type="tenant_suspend",
         outcome="success",
         reason=reason,
     )
 
-    return shared._response(200, {"tenantId": tenant_id, "status": "suspended", "reason": reason})
+    return shared._platform_control_response(
+        200,
+        {"tenantId": tenant_id, "status": "suspended", "reason": reason},
+        caller=caller,
+        operation_type="tenant_suspend",
+        target_tenant_id=tenant_id,
+    )
 
 
 def handle_ops_reinstate_tenant(
@@ -508,12 +547,18 @@ def handle_ops_reinstate_tenant(
         caller=caller,
         detail_type="tenant.reinstated",
         target_tenant_id=tenant_id,
-        operation_type="reinstate",
+        operation_type="tenant_reinstate",
         outcome="success",
         reason=reason,
     )
 
-    return shared._response(200, {"tenantId": tenant_id, "status": "active", "reason": reason})
+    return shared._platform_control_response(
+        200,
+        {"tenantId": tenant_id, "status": "active", "reason": reason},
+        caller=caller,
+        operation_type="tenant_reinstate",
+        target_tenant_id=tenant_id,
+    )
 
 
 def handle_ops_invocation_report(
@@ -523,9 +568,8 @@ def handle_ops_invocation_report(
     tenant_id: str,
 ) -> dict[str, Any]:
     _ = event
-    _ = caller
     _ = deps
-    return shared._response(
+    return shared._platform_control_response(
         200,
         {
             "tenantId": tenant_id,
@@ -533,6 +577,9 @@ def handle_ops_invocation_report(
             "successRate": 0.992,
             "avgLatencyMs": 450,
         },
+        caller=caller,
+        operation_type="tenant_invocation_report",
+        target_tenant_id=tenant_id,
     )
 
 
@@ -567,12 +614,18 @@ def handle_ops_notify_tenant(
         caller=caller,
         detail_type="tenant.notification_sent",
         target_tenant_id=tenant_id,
-        operation_type="notify",
+        operation_type="tenant_notify",
         outcome="success",
         extra={"template": template},
     )
 
-    return shared._response(200, {"status": "sent", "tenantId": tenant_id, "template": template})
+    return shared._platform_control_response(
+        200,
+        {"status": "sent", "tenantId": tenant_id, "template": template},
+        caller=caller,
+        operation_type="tenant_notify",
+        target_tenant_id=tenant_id,
+    )
 
 
 def handle_ops_fail_job(
@@ -602,13 +655,18 @@ def handle_ops_fail_job(
         caller=caller,
         detail_type="job.failed_by_operator",
         target_tenant_id="unknown",
-        operation_type="fail_job",
+        operation_type="job_fail",
         outcome="success",
         reason=reason,
         extra={"jobId": job_id},
     )
 
-    return shared._response(200, {"jobId": job_id, "status": "failed", "reason": reason})
+    return shared._platform_control_response(
+        200,
+        {"jobId": job_id, "status": "failed", "reason": reason},
+        caller=caller,
+        operation_type="job_fail",
+    )
 
 
 def handle_ops_lambda_rollback(
@@ -617,6 +675,7 @@ def handle_ops_lambda_rollback(
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
     shared._require_admin(caller)
+    shared._require_platform_actor(caller)
     body = shared._require_json_body(event)
     suffix = shared._str_or_none(body.get("functionSuffix"))
     alias_name = shared._str_or_none(body.get("aliasName")) or "live"
@@ -679,7 +738,7 @@ def handle_ops_lambda_rollback(
             },
         )
 
-        return shared._response(
+        return shared._platform_control_response(
             200,
             {
                 "functionName": full_name,
@@ -688,6 +747,8 @@ def handle_ops_lambda_rollback(
                 "toVersion": previous_version,
                 "status": "rolled_back",
             },
+            caller=caller,
+            operation_type="lambda_rollback",
         )
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code")
@@ -706,10 +767,14 @@ def handle_ops_page_security(
     caller: shared.CallerIdentity,
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any]:
-    _ = caller
     _ = deps
     shared._require_json_body(event)
-    return shared._response(200, {"status": "paged", "incidentId": f"inc-{secrets.token_hex(4)}"})
+    return shared._platform_control_response(
+        200,
+        {"status": "paged", "incidentId": f"inc-{secrets.token_hex(4)}"},
+        caller=caller,
+        operation_type="security_page",
+    )
 
 
 def dispatch_platform_admin_routes(
@@ -719,6 +784,7 @@ def dispatch_platform_admin_routes(
     caller: shared.CallerIdentity,
     deps: shared.TenantApiDependencies,
 ) -> dict[str, Any] | None:
+    shared._require_platform_actor(caller)
     if path == "/v1/platform/failover" and method == "POST":
         return handle_platform_failover(event, caller, deps)
     if path == "/v1/platform/quota" and method == "GET":
@@ -744,6 +810,7 @@ def dispatch_ops_routes(
         return None
 
     shared._require_admin(caller)
+    shared._require_platform_actor(caller)
     if path_lower == "/v1/platform/ops/top-tenants" and method == "GET":
         return handle_ops_top_tenants(event, caller, deps)
     if path_lower == "/v1/platform/ops/security-events" and method == "GET":

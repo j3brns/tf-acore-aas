@@ -15,10 +15,18 @@ from data_access.client import (
     TenantScopedS3,
 )
 from data_access.exceptions import TenantAccessViolation
-from data_access.models import PaginatedItems, TenantCapabilityPolicy, TenantContext
+from data_access.models import (
+    PaginatedItems,
+    TenantCapabilityPolicy,
+    TenantContext,
+    TenantStatus,
+    TenantTier,
+)
 
 __all__ = [
     "TenantContext",
+    "TenantStatus",
+    "TenantTier",
     "TenantAccessViolation",
     "ControlPlaneDynamoDB",
     "TenantScopedDynamoDB",

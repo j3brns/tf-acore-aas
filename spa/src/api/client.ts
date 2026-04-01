@@ -1,5 +1,7 @@
 import { apiBaseUrl, defaultScopes } from "../auth/msalConfig";
 import {
+  AgentAgUiBootstrapResponseDto,
+  AgentBootstrapRequestDto,
   BffSessionKeepaliveRequestDto,
   BffSessionKeepaliveResponseDto,
   BffTokenRefreshRequestDto,
@@ -81,6 +83,20 @@ export class ApiClient {
       throw await toApiError(response);
     }
     return parseJsonResponse<BffTokenRefreshResponseDto>(response);
+  }
+
+  async bootstrapAgUiSession(
+    agentName: string,
+    request?: AgentBootstrapRequestDto,
+  ): Promise<AgentAgUiBootstrapResponseDto> {
+    return this.request<AgentAgUiBootstrapResponseDto>(
+      `/v1/agents/${encodeURIComponent(agentName)}/bootstrap`,
+      {
+        method: "POST",
+        body: JSON.stringify(request ?? {}),
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
 
   async bffSessionKeepalive(

@@ -170,10 +170,10 @@ function walkFiles(root: string): string[] {
 function normalizeRoutePath(route: string): string {
   return route
     .split("?")[0]
-    .replace(/\$\{\s*agentName\s*\}/g, "{agentName}")
-    .replace(/\$\{\s*tenantId\s*\}/g, "{tenantId}")
-    .replace(/\$\{\s*jobId\s*\}/g, "{jobId}")
-    .replace(/\$\{\s*webhookId\s*\}/g, "{webhookId}");
+    .replace(/\$\{(?:encodeURIComponent\()?\s*agentName\s*\)?\}/g, "{agentName}")
+    .replace(/\$\{(?:encodeURIComponent\()?\s*tenantId\s*\)?\}/g, "{tenantId}")
+    .replace(/\$\{(?:encodeURIComponent\()?\s*jobId\s*\)?\}/g, "{jobId}")
+    .replace(/\$\{(?:encodeURIComponent\()?\s*webhookId\s*\)?\}/g, "{webhookId}");
 }
 
 describe("SPA/OpenAPI contract drift", () => {

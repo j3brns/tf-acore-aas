@@ -10,7 +10,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Typography } from "../components/ui/typography";
 import { EmptyState } from "../components/ui/empty-state";
-import { Bot, Zap, Search, ArrowRight, Cpu, Shield } from "lucide-react";
+import { Bot, Zap, Search, ArrowRight, Cpu, Shield, Radio } from "lucide-react";
 
 export const AgentCataloguePage: React.FC = () => {
     const [agents, setAgents] = useState<AgentCatalogueItem[]>([]);
@@ -116,6 +116,12 @@ export const AgentCataloguePage: React.FC = () => {
                                             Capabilities
                                         </Typography>
                                         <div className="flex flex-wrap gap-1.5">
+                                            {agent.agUiEnabled && (
+                                                <Badge variant="outline" className="text-[9px] h-4 border-emerald-500/20 text-emerald-400">
+                                                    <Radio className="mr-0.5 h-2.5 w-2.5" />
+                                                    AG-UI
+                                                </Badge>
+                                            )}
                                             {agent.streamingEnabled && (
                                                 <Badge variant="outline" className="text-[9px] h-4 border-cyan-500/20 text-cyan-400">Streaming</Badge>
                                             )}

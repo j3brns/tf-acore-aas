@@ -101,21 +101,32 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
     aws_region = require_aws_region()
     ssm = boto3.client("ssm", region_name=aws_region)
 
-    layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
-    layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
-    script_s3_key = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/script-s3-key")
-
-    if not layer_hash or not layer_s3_key or not script_s3_key:
+    runtime_arn = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/runtime-arn")
+    if not runtime_arn:
         logger.error(
-            f"Deployment metadata not found for agent '{agent_name}' in env '{env}'. "
-            "Run build_layer and deploy_agent first."
+            f"Runtime ARN not found for agent '{agent_name}' in env '{env}'. "
+            "Run deploy_agent first."
         )
         return False
 
+    deployment_type = manifest.deployment.type
+    if deployment_type == "container":
+        layer_hash = ""
+        layer_s3_key = ""
+        script_s3_key = ""
+    else:
+        layer_hash = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/hash")
+        layer_s3_key = get_ssm_param(ssm, f"/platform/layers/{env}/{agent_name}/s3-key")
+        script_s3_key = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/script-s3-key")
+
+        if not layer_hash or not layer_s3_key or not script_s3_key:
+            logger.error(
+                f"Deployment metadata not found for agent '{agent_name}' in env '{env}'. "
+                "Run build_layer and deploy_agent first."
+            )
+            return False
+
     deployed_at = datetime.datetime.now(datetime.UTC).isoformat()
-    # Default status: PENDING for prod (requires approval), RELEASED for others
-    default_status = "pending" if env == "prod" else "released"
-    runtime_arn = get_ssm_param(ssm, f"/platform/agents/{env}/{agent_name}/runtime-arn")
 
     body = {
         "agentName": agent_name,
@@ -128,7 +139,7 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
         "deployedAt": deployed_at,
         "invocationMode": manifest.invocation_mode.value,
         "streamingEnabled": manifest.streaming_enabled,
-        "status": default_status,
+        "status": "built",
         "runtimeArn": runtime_arn,
         "estimatedDurationSeconds": manifest.estimated_duration_seconds,
         "commitSha": os.environ.get("CI_COMMIT_SHA"),
@@ -167,20 +178,11 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
         logger.error("PLATFORM_ACCESS_TOKEN environment variable is not set")
         return False
 
-    register_url = f"{api_url.rstrip('/')}/v1/platform/agents/register"
+    register_url = f"{api_url.rstrip('/')}/v1/platform/agents"
 
     logger.info(f"Registering agent '{agent_name}' v{manifest.version} via API in {env}")
     try:
         _request_api(register_url, "POST", api_token, body)
-
-        # Update latest-version in SSM if released (as a fallback/convenience for infra)
-        if default_status == "released":
-            ssm.put_parameter(
-                Name=f"/platform/agents/{env}/{agent_name}/latest-version",
-                Value=manifest.version,
-                Type="String",
-                Overwrite=True,
-            )
     except Exception as e:
         logger.error(f"Registration failed: {e}")
         return False

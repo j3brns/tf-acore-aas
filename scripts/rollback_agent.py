@@ -1,8 +1,8 @@
 """
 rollback_agent.py — Roll back an agent version using the Platform API.
 
-Uses the Platform API (tenant-api) to mark the current version as ROLLBACK.
-The Bridge Lambda automatically falls back to the previous RELEASED version.
+Uses the Platform API (tenant-api) to mark the current promoted version as
+rolled_back. The Bridge Lambda automatically falls back to the previous promoted version.
 
 Usage:
     uv run python scripts/rollback_agent.py <agent_name> --env <env>
@@ -19,23 +19,15 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import boto3
-
 logger = logging.getLogger("rollback_agent")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-
-def require_aws_region() -> str:
-    region = os.environ.get("AWS_REGION", "").strip()
-    if not region:
-        raise RuntimeError("AWS_REGION must be set")
-    return region
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Roll back agent")
     parser.add_argument("agent_name", help="Name of the agent")
     parser.add_argument("--env", required=True, choices=["dev", "staging", "prod"])
+    parser.add_argument("--notes", help="Rollback evidence or operator notes")
     parser.add_argument("--api-base-url", help="Override Platform API base URL")
     parser.add_argument("--token", help="Override Platform API access token")
     return parser.parse_args()
@@ -70,9 +62,13 @@ def _request_api(
         raise RuntimeError(f"Connection Error: {e.reason}") from e
 
 
-def rollback_agent(agent_name: str, env: str, api_base_url: str | None, token: str | None) -> bool:
-    aws_region = require_aws_region()
-
+def rollback_agent(
+    agent_name: str,
+    env: str,
+    api_base_url: str | None,
+    token: str | None,
+    notes: str | None = None,
+) -> bool:
     # Resolve API Base URL and Token
     api_url = api_base_url or os.environ.get("API_BASE_URL") or os.environ.get("VITE_API_BASE_URL")
     if not api_url:
@@ -106,10 +102,10 @@ def rollback_agent(agent_name: str, env: str, api_base_url: str | None, token: s
         resp = _request_api(agents_url, "GET", api_token)
         items = resp.get("items", [])
         agent_versions = [
-            i for i in items if i.get("agent_name") == agent_name and i.get("status") == "released"
+            i for i in items if i.get("agent_name") == agent_name and i.get("status") == "promoted"
         ]
         if not agent_versions:
-            logger.error(f"No RELEASED versions found for agent '{agent_name}'")
+            logger.error(f"No PROMOTED versions found for agent '{agent_name}'")
             return False
 
         # Sort by semver (naive)
@@ -118,7 +114,7 @@ def rollback_agent(agent_name: str, env: str, api_base_url: str | None, token: s
 
         if len(agent_versions) < 2:
             logger.error(
-                f"Rollback failed: No previous RELEASED version found for agent '{agent_name}'. "
+                f"Rollback failed: No previous PROMOTED version found for agent '{agent_name}'. "
                 f"Current version is {current_version}."
             )
             return False
@@ -129,24 +125,13 @@ def rollback_agent(agent_name: str, env: str, api_base_url: str | None, token: s
     rollback_url = (
         f"{api_url.rstrip('/')}/v1/platform/agents/{agent_name}/versions/{current_version}"
     )
-    body = {"status": "rollback"}
+    body = {"status": "rolled_back"}
+    if notes:
+        body["releaseNotes"] = notes
 
     logger.info(f"Rolling back agent '{agent_name}' v{current_version} via API in {env}")
     try:
         _request_api(rollback_url, "PATCH", api_token, body)
-
-        # 2. Update latest-version in SSM (as a fallback/convenience for infra)
-        # We need to find the NEW latest released version
-        if len(agent_versions) > 1:
-            new_version = agent_versions[1]["version"]
-            ssm = boto3.client("ssm", region_name=aws_region)
-            ssm.put_parameter(
-                Name=f"/platform/agents/{env}/{agent_name}/latest-version",
-                Value=new_version,
-                Type="String",
-                Overwrite=True,
-            )
-            logger.info(f"Updated SSM latest-version to v{new_version}")
     except Exception as e:
         logger.error(f"Rollback failed: {e}")
         return False
@@ -157,5 +142,5 @@ def rollback_agent(agent_name: str, env: str, api_base_url: str | None, token: s
 
 if __name__ == "__main__":
     args = parse_args()
-    if not rollback_agent(args.agent_name, args.env, args.api_base_url, args.token):
+    if not rollback_agent(args.agent_name, args.env, args.api_base_url, args.token, args.notes):
         sys.exit(1)

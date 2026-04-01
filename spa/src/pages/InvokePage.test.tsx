@@ -6,7 +6,7 @@ import { asyncAccepted, buildAgent } from "../test/testData";
 import type { Job } from "../types";
 import { InvokePage } from "./InvokePage";
 
-const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamMock, useAuthMock, useJobPollingMock } =
+const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamMock, useAuthMock, useJobPollingMock, useAgUiSessionMock } =
     vi.hoisted(() => {
         const request = vi.fn();
         const stream = vi.fn();
@@ -27,6 +27,17 @@ const { getApiClientMock, getAccessTokenMock, navigateMock, requestMock, streamM
                     error: null as string | null,
                 };
             }),
+            useAgUiSessionMock: vi.fn(() => ({
+                status: "idle" as string,
+                bootstrap: null,
+                messages: [],
+                accumulatedText: "",
+                sessionId: null as string | null,
+                error: null as string | null,
+                start: vi.fn(),
+                disconnect: vi.fn(),
+                reconnect: vi.fn(),
+            })),
         };
     });
 
@@ -49,6 +60,10 @@ vi.mock("../hooks/useJobPolling", () => ({
 
 vi.mock("../hooks/useSessionKeepalive", () => ({
     useSessionKeepalive: vi.fn(),
+}));
+
+vi.mock("../hooks/useAgUiSession", () => ({
+    useAgUiSession: (...args: unknown[]) => useAgUiSessionMock(...args),
 }));
 
 vi.mock("react-router-dom", async () => {
@@ -289,6 +304,142 @@ describe("InvokePage", () => {
         const pageText = JSON.stringify(renderer!.toJSON());
         expect(pageText).toContain("View Results");
         expect(pageText).toContain("polling warning");
+    });
+
+    it("shows AG-UI badge and interactive button for AG-UI-capable agents", async () => {
+        requestMock.mockResolvedValueOnce(buildAgent("streaming", { agUiEnabled: true }));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("AG-UI");
+        expect(pageText).toContain("Start Interactive Session");
+    });
+
+    it("uses AG-UI session start for AG-UI-capable agents on invoke", async () => {
+        const startMock = vi.fn();
+        useAgUiSessionMock.mockReturnValue({
+            status: "idle",
+            bootstrap: null,
+            messages: [],
+            accumulatedText: "",
+            sessionId: null,
+            error: null,
+            start: startMock,
+            disconnect: vi.fn(),
+            reconnect: vi.fn(),
+        });
+        requestMock.mockResolvedValueOnce(buildAgent("streaming", { agUiEnabled: true }));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const textarea = renderer!.root.findByType("textarea");
+        act(() => {
+            textarea.props.onChange({ target: { value: "interactive test" } });
+        });
+
+        const form = renderer!.root.findByType("form");
+        await act(async () => {
+            await form.props.onSubmit({ preventDefault: () => undefined });
+        });
+
+        expect(startMock).toHaveBeenCalledWith("interactive test");
+        // REST invoke should NOT be called
+        expect(requestMock).toHaveBeenCalledTimes(1); // only the agent detail fetch
+        expect(streamMock).not.toHaveBeenCalled();
+    });
+
+    it("uses REST invoke for non-AG-UI agents even when hook is present", async () => {
+        requestMock.mockResolvedValueOnce(buildAgent("sync")).mockResolvedValueOnce({
+            invocationId: "inv-2",
+            agentName: "echo-agent",
+            mode: "sync",
+            status: "success",
+            output: "rest response",
+            timestamp: "2026-04-01T00:00:00Z",
+        });
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const textarea = renderer!.root.findByType("textarea");
+        act(() => {
+            textarea.props.onChange({ target: { value: "rest test" } });
+        });
+
+        const form = renderer!.root.findByType("form");
+        await act(async () => {
+            await form.props.onSubmit({ preventDefault: () => undefined });
+        });
+
+        expect(requestMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("shows AG-UI accumulated text via ResponseDisplay", async () => {
+        useAgUiSessionMock.mockReturnValue({
+            status: "connected",
+            bootstrap: { sessionId: "sess-1" },
+            messages: [],
+            accumulatedText: "AG-UI streamed output",
+            sessionId: "sess-1",
+            error: null,
+            start: vi.fn(),
+            disconnect: vi.fn(),
+            reconnect: vi.fn(),
+        });
+        requestMock.mockResolvedValueOnce(buildAgent("streaming", { agUiEnabled: true }));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("AG-UI streamed output");
+        expect(pageText).toContain("AG-UI session active");
+    });
+
+    it("shows AG-UI error with retry option", async () => {
+        const reconnectMock = vi.fn();
+        useAgUiSessionMock.mockReturnValue({
+            status: "error",
+            bootstrap: null,
+            messages: [],
+            accumulatedText: "",
+            sessionId: null,
+            error: "AG-UI connection lost after 3 reconnect attempts",
+            start: vi.fn(),
+            disconnect: vi.fn(),
+            reconnect: reconnectMock,
+        });
+        requestMock.mockResolvedValueOnce(buildAgent("streaming", { agUiEnabled: true }));
+
+        let renderer: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = TestRenderer.create(<InvokePage />);
+        });
+
+        await flushMicrotasks();
+
+        const pageText = JSON.stringify(renderer!.toJSON());
+        expect(pageText).toContain("AG-UI connection lost");
+        expect(pageText).toContain("Retry AG-UI");
     });
 
     it("navigates back to catalogue when back button is clicked", async () => {

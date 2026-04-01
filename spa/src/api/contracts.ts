@@ -50,6 +50,11 @@ export type AgentAgUiBootstrapResponseDto = {
   };
 };
 
+export type AgentBootstrapRequestDto = {
+  sessionId?: string;
+  runtimeSessionId?: string;
+};
+
 export type AgentCatalogueItem = {
   agentName: string;
   version: string;
@@ -57,6 +62,7 @@ export type AgentCatalogueItem = {
   invocationMode: "sync" | "streaming" | "async";
   streamingEnabled: boolean;
   ownerTeam: string;
+  agUiEnabled: boolean;
 };
 
 export function toAgentCatalogueItem(dto: AgentSummaryDto): AgentCatalogueItem {
@@ -67,6 +73,7 @@ export function toAgentCatalogueItem(dto: AgentSummaryDto): AgentCatalogueItem {
     invocationMode: dto.invocationMode,
     streamingEnabled: dto.streamingEnabled,
     ownerTeam: dto.ownerTeam ?? "unknown",
+    agUiEnabled: dto.agUi?.enabled === true,
   };
 }
 
@@ -470,5 +477,26 @@ export const SPA_OPENAPI_CONTRACTS: OpenApiContractExpectation[] = [
     method: "post",
     statusCode: "202",
     requiredFieldPaths: ["sessionId", "status", "expiresAt"],
+  },
+  {
+    name: "agentAgUiBootstrap",
+    path: "/v1/agents/{agentName}/bootstrap",
+    method: "post",
+    statusCode: "200",
+    requiredFieldPaths: [
+      "agentName",
+      "agentVersion",
+      "sessionId",
+      "runtimeSessionId",
+      "startedAt",
+      "expiresAt",
+      "transport",
+      "connectUrl",
+      "tokenRefreshPath",
+      "sessionKeepalivePath",
+      "auth.type",
+      "auth.scopeNames",
+      "auth.scopes",
+    ],
   },
 ];

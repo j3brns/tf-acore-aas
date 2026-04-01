@@ -6,6 +6,7 @@ import { useAuth } from "../auth/useAuth";
 import { AgentInvokeResponse } from "../types";
 import { useJobPolling } from "../hooks/useJobPolling";
 import { useSessionKeepalive } from "../hooks/useSessionKeepalive";
+import { useAgUiSession } from "../hooks/useAgUiSession";
 import {
     createInvokePayload,
     extractJobIdFromPollUrl,
@@ -21,17 +22,19 @@ import { Typography } from "../components/ui/typography";
 import { StatusIndicator } from "../components/ui/status-indicator";
 import { ResponseDisplay } from "../components/ui/response-display";
 import { AsyncJobStatus } from "../components/ui/async-job-status";
-import { 
-  Bot, 
-  ArrowLeft, 
-  Send, 
-  Info, 
-  Zap, 
-  Shield, 
-  Clock, 
+import {
+  Bot,
+  ArrowLeft,
+  Send,
+  Info,
+  Zap,
+  Shield,
+  Clock,
   Activity,
   Maximize2,
-  Settings
+  Settings,
+  Radio,
+  RefreshCw,
 } from "lucide-react";
 
 export const InvokePage: React.FC = () => {
@@ -47,9 +50,15 @@ export const InvokePage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     const { status: jobStatus, error: pollingError } = useJobPolling(jobId, getAccessToken);
-    
-    // Maintain session continuity with keepalive pings
-    useSessionKeepalive(sessionId, agentName || null);
+
+    const agUiCapable = agent?.agUi?.enabled === true;
+    const agUiSession = useAgUiSession(agentName, getAccessToken);
+
+    // Use AG-UI session ID when in AG-UI mode, otherwise REST session ID
+    const activeSessionId = agUiCapable ? agUiSession.sessionId : sessionId;
+
+    // Maintain session continuity with keepalive pings (REST sessions only)
+    useSessionKeepalive(agUiCapable ? null : sessionId, agentName || null);
 
     const invocationMode = agent?.invocationMode ?? "sync";
 
@@ -74,6 +83,59 @@ export const InvokePage: React.FC = () => {
         void fetchAgent();
     }, [agentName, getAccessToken]);
 
+    const handleRestInvoke = async () => {
+        const client = getApiClient(getAccessToken);
+        const body = JSON.stringify(createInvokePayload(prompt, sessionId));
+
+        if (invocationMode === "streaming") {
+            setResult("");
+            const stream = client.stream(`/v1/agents/${agentName}/invoke`, {
+                method: "POST",
+                body,
+                headers: { "Content-Type": "application/json" }
+            });
+
+            for await (const chunk of stream) {
+                if (chunk.data === "[DONE]") continue;
+
+                try {
+                    const payload = JSON.parse(chunk.data);
+                    if (payload.type === "session" && payload.sessionId) {
+                        setSessionId(payload.sessionId);
+                    } else if (payload.type === "text" && payload.content) {
+                        setResult((prev) => (prev || "") + payload.content);
+                    } else if (typeof payload.content === "string") {
+                        setResult((prev) => (prev || "") + payload.content);
+                    } else if (!payload.type && typeof payload.output === "string") {
+                        setResult((prev) => (prev || "") + payload.output);
+                    }
+                } catch {
+                    // Fallback for raw text data
+                    setResult((prev) => (prev || "") + chunk.data);
+                }
+            }
+        } else {
+            const data = await client.request<AgentInvokeResponse>(`/v1/agents/${agentName}/invoke`, {
+                method: "POST",
+                body,
+                headers: { "Content-Type": "application/json" }
+            });
+
+            if (isAsyncInvokeAccepted(data)) {
+                const acceptedJobId = data.jobId || extractJobIdFromPollUrl(data.pollUrl);
+                if (!acceptedJobId) {
+                    throw new Error("Async invoke response missing jobId");
+                }
+                setJobId(acceptedJobId);
+            } else {
+                setResult(data.output);
+                if (data.sessionId) {
+                    setSessionId(data.sessionId);
+                }
+            }
+        }
+    };
+
     const handleInvoke = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
@@ -82,55 +144,10 @@ export const InvokePage: React.FC = () => {
         setError(null);
 
         try {
-            const client = getApiClient(getAccessToken);
-            const body = JSON.stringify(createInvokePayload(prompt, sessionId));
-
-            if (invocationMode === "streaming") {
-                setResult("");
-                const stream = client.stream(`/v1/agents/${agentName}/invoke`, {
-                    method: "POST",
-                    body,
-                    headers: { "Content-Type": "application/json" }
-                });
-
-                for await (const chunk of stream) {
-                    if (chunk.data === "[DONE]") continue;
-                    
-                    try {
-                        const payload = JSON.parse(chunk.data);
-                        if (payload.type === "session" && payload.sessionId) {
-                            setSessionId(payload.sessionId);
-                        } else if (payload.type === "text" && payload.content) {
-                            setResult((prev) => (prev || "") + payload.content);
-                        } else if (typeof payload.content === "string") {
-                            setResult((prev) => (prev || "") + payload.content);
-                        } else if (!payload.type && typeof payload.output === "string") {
-                            setResult((prev) => (prev || "") + payload.output);
-                        }
-                    } catch {
-                        // Fallback for raw text data
-                        setResult((prev) => (prev || "") + chunk.data);
-                    }
-                }
+            if (agUiCapable) {
+                await agUiSession.start(prompt);
             } else {
-                const data = await client.request<AgentInvokeResponse>(`/v1/agents/${agentName}/invoke`, {
-                    method: "POST",
-                    body,
-                    headers: { "Content-Type": "application/json" }
-                });
-
-                if (isAsyncInvokeAccepted(data)) {
-                    const acceptedJobId = data.jobId || extractJobIdFromPollUrl(data.pollUrl);
-                    if (!acceptedJobId) {
-                        throw new Error("Async invoke response missing jobId");
-                    }
-                    setJobId(acceptedJobId);
-                } else {
-                    setResult(data.output);
-                    if (data.sessionId) {
-                        setSessionId(data.sessionId);
-                    }
-                }
+                await handleRestInvoke();
             }
         } catch (err: unknown) {
             setError(formatApiErrorMessage(err));
@@ -157,9 +174,17 @@ export const InvokePage: React.FC = () => {
                                 </CardDescription>
                             </div>
                         </div>
-                        <Badge variant="outline" className="h-6 border-cyan-500/30 text-cyan-400 bg-cyan-500/5">
-                            {agent?.invocationMode} mode
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                            {agUiCapable && (
+                                <Badge variant="outline" className="h-6 border-emerald-500/30 text-emerald-400 bg-emerald-500/5">
+                                    <Radio className="mr-1 h-3 w-3" />
+                                    AG-UI
+                                </Badge>
+                            )}
+                            <Badge variant="outline" className="h-6 border-cyan-500/30 text-cyan-400 bg-cyan-500/5">
+                                {agent?.invocationMode} mode
+                            </Badge>
+                        </div>
                     </CardHeader>
 
                     <CardContent className="pt-8">
@@ -200,15 +225,18 @@ export const InvokePage: React.FC = () => {
                                 variant="accent"
                                 className="w-full h-12 rounded-xl text-white font-bold shadow-lg shadow-cyan-500/10 group"
                             >
-                                {loading ? (
+                                {loading || (agUiCapable && (agUiSession.status === "bootstrapping" || agUiSession.status === "connecting")) ? (
                                     <>
                                         <Activity className="mr-2 h-4 w-4 animate-pulse" />
-                                        Invoking Agent...
+                                        {agUiCapable ? "Starting AG-UI Session..." : "Invoking Agent..."}
                                     </>
                                 ) : (
                                     <>
-                                        Submit Instruction
-                                        <Send className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1 group-hover:-translate-y-1" />
+                                        {agUiCapable ? "Start Interactive Session" : "Submit Instruction"}
+                                        {agUiCapable
+                                            ? <Radio className="ml-2 h-4 w-4" />
+                                            : <Send className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1 group-hover:-translate-y-1" />
+                                        }
                                     </>
                                 )}
                             </Button>
@@ -216,24 +244,69 @@ export const InvokePage: React.FC = () => {
                     </CardContent>
                 </Card>
 
-                {error && (
+                {(error || agUiSession.error) && (
                     <PageBanner title="Execution Error" severity="error">
-                        {error}
+                        {error || agUiSession.error}
+                        {agUiCapable && agUiSession.error && agUiSession.status === "error" && (
+                            <div className="mt-3 flex gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => void agUiSession.reconnect()}
+                                    className="text-xs"
+                                >
+                                    <RefreshCw className="mr-1 h-3 w-3" />
+                                    Retry AG-UI
+                                </Button>
+                            </div>
+                        )}
                     </PageBanner>
                 )}
 
+                {agUiCapable && agUiSession.status !== "idle" && agUiSession.status !== "error" && (
+                    <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-slate-900/40 px-4 py-3">
+                        <div className={`h-2 w-2 rounded-full ${
+                            agUiSession.status === "connected" ? "bg-emerald-400 animate-pulse" :
+                            agUiSession.status === "closed" ? "bg-slate-400" :
+                            "bg-amber-400 animate-pulse"
+                        }`} />
+                        <Typography variant="small" className="text-slate-400 text-xs">
+                            {agUiSession.status === "bootstrapping" && "Establishing AG-UI session..."}
+                            {agUiSession.status === "connecting" && "Connecting to agent runtime..."}
+                            {agUiSession.status === "connected" && "AG-UI session active"}
+                            {agUiSession.status === "reconnecting" && "Reconnecting to agent runtime..."}
+                            {agUiSession.status === "closed" && "AG-UI session ended"}
+                        </Typography>
+                        {agUiSession.status === "connected" && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={agUiSession.disconnect}
+                                className="ml-auto text-xs text-slate-500 hover:text-white"
+                            >
+                                Disconnect
+                            </Button>
+                        )}
+                    </div>
+                )}
+
                 {jobId && (
-                    <AsyncJobStatus 
-                      jobId={jobId} 
-                      status={jobStatus?.status || "pending"} 
-                      resultUrl={jobStatus?.resultUrl || undefined} 
+                    <AsyncJobStatus
+                      jobId={jobId}
+                      status={jobStatus?.status || "pending"}
+                      resultUrl={jobStatus?.resultUrl || undefined}
                       error={pollingError || undefined}
                     />
                 )}
 
-                {(result !== null || (loading && invocationMode === "streaming")) && (
+                {agUiCapable && agUiSession.accumulatedText ? (
+                    <ResponseDisplay
+                        content={agUiSession.accumulatedText}
+                        isLoading={agUiSession.status === "connected" || agUiSession.status === "connecting"}
+                    />
+                ) : (result !== null || (loading && invocationMode === "streaming")) ? (
                     <ResponseDisplay content={result || ""} isLoading={loading && invocationMode === "streaming"} />
-                )}
+                ) : null}
             </div>
 
             {/* Context Sidebar */}
@@ -255,13 +328,22 @@ export const InvokePage: React.FC = () => {
                         tone="info" 
                         title="Isolated microVM runtime"
                       />
-                      <StatusIndicator 
-                        label="Session" 
-                        value={sessionId ? "Active" : "New"} 
-                        tone={sessionId ? "success" : "neutral"} 
-                        pulse={!!sessionId}
-                        title={sessionId ? "Long-running session active" : "No active session"}
+                      <StatusIndicator
+                        label="Session"
+                        value={activeSessionId ? "Active" : "New"}
+                        tone={activeSessionId ? "success" : "neutral"}
+                        pulse={!!activeSessionId}
+                        title={activeSessionId ? `Session: ${activeSessionId}` : "No active session"}
                       />
+                      {agUiCapable && (
+                        <StatusIndicator
+                          label="Transport"
+                          value="AG-UI"
+                          tone={agUiSession.status === "connected" ? "success" : "info"}
+                          pulse={agUiSession.status === "connected"}
+                          title="Interactive AG-UI session transport"
+                        />
+                      )}
                    </div>
                 </div>
 

@@ -237,6 +237,20 @@ AGENT_FIXTURES: list[dict[str, Any]] = [
         "invocation_mode": "sync",
         "streaming_enabled": True,
     },
+    {
+        "PK": "AGENT#platform-diagnostics",
+        "SK": "VERSION#1.0.0",
+        "agent_name": "platform-diagnostics",
+        "version": "1.0.0",
+        "owner_team": "platform",
+        "tier_minimum": "premium",
+        "layer_hash": "0000000000000000",
+        "layer_s3_key": "layers/platform-diagnostics/1.0.0-0000000000000000.zip",
+        "script_s3_key": "scripts/platform-diagnostics/1.0.0.zip",
+        "deployed_at": "2026-01-01T00:00:00+00:00",
+        "invocation_mode": "sync",
+        "streaming_enabled": False,
+    },
 ]
 
 TOOL_FIXTURES: list[dict[str, Any]] = [
@@ -247,6 +261,50 @@ TOOL_FIXTURES: list[dict[str, Any]] = [
         "tier_minimum": "basic",
         "lambda_arn": ("arn:aws:lambda:eu-west-2:000000000000:function:platform-echo-tool-local"),
         "gateway_target_id": "echo-target-local",
+        "enabled": True,
+    },
+    {
+        "PK": "TOOL#get_platform_health",
+        "SK": "TENANT#platform",
+        "tool_name": "get_platform_health",
+        "tier_minimum": "premium",
+        "lambda_arn": (
+            "arn:aws:lambda:eu-west-2:000000000000:function:platform-diagnostics-tool-local"
+        ),
+        "gateway_target_id": "diagnostics-target-local",
+        "enabled": True,
+    },
+    {
+        "PK": "TOOL#get_tenant_status",
+        "SK": "TENANT#platform",
+        "tool_name": "get_tenant_status",
+        "tier_minimum": "premium",
+        "lambda_arn": (
+            "arn:aws:lambda:eu-west-2:000000000000:function:platform-diagnostics-tool-local"
+        ),
+        "gateway_target_id": "diagnostics-target-local",
+        "enabled": True,
+    },
+    {
+        "PK": "TOOL#get_recent_errors",
+        "SK": "TENANT#platform",
+        "tool_name": "get_recent_errors",
+        "tier_minimum": "premium",
+        "lambda_arn": (
+            "arn:aws:lambda:eu-west-2:000000000000:function:platform-diagnostics-tool-local"
+        ),
+        "gateway_target_id": "diagnostics-target-local",
+        "enabled": True,
+    },
+    {
+        "PK": "TOOL#get_runbook_guidance",
+        "SK": "TENANT#platform",
+        "tool_name": "get_runbook_guidance",
+        "tier_minimum": "premium",
+        "lambda_arn": (
+            "arn:aws:lambda:eu-west-2:000000000000:function:platform-diagnostics-tool-local"
+        ),
+        "gateway_target_id": "diagnostics-target-local",
         "enabled": True,
     },
 ]

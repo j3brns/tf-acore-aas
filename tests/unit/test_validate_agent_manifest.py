@@ -271,6 +271,11 @@ class TestRequiredFields:
             [tool.agentcore.deployment]
             type = "container"
 
+            [tool.agentcore.runtime]
+            entrypoint = "server.py"
+            protocol = "agui"
+            port = 8080
+
             [tool.agentcore.evaluations]
             threshold = 0.9
             evaluation_region = "eu-west-1"
@@ -289,6 +294,9 @@ class TestRequiredFields:
         assert manifest.streaming_enabled is True
         assert manifest.estimated_duration_seconds == 42
         assert manifest.deployment.type == "container"
+        assert manifest.runtime.entrypoint == "server.py"
+        assert manifest.runtime.protocol == "agui"
+        assert manifest.runtime.port == 8080
         assert manifest.llm.model_id == "anthropic.claude-sonnet-4-6"
         assert manifest.llm.max_tokens == 2048
         assert manifest.evaluations.threshold == pytest.approx(0.9)
@@ -412,6 +420,8 @@ class TestDeploymentSectionValidation:
         _write_manifest(tmp_path, "my-agent", toml)
         manifest = load_agent_manifest("my-agent", tmp_path)
         assert manifest.deployment.type == "zip"
+        assert manifest.runtime.protocol == "http"
+        assert manifest.runtime.port == 8080
 
     def test_container_deployment_type_accepted(self, tmp_path: Path) -> None:
         toml = _MINIMAL_TOML.format(name="my-agent") + (
@@ -443,6 +453,75 @@ class TestDeploymentSectionValidation:
         with pytest.raises(ManifestValidationError) as exc_info:
             load_agent_manifest("my-agent", tmp_path)
         assert any("ag_ui].endpoint" in e for e in exc_info.value.errors)
+
+
+class TestRuntimeSectionValidation:
+    def test_unknown_runtime_key_is_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.runtime]\nprotocol = "http"\ntransport = "sse"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("transport" in e for e in exc_info.value.errors)
+
+    def test_invalid_runtime_protocol_is_rejected(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.runtime]\nprotocol = "grpc"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("runtime protocol" in e.lower() for e in exc_info.value.errors)
+
+    def test_agui_requires_container_deployment(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.runtime]\nentrypoint = "server.py"\nprotocol = "agui"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("zip deployment only supports" in e.lower() for e in exc_info.value.errors)
+
+    def test_agui_container_requires_runtime_entrypoint(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "container"\n'
+            '\n[tool.agentcore.runtime]\nprotocol = "agui"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("runtime entrypoint" in e.lower() for e in exc_info.value.errors)
+
+    def test_agui_container_requires_port_8080(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "container"\n'
+            '\n[tool.agentcore.runtime]\nentrypoint = "server.py"\nprotocol = "agui"\nport = 9000\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        from scripts.agent_manifest import ManifestValidationError
+
+        with pytest.raises(ManifestValidationError) as exc_info:
+            load_agent_manifest("my-agent", tmp_path)
+        assert any("requires port 8080" in e.lower() for e in exc_info.value.errors)
+
+    def test_mcp_defaults_to_port_8000(self, tmp_path: Path) -> None:
+        toml = _MINIMAL_TOML.format(name="my-agent") + (
+            '\n[tool.agentcore.deployment]\ntype = "container"\n'
+            '\n[tool.agentcore.runtime]\nentrypoint = "server.py"\nprotocol = "mcp"\n'
+        )
+        _write_manifest(tmp_path, "my-agent", toml)
+        manifest = load_agent_manifest("my-agent", tmp_path)
+        assert manifest.runtime.protocol == "mcp"
+        assert manifest.runtime.port == 8000
 
 
 class TestEvaluationsSectionValidation:

@@ -1,0 +1,36 @@
+[project]
+name = "platform-diagnostics"
+version = "1.0.0"
+description = "Read-only platform diagnostics and runbook assistant"
+requires-python = ">=3.12"
+dependencies = [
+    "bedrock-agentcore>=0.1.4",
+    "strands-agents>=0.4.1",
+    "boto3>=1.37.0",
+    "aws-lambda-powertools>=3.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "bedrock-agentcore-starter-toolkit>=0.2.5",
+    "pytest>=8.0.0",
+]
+
+[tool.agentcore]
+name = "platform-diagnostics"
+owner_team = "platform"
+tier_minimum = "premium"
+handler = "handler:invoke"
+invocation_mode = "sync"
+estimated_duration_seconds = 30
+
+[tool.agentcore.evaluations]
+threshold = 0.8
+evaluation_region = "eu-central-1"
+
+[tool.agentcore.llm]
+model_id = "anthropic.claude-sonnet-4-6"
+max_tokens = 2048
+
+[tool.agentcore.deployment]
+type = "zip"

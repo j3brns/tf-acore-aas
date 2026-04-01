@@ -70,6 +70,7 @@ _AGENTCORE_CONCURRENT_SESSIONS_NAMESPACE = "AgentCore"
 _AGENTCORE_CONCURRENT_SESSIONS_METRIC = "ConcurrentSessions"
 _AGENTCORE_QUOTA_LOOKBACK_MINUTES = 5
 _TENANT_PROVISIONING_STATUSES = frozenset({"pending", "provisioning", "ready", "failed"})
+_PLATFORM_TENANT_ID = "platform"
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,10 @@ class CallerIdentity:
     @property
     def is_admin(self) -> bool:
         return bool(self.roles & _ADMIN_ROLES)
+
+    @property
+    def is_platform_actor(self) -> bool:
+        return self.tenant_id == _PLATFORM_TENANT_ID
 
 
 @dataclass(frozen=True)
@@ -570,28 +575,35 @@ def _build_agent_release_lifecycle_event_detail(
     rolled_back_by: str | None,
     rolled_back_at: str | None,
 ) -> dict[str, Any]:
-    return {
-        "schemaVersion": 1,
-        "operation": _agent_release_operation(new_status),
-        "occurredAt": occurred_at,
-        "actorTenantId": caller.tenant_id or "platform",
-        "actorAppId": caller.app_id,
-        "actorSub": caller.sub,
-        "releaseId": f"{agent_name}:{version}",
-        "agentRecordPk": f"AGENT#{agent_name}",
-        "agentRecordSk": f"VERSION#{version}",
-        "agentName": agent_name,
-        "version": version,
-        "previousStatus": previous_status.value,
-        "status": new_status.value,
-        "approvedBy": approved_by,
-        "approvedAt": approved_at,
-        "releaseNotes": release_notes,
-        "evaluationScore": evaluation_score,
-        "evaluationReportUrl": evaluation_report_url,
-        "rolledBackBy": rolled_back_by,
-        "rolledBackAt": rolled_back_at,
-    }
+    detail = _platform_audit_envelope(
+        caller=caller,
+        operation_type=_agent_release_operation(new_status) or "agent_release",
+        outcome="succeeded",
+        target_tenant_id=_PLATFORM_TENANT_ID,
+        occurred_at=occurred_at,
+    )
+    detail.update(
+        {
+            "operation": _agent_release_operation(new_status),
+            "releaseId": f"{agent_name}:{version}",
+            "agentRecordPk": f"AGENT#{agent_name}",
+            "agentRecordSk": f"VERSION#{version}",
+            "agentName": agent_name,
+            "version": version,
+            "previousStatus": previous_status.value,
+            "status": new_status.value,
+            "approvedBy": approved_by,
+            "approvedAt": approved_at,
+            "releaseNotes": release_notes,
+            "evaluationScore": evaluation_score,
+            "evaluationReportUrl": evaluation_report_url,
+            "rolledBackBy": rolled_back_by,
+            "rolledBackAt": rolled_back_at,
+            "targetResourceType": "agentVersion",
+            "targetResourceId": f"{agent_name}:{version}",
+        }
+    )
+    return detail
 
 
 def _validate_agent_status_transition(
@@ -621,6 +633,52 @@ def _as_float(value: Any, *, field: str) -> float:
 def _require_admin(caller: CallerIdentity) -> None:
     if not caller.is_admin:
         raise PermissionError("Platform.Admin or Platform.Operator role required")
+
+
+def _require_platform_actor(caller: CallerIdentity) -> None:
+    if not caller.is_platform_actor:
+        raise PermissionError("Platform tenant context required")
+
+
+def _platform_audit_envelope(
+    *,
+    caller: CallerIdentity,
+    operation_type: str,
+    outcome: str,
+    target_tenant_id: str | None = None,
+    occurred_at: str | None = None,
+) -> dict[str, Any]:
+    detail = {
+        "schemaVersion": 1,
+        "occurredAt": occurred_at or _iso(_now_utc()),
+        "actorTenantId": _PLATFORM_TENANT_ID,
+        "actorAppId": caller.app_id,
+        "actorSub": caller.sub,
+        "operationType": operation_type,
+        "outcome": outcome,
+    }
+    if target_tenant_id is not None:
+        detail["targetTenantId"] = target_tenant_id
+    return detail
+
+
+def _platform_control_response(
+    status_code: int,
+    body: dict[str, Any],
+    *,
+    caller: CallerIdentity,
+    operation_type: str,
+    target_tenant_id: str | None = None,
+    outcome: str | None = None,
+) -> dict[str, Any]:
+    payload = dict(body)
+    payload["audit"] = _platform_audit_envelope(
+        caller=caller,
+        operation_type=operation_type,
+        outcome=outcome or ("succeeded" if status_code < 400 else "failed"),
+        target_tenant_id=target_tenant_id,
+    )
+    return _response(status_code, payload)
 
 
 def _can_read_tenant(caller: CallerIdentity, tenant_id: str) -> bool:

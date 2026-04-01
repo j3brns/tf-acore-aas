@@ -1241,7 +1241,11 @@ def test_platform_failover_updates_runtime_region_when_lock_is_valid(
     fake_state: dict[str, Any], fixed_now: datetime
 ) -> None:
     _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) + 300)
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
     response = _invoke(event)
 
@@ -1252,6 +1256,15 @@ def test_platform_failover_updates_runtime_region_when_lock_is_valid(
         "previousRegion": "eu-west-1",
         "lockId": "lock-123",
         "changed": True,
+        "audit": {
+            "schemaVersion": 1,
+            "occurredAt": "2026-02-25T12:00:00Z",
+            "actorTenantId": "platform",
+            "actorAppId": "app-admin",
+            "actorSub": "user-123",
+            "operationType": "runtime_failover",
+            "outcome": "succeeded",
+        },
     }
     assert fake_state["deps"].ssm.parameters["/platform/config/runtime-region"] == "eu-central-1"
     assert fake_state["deps"].ssm.put_calls == [
@@ -1269,7 +1282,11 @@ def test_platform_failover_is_idempotent_when_target_region_is_already_active(
 ) -> None:
     _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) + 300)
     fake_state["deps"].ssm.parameters["/platform/config/runtime-region"] = "eu-central-1"
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
 
     response = _invoke(event)
@@ -1281,12 +1298,25 @@ def test_platform_failover_is_idempotent_when_target_region_is_already_active(
         "previousRegion": "eu-central-1",
         "lockId": "lock-123",
         "changed": False,
+        "audit": {
+            "schemaVersion": 1,
+            "occurredAt": "2026-02-25T12:00:00Z",
+            "actorTenantId": "platform",
+            "actorAppId": "app-admin",
+            "actorSub": "user-123",
+            "operationType": "runtime_failover",
+            "outcome": "succeeded",
+        },
     }
     assert fake_state["deps"].ssm.put_calls == []
 
 
 def test_platform_failover_rejects_missing_lock(fake_state: dict[str, Any]) -> None:
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
 
     response = _invoke(event)
@@ -1300,7 +1330,11 @@ def test_platform_failover_rejects_expired_lock(
     fake_state: dict[str, Any], fixed_now: datetime
 ) -> None:
     _seed_failover_lock(fake_state, ttl=int(fixed_now.timestamp()) - 1)
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
 
     response = _invoke(event)
@@ -1314,7 +1348,11 @@ def test_platform_failover_rejects_lock_owned_by_another_actor(
     fake_state: dict[str, Any], fixed_now: datetime
 ) -> None:
     _seed_failover_lock(fake_state, lock_id="other-lock", ttl=int(fixed_now.timestamp()) + 300)
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
 
     response = _invoke(event)
@@ -1340,7 +1378,11 @@ def test_platform_failover_ssm_update_failure_returns_error_and_logs_context(
             logged.append((message, dict(extra)))
 
     monkeypatch.setattr(tenant_api_handler.logger, "exception", _capture_exception)
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
 
     response = _invoke(event)
@@ -1363,13 +1405,34 @@ def test_platform_failover_ssm_update_failure_returns_error_and_logs_context(
 
 
 def test_platform_failover_requires_platform_admin_role(fake_state: dict[str, Any]) -> None:
-    event = _event(method="POST", body={"targetRegion": "eu-central-1", "lockId": "lock-123"})
+    event = _event(
+        method="POST",
+        body={"targetRegion": "eu-central-1", "lockId": "lock-123"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/failover"
 
     # Non-admin forbidden
-    event_non_admin = _event(method="POST", roles=[], body={"targetRegion": "x", "lockId": "y"})
+    event_non_admin = _event(
+        method="POST",
+        roles=[],
+        body={"targetRegion": "x", "lockId": "y"},
+        caller_tenant_id="platform",
+    )
     event_non_admin["path"] = "/v1/platform/failover"
     response = _invoke(event_non_admin)
+    assert response["statusCode"] == 403
+
+
+def test_platform_route_requires_platform_tenant_context(fake_state: dict[str, Any]) -> None:
+    event = _event(
+        method="GET",
+        caller_tenant_id="t-admin",
+    )
+    event["path"] = "/v1/platform/quota"
+
+    response = _invoke(event)
+
     assert response["statusCode"] == 403
 
 
@@ -1410,13 +1473,16 @@ def test_sessions_route_rejects_invalid_limit(fake_state: dict[str, Any]) -> Non
 
 
 def test_platform_quota_report(fake_state: dict[str, Any]) -> None:
-    event = _event(method="GET")
+    event = _event(method="GET", caller_tenant_id="platform")
     event["path"] = "/v1/platform/quota"
     response = _invoke(event)
 
     assert response["statusCode"] == 200
-    utilisation = _body(response)["utilisation"]
+    body = _body(response)
+    utilisation = body["utilisation"]
     assert utilisation == fake_state["deps"].platform_quota_client.response
+    assert body["audit"]["actorTenantId"] == "platform"
+    assert body["audit"]["operationType"] == "quota_report"
     assert fake_state["deps"].platform_quota_client.calls == [
         {
             "active_region": "eu-west-1",
@@ -1426,7 +1492,7 @@ def test_platform_quota_report(fake_state: dict[str, Any]) -> None:
 
 
 def test_platform_quota_report_returns_explicit_aws_error(fake_state: dict[str, Any]) -> None:
-    event = _event(method="GET")
+    event = _event(method="GET", caller_tenant_id="platform")
     event["path"] = "/v1/platform/quota"
     object.__setattr__(
         fake_state["deps"],
@@ -1534,7 +1600,11 @@ def test_aws_platform_quota_client_falls_back_to_documented_default_limit() -> N
 
 
 def test_platform_split_accounts_requires_platform_admin(fake_state: dict[str, Any]) -> None:
-    event = _event(method="POST", body={"tier": "premium", "targetAccountId": "123456789012"})
+    event = _event(
+        method="POST",
+        body={"tier": "premium", "targetAccountId": "123456789012"},
+        caller_tenant_id="platform",
+    )
     event["path"] = "/v1/platform/quota/split-accounts"
 
     # 1. Platform.Admin succeeds
@@ -1547,6 +1617,7 @@ def test_platform_split_accounts_requires_platform_admin(fake_state: dict[str, A
         method="POST",
         roles=["Platform.Operator"],
         body={"tier": "premium", "targetAccountId": "123456789012"},
+        caller_tenant_id="platform",
     )
     event_operator["path"] = "/v1/platform/quota/split-accounts"
     response = _invoke(event_operator)
@@ -1561,6 +1632,7 @@ def test_platform_split_accounts_rejects_invalid_target_account_id(
     event = _event(
         method="POST",
         body={"tier": "premium", "targetAccountId": target_account_id},
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/quota/split-accounts"
 
@@ -2159,6 +2231,7 @@ def test_lambda_rollback_finds_previous_version_and_updates_alias(
         method="POST",
         body={"functionSuffix": "bridge", "aliasName": "live"},
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/ops/lambda-rollback"
 
@@ -2184,6 +2257,7 @@ def test_lambda_rollback_rejects_oldest_version(fake_state: dict[str, Any]) -> N
         method="POST",
         body={"functionSuffix": "bridge", "aliasName": "live"},
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/ops/lambda-rollback"
 
@@ -2198,6 +2272,7 @@ def test_lambda_rollback_requires_admin_role(fake_state: dict[str, Any]) -> None
         method="POST",
         body={"functionSuffix": "bridge"},
         roles=["Platform.Operator"],  # Not sufficient for this route
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/ops/lambda-rollback"
 
@@ -2210,6 +2285,7 @@ def test_lambda_rollback_returns_404_on_missing_function(fake_state: dict[str, A
         method="POST",
         body={"functionSuffix": "non-existent"},
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/ops/lambda-rollback"
 
@@ -2231,6 +2307,7 @@ def test_platform_register_agent_defaults_to_built(fake_state: dict[str, Any]) -
             "invocationMode": "sync",
         },
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/agents"
 
@@ -2290,6 +2367,7 @@ def test_platform_register_agent_rejects_non_built_initial_status(
             "invocationMode": "sync",
         },
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/agents"
 
@@ -2302,10 +2380,20 @@ def test_platform_register_agent_rejects_non_built_initial_status(
 def test_platform_promote_agent_updates_metadata_and_emits_event(
     fake_state: dict[str, Any],
 ) -> None:
-    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="approved")
+    _seed_agent_version(
+        fake_state,
+        agent_name="echo-agent",
+        version="1.2.0",
+        status="approved",
+        extra={
+            "approved_by": "approver-007",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "operator approval evidence",
+        },
+    )
     event = _event(
         method="PATCH",
-        body={"status": "promoted", "releaseNotes": "approved release evidence recorded"},
+        body={"status": "promoted", "releaseNotes": "promotion executed by operator"},
         caller_tenant_id="platform",
         roles=["Platform.Admin"],
     )
@@ -2316,13 +2404,16 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
     assert response["statusCode"] == 200
     item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
     assert item["status"] == "promoted"
-    assert item["approved_by"] == "user-123"
-    assert item["approved_at"] == "2026-02-25T12:00:00Z"
-    assert item["release_notes"] == "approved release evidence recorded"
+    assert item["approved_by"] == "approver-007"
+    assert item["approved_at"] == "2026-02-24T18:30:00Z"
+    assert item["release_notes"] == "operator approval evidence"
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.promoted"
     assert detail["schemaVersion"] == 1
+    assert detail["targetTenantId"] == "platform"
     assert detail["operation"] == "promotion"
+    assert detail["operationType"] == "promotion"
+    assert detail["outcome"] == "succeeded"
     assert detail["occurredAt"] == "2026-02-25T12:00:00Z"
     assert detail["actorTenantId"] == "platform"
     assert detail["actorAppId"] == "app-admin"
@@ -2334,9 +2425,33 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
     assert detail["version"] == "1.2.0"
     assert detail["previousStatus"] == "approved"
     assert detail["status"] == "promoted"
-    assert detail["approvedBy"] == "user-123"
-    assert detail["approvedAt"] == "2026-02-25T12:00:00Z"
-    assert detail["releaseNotes"] == "approved release evidence recorded"
+    assert detail["approvedBy"] == "approver-007"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "promotion executed by operator"
+
+
+def test_platform_approve_agent_records_immutable_approval_evidence(
+    fake_state: dict[str, Any],
+) -> None:
+    _seed_agent_version(
+        fake_state, agent_name="approve-agent", version="1.0.0", status="evaluation_passed"
+    )
+    event = _event(
+        method="PATCH",
+        body={"status": "approved", "releaseNotes": "two-person approval recorded"},
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents/approve-agent/versions/1.0.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    item = fake_state["db"].items[("AGENT#approve-agent", "VERSION#1.0.0")]
+    assert item["status"] == "approved"
+    assert item["approved_by"] == "user-123"
+    assert item["approved_at"] == "2026-02-25T12:00:00Z"
+    assert item["release_notes"] == "two-person approval recorded"
 
 
 def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, Any]) -> None:
@@ -2345,6 +2460,7 @@ def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, 
         method="PATCH",
         body={"status": "built"},
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
 
@@ -2372,6 +2488,7 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
             "jobId": "job-456",
         },
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     register_event["path"] = "/v1/platform/agents"
     register_response = _invoke(register_event)
@@ -2385,6 +2502,9 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
         version="1.0.0",
         status="approved",
         extra={
+            "approved_by": "release-admin",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "approval evidence",
             "commit_sha": "abc12345",
             "pipeline_url": "https://gitlab.com/pipeline/123",
             "job_id": "job-456",
@@ -2401,6 +2521,7 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
             "releaseNotes": "Score: 0.98",
         },
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     promote_event["path"] = "/v1/platform/agents/evidence-agent/versions/1.0.0"
     promote_response = _invoke(promote_event)
@@ -2412,22 +2533,80 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
     assert item["status"] == "promoted"
     assert item["evaluation_score"] == Decimal("0.98")
     assert item["evaluation_report_url"] == "https://frankfurt.aws/eval/789"
-    assert item["approved_by"] == "user-123"
+    assert item["approved_by"] == "release-admin"
+    assert item["approved_at"] == "2026-02-24T18:30:00Z"
+    assert item["release_notes"] == "approval evidence"
 
     # Verify event detail
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.promoted"
+    assert detail["approvedBy"] == "release-admin"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "Score: 0.98"
     assert detail["evaluationScore"] == 0.98
     assert detail["evaluationReportUrl"] == "https://frankfurt.aws/eval/789"
 
 
-def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
-    _seed_agent_version(fake_state, agent_name="rollback-agent", version="1.0.0", status="promoted")
+def test_platform_promote_requires_existing_approval_evidence(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="approved")
 
     event = _event(
         method="PATCH",
-        body={"status": "rolled_back"},
+        body={"status": "promoted"},
         roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+
+
+def test_platform_rejects_immutable_agent_metadata_updates(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(
+        fake_state,
+        agent_name="echo-agent",
+        version="1.2.0",
+        status="approved",
+        extra={
+            "approved_by": "release-admin",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "approval evidence",
+        },
+    )
+
+    event = _event(
+        method="PATCH",
+        body={"status": "promoted", "agUi": {"enabled": True, "endpoint": "https://example.com"}},
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+
+
+def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(
+        fake_state,
+        agent_name="rollback-agent",
+        version="1.0.0",
+        status="promoted",
+        extra={
+            "approved_by": "release-admin",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "approval evidence",
+        },
+    )
+
+    event = _event(
+        method="PATCH",
+        body={"status": "rolled_back", "releaseNotes": "runtime regression confirmed"},
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
     )
     event["path"] = "/v1/platform/agents/rollback-agent/versions/1.0.0"
 
@@ -2438,11 +2617,15 @@ def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
     assert item["status"] == "rolled_back"
     assert item["rolled_back_by"] == "user-123"
     assert item["rolled_back_at"] == "2026-02-25T12:00:00Z"
+    assert item["release_notes"] == "approval evidence"
 
     # Verify event detail
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.rolled_back"
     assert detail["status"] == "rolled_back"
+    assert detail["approvedBy"] == "release-admin"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "runtime regression confirmed"
     assert detail["rolledBackBy"] == "user-123"
     assert detail["rolledBackAt"] == "2026-02-25T12:00:00Z"
 
@@ -2452,6 +2635,9 @@ def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None
     fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["approved_by"] = "release-admin"
     fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["approved_at"] = (
         "2026-02-24T18:30:00Z"
+    )
+    fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["release_notes"] = (
+        "approval evidence"
     )
     event = _event(
         method="PATCH",
@@ -2469,7 +2655,10 @@ def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.rolled_back"
     assert detail["schemaVersion"] == 1
+    assert detail["targetTenantId"] == "platform"
     assert detail["operation"] == "rollback"
+    assert detail["operationType"] == "rollback"
+    assert detail["outcome"] == "succeeded"
     assert detail["occurredAt"] == "2026-02-25T12:00:00Z"
     assert detail["actorTenantId"] == "platform"
     assert detail["actorAppId"] == "app-admin"
@@ -2484,3 +2673,20 @@ def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None
     assert detail["approvedBy"] == "release-admin"
     assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
     assert detail["releaseNotes"] == "error rate spike"
+
+
+def test_platform_tenant_does_not_bypass_cross_tenant_reads_without_admin_role(
+    fake_state: dict[str, Any],
+) -> None:
+    fake_state["db"].items[("TENANT#t-001", "METADATA")] = {
+        "PK": "TENANT#t-001",
+        "SK": "METADATA",
+        "tenantId": "t-001",
+        "status": "active",
+        "appId": "app-001",
+    }
+    event = _event(method="GET", tenant_id="t-001", caller_tenant_id="platform", roles=[])
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 403

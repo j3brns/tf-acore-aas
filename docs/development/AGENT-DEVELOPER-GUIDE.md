@@ -125,6 +125,11 @@ max_tokens = 4096
 
 [tool.agentcore.deployment]
 type = "zip"                   # zip (default) | container
+
+[tool.agentcore.runtime]
+protocol = "http"              # http (default) | mcp | a2a | agui
+port = 8080                    # protocol-specific fixed port
+# entrypoint = "server.py"     # required for non-HTTP container runtimes such as AG-UI
 ```
 
 ### Canonical Schema Boundary
@@ -136,6 +141,7 @@ type = "zip"                   # zip (default) | container
 | `[tool.agentcore]` | `streaming_enabled`, `estimated_duration_seconds` | no |
 | `[tool.agentcore.llm]` | `model_id`, `max_tokens` | no |
 | `[tool.agentcore.deployment]` | `type` (`zip` or `container`) | no |
+| `[tool.agentcore.runtime]` | `protocol`, `port`, `entrypoint` | no |
 | `[tool.agentcore.evaluations]` | `threshold`, `evaluation_region` | no |
 
 Validation rules:
@@ -146,6 +152,10 @@ Validation rules:
 - `invocation_mode` must be `sync`, `streaming`, or `async`.
 - `estimated_duration_seconds` and `max_tokens` must be positive integers.
 - `threshold` must be between `0.0` and `1.0`.
+- ZIP deployment supports only the HTTP runtime contract.
+- Protocol ports are fixed by the AgentCore service contract: HTTP/AG-UI `8080`, MCP `8000`, A2A `9000`.
+- Non-HTTP container runtimes must declare `tool.agentcore.runtime.entrypoint`.
+- AG-UI requires `deployment.type = "container"` and `tool.agentcore.runtime.protocol = "agui"`.
 
 ## Invocation Modes
 
@@ -235,6 +245,29 @@ If you are using the toolkit pilot, run the command from the agent directory thr
 - Use `--only-binary=:all:` (enforced by build script) — source-only packages may not compile for arm64.
 - If a package fails arm64 cross-compilation, use `deployment.type = "container"` instead.
 - Total deployment package must remain under 250MB (AgentCore limit).
+
+### AG-UI Container Deployments
+
+AG-UI-capable agents are an explicit opt-in path:
+
+```toml
+[tool.agentcore.deployment]
+type = "container"
+
+[tool.agentcore.runtime]
+entrypoint = "server.py"
+protocol = "agui"
+port = 8080
+```
+
+Deployment behavior:
+- ZIP/HTTP agents keep using the existing `build_layer` + `deploy_agent` flow.
+- Container/AG-UI agents skip layer hashing/builds and deploy through the AgentCore starter toolkit from `scripts/deploy_agent.py`.
+- The deploy script reads runtime metadata from the manifest and writes the resulting runtime ARN back to SSM for registration.
+
+Optional environment overrides for container deployment:
+- `BEDROCK_AGENTCORE_EXECUTION_ROLE_ARN`
+- `BEDROCK_AGENTCORE_ECR_REPOSITORY_URI`
 
 ## Writing Tests
 

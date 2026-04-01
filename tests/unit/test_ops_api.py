@@ -83,7 +83,7 @@ def _ops_event(
     query: dict[str, str] | None = None,
     *,
     roles: str = "Platform.Admin",
-    tenant_id: str = "platform-admin",
+    tenant_id: str = "platform",
     sub: str = "admin-123",
 ) -> dict[str, Any]:
     return {
@@ -96,6 +96,7 @@ def _ops_event(
                 "tenantid": tenant_id,
                 "roles": roles,
                 "sub": sub,
+                "appid": "app-admin",
             }
         },
     }
@@ -164,6 +165,16 @@ def test_ops_service_health(fake_state: dict[str, Any]) -> None:
     response = _invoke(_ops_event("GET", "/v1/platform/service-health"))
     assert response["statusCode"] == 200
     assert _body(response)["status"] == "healthy"
+    assert _body(response)["audit"]["actorTenantId"] == "platform"
+
+
+def test_ops_platform_routes_require_platform_tenant_context(fake_state: dict[str, Any]) -> None:
+    event = _ops_event("GET", "/v1/platform/service-health")
+    event["requestContext"]["authorizer"]["tenantid"] = "t-customer-001"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 403
 
 
 def test_ops_billing_status(fake_state: dict[str, Any]) -> None:
@@ -215,12 +226,17 @@ def test_suspend_tenant_success(fake_state: dict[str, Any]) -> None:
     record = fake_state["db"].items[("TENANT#t-001", "METADATA")]
     assert record["status"] == "suspended"
 
-    # Verify audit event
+    # Verify response audit envelope
+    assert body["audit"]["actorTenantId"] == "platform"
+    assert body["audit"]["operationType"] == "tenant_suspend"
+    assert body["audit"]["targetTenantId"] == "t-001"
+
+    # Verify EventBridge audit event
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.suspended"
     assert detail["targetTenantId"] == "t-001"
     assert detail["actorSub"] == "admin-123"
-    assert detail["operationType"] == "suspend"
+    assert detail["operationType"] == "tenant_suspend"
     assert detail["outcome"] == "success"
     assert detail["reason"] == "budget exceeded"
 
@@ -290,10 +306,15 @@ def test_reinstate_tenant_success(fake_state: dict[str, Any]) -> None:
     assert record["status"] == "active"
 
     # Verify audit event
+    # Verify response audit envelope
+    assert body["audit"]["operationType"] == "tenant_reinstate"
+    assert body["audit"]["targetTenantId"] == "t-001"
+
+    # Verify EventBridge audit event
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.reinstated"
     assert detail["targetTenantId"] == "t-001"
-    assert detail["operationType"] == "reinstate"
+    assert detail["operationType"] == "tenant_reinstate"
     assert detail["outcome"] == "success"
 
 
@@ -375,6 +396,8 @@ def test_notify_tenant_success(fake_state: dict[str, Any]) -> None:
     assert body["status"] == "sent"
     assert body["template"] == "maintenance-window"
 
+    assert body["audit"]["operationType"] == "tenant_notify"
+
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "tenant.notification_sent"
     assert detail["targetTenantId"] == "t-001"
@@ -417,7 +440,7 @@ def test_fail_job_success(fake_state: dict[str, Any]) -> None:
 
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "job.failed_by_operator"
-    assert detail["operationType"] == "fail_job"
+    assert detail["operationType"] == "job_fail"
     assert detail["jobId"] == "job-123"
     assert detail["reason"] == "manual fail"
 
@@ -478,7 +501,7 @@ def test_audit_envelope_fields(fake_state: dict[str, Any]) -> None:
     assert detail["actorTenantId"] == "platform"
     assert detail["actorSub"] == "operator-42"
     assert detail["targetTenantId"] == "t-audit"
-    assert detail["operationType"] == "suspend"
+    assert detail["operationType"] == "tenant_suspend"
     assert detail["outcome"] == "success"
     assert detail["reason"] == "audit check"
     assert "occurredAt" in detail
