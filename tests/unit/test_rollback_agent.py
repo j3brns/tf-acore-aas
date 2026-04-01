@@ -1,12 +1,7 @@
-"""Unit tests for rollback_agent.py."""
-
 import importlib.util
 import sys
 from pathlib import Path
 from typing import Any
-
-import boto3
-from moto import mock_aws
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -26,32 +21,24 @@ def _load_module(name: str) -> Any:
 
 rollback_agent = _load_module("rollback_agent")
 
-_REGION = "eu-west-2"
 
-
-@mock_aws
-def test_rollback_agent_success(tmp_path, monkeypatch):
-    monkeypatch.setenv("AWS_REGION", _REGION)
-    monkeypatch.setenv("CI", "true")
-
+def test_rollback_agent_success(monkeypatch):
     agent_name = "test-agent"
     env = "dev"
-
-    # Setup SSM with current state (pointing to v1.1.0)
-    ssm = boto3.client("ssm", region_name=_REGION)
-    ssm.put_parameter(
-        Name=f"/platform/agents/{env}/{agent_name}/latest-version", Value="1.1.0", Type="String"
-    )
+    seen: dict[str, Any] = {}
 
     def fake_request_api(url, method, token, body=None):
         if method == "GET" and url.endswith("/v1/platform/agents"):
+            seen["list_url"] = url
             return {
                 "items": [
-                    {"agent_name": agent_name, "version": "1.0.0", "status": "released"},
-                    {"agent_name": agent_name, "version": "1.1.0", "status": "released"},
+                    {"agent_name": agent_name, "version": "1.0.0", "status": "promoted"},
+                    {"agent_name": agent_name, "version": "1.1.0", "status": "promoted"},
                 ]
             }
         if method == "PATCH" and f"/v1/platform/agents/{agent_name}/versions/1.1.0" in url:
+            seen["patch_url"] = url
+            seen["patch_body"] = body
             return {"status": "updated"}
         return {}
 
@@ -60,19 +47,19 @@ def test_rollback_agent_success(tmp_path, monkeypatch):
     monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
 
     # Run Rollback
-    success = rollback_agent.rollback_agent(agent_name, env, None, None)
-    assert success is True
-
-    # Verify SSM points back to v1.0.0
-    latest_version_param = ssm.get_parameter(
-        Name=f"/platform/agents/{env}/{agent_name}/latest-version"
+    success = rollback_agent.rollback_agent(
+        agent_name, env, None, None, notes="operator rollback evidence"
     )
-    assert latest_version_param["Parameter"]["Value"] == "1.0.0"
+    assert success is True
+    assert seen["list_url"] == "http://localhost/v1/platform/agents"
+    assert seen["patch_url"] == f"http://localhost/v1/platform/agents/{agent_name}/versions/1.1.0"
+    assert seen["patch_body"] == {
+        "status": "rolled_back",
+        "releaseNotes": "operator rollback evidence",
+    }
 
 
-@mock_aws
 def test_rollback_agent_fails_no_previous(monkeypatch):
-    monkeypatch.setenv("AWS_REGION", _REGION)
     agent_name = "test-agent"
     env = "dev"
 
@@ -80,7 +67,7 @@ def test_rollback_agent_fails_no_previous(monkeypatch):
         if method == "GET" and url.endswith("/v1/platform/agents"):
             return {
                 "items": [
-                    {"agent_name": agent_name, "version": "1.0.0", "status": "released"},
+                    {"agent_name": agent_name, "version": "1.0.0", "status": "promoted"},
                 ]
             }
         return {}

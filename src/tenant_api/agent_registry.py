@@ -11,6 +11,69 @@ except ImportError:  # pragma: no cover - local package import path
     from src.tenant_api import handler as shared
 
 
+_REGISTER_MUTABLE_FIELDS = frozenset(
+    {
+        "agentName",
+        "version",
+        "ownerTeam",
+        "tierMinimum",
+        "layerHash",
+        "layerS3Key",
+        "scriptS3Key",
+        "deployedAt",
+        "invocationMode",
+        "streamingEnabled",
+        "status",
+        "runtimeArn",
+        "estimatedDurationSeconds",
+        "commitSha",
+        "pipelineUrl",
+        "jobId",
+        "agUi",
+        "releaseNotes",
+    }
+)
+_LIFECYCLE_UPDATE_FIELDS = frozenset(
+    {
+        "status",
+        "releaseNotes",
+        "evaluationScore",
+        "evaluationReportUrl",
+    }
+)
+
+
+def _reject_unexpected_fields(body: dict[str, Any], *, allowed: frozenset[str]) -> None:
+    unexpected = sorted(set(body) - allowed)
+    if unexpected:
+        fields = ", ".join(unexpected)
+        raise ValueError(f"Unsupported agent lifecycle fields: {fields}")
+
+
+def _require_release_evidence(body: dict[str, Any], *, status: AgentStatus) -> str:
+    release_notes = shared._str_or_none(body.get("releaseNotes"))
+    if release_notes is None:
+        raise ValueError(f"releaseNotes is required when status is {status.value}")
+    return release_notes
+
+
+def _require_existing_approval_evidence(
+    existing: dict[str, Any],
+    *,
+    agent_name: str,
+    version: str,
+) -> None:
+    approved_by = shared._str_or_none(existing.get("approved_by"))
+    approved_at = shared._str_or_none(existing.get("approved_at"))
+    approval_notes = shared._str_or_none(existing.get("release_notes"))
+    if approved_by and approved_at and approval_notes:
+        return
+    raise ValueError(
+        f"Agent version {agent_name}:{version} is missing immutable approval evidence; "
+        "transition to promoted or rolled_back is not allowed"
+    )
+
+
 def _normalize_ag_ui_metadata(raw_value: Any) -> dict[str, Any]:
     if raw_value is None:
         return {
@@ -65,6 +128,7 @@ def handle_register_agent(
     shared._require_admin(caller)
     shared._require_platform_actor(caller)
     body = shared._require_json_body(event)
+    _reject_unexpected_fields(body, allowed=_REGISTER_MUTABLE_FIELDS)
 
     agent_name = shared._str_or_none(body.get("agentName"))
     version = shared._str_or_none(body.get("version"))
@@ -145,6 +209,7 @@ def handle_update_agent_version(
     shared._require_admin(caller)
     shared._require_platform_actor(caller)
     body = shared._require_json_body(event)
+    _reject_unexpected_fields(body, allowed=_LIFECYCLE_UPDATE_FIELDS)
 
     new_status = shared._str_or_none(body.get("status"))
     if not new_status:
@@ -160,26 +225,33 @@ def handle_update_agent_version(
 
     current_status = normalize_agent_status(existing.get("status"), default=AgentStatus.PROMOTED)
     shared._validate_agent_status_transition(current_status, new_agent_status)
+    if new_agent_status is AgentStatus.APPROVED:
+        _require_release_evidence(body, status=new_agent_status)
+    if new_agent_status in {AgentStatus.PROMOTED, AgentStatus.ROLLED_BACK}:
+        _require_existing_approval_evidence(existing, agent_name=agent_name, version=version)
+    if new_agent_status is AgentStatus.ROLLED_BACK:
+        _require_release_evidence(body, status=new_agent_status)
+    if (
+        body.get("evaluationScore") is not None or body.get("evaluationReportUrl") is not None
+    ) and new_agent_status is not AgentStatus.PROMOTED:
+        raise ValueError("evaluationScore and evaluationReportUrl are only allowed for promoted")
 
     updated_at = shared._iso(shared._now_utc())
     attrs: dict[str, Any] = {
         "status": new_agent_status.value,
         "updated_at": updated_at,
     }
-    if new_agent_status in {AgentStatus.APPROVED, AgentStatus.PROMOTED}:
+    if new_agent_status is AgentStatus.APPROVED:
         attrs["approved_by"] = caller.sub
         attrs["approved_at"] = updated_at
+        attrs["release_notes"] = _require_release_evidence(body, status=new_agent_status)
     if new_agent_status is AgentStatus.ROLLED_BACK:
         attrs["rolled_back_by"] = caller.sub
         attrs["rolled_back_at"] = updated_at
-    if body.get("releaseNotes") is not None:
-        attrs["release_notes"] = str(body["releaseNotes"])
     if body.get("evaluationScore") is not None:
         attrs["evaluation_score"] = float(body["evaluationScore"])
     if body.get("evaluationReportUrl") is not None:
         attrs["evaluation_report_url"] = str(body["evaluationReportUrl"])
-    if body.get("agUi") is not None:
-        attrs.update(_normalize_ag_ui_metadata(body.get("agUi")))
 
     update_expression, expr_names, expr_values = shared._build_update_expression(attrs)
     db.update_item(
@@ -195,7 +267,7 @@ def handle_update_agent_version(
     if detail_type is not None and new_agent_status != current_status:
         approved_by = shared._str_or_none(attrs.get("approved_by") or existing.get("approved_by"))
         approved_at = shared._str_or_none(attrs.get("approved_at") or existing.get("approved_at"))
-        release_notes = shared._str_or_none(attrs.get("release_notes"))
+        release_notes = shared._str_or_none(body.get("releaseNotes"))
         evaluation_score_raw = attrs.get("evaluation_score")
         evaluation_score = float(evaluation_score_raw) if evaluation_score_raw is not None else None
         evaluation_report_url = shared._str_or_none(attrs.get("evaluation_report_url"))

@@ -865,7 +865,7 @@ paths:
       tags: [Platform]
       operationId: updateAgentVersion
       summary: Update agent version status
-      description: Advances a version through the canonical release lifecycle or marks the currently promoted version as `rolled_back`. Successful promotion and rollback transitions emit the `AgentReleaseLifecycleEvent` detail payload on the platform EventBridge bus using detail types `platform.agent_version.promoted` and `platform.agent_version.rolled_back`.
+      description: Advances a version through the canonical release lifecycle or marks the currently promoted version as `rolled_back`. Lifecycle updates may mutate only `status` plus release-governance evidence fields (`releaseNotes`, `evaluationScore`, `evaluationReportUrl`). `approved` requires `releaseNotes`; `promoted` requires pre-existing immutable approval evidence on the release record; `rolled_back` requires `releaseNotes`. Successful promotion and rollback transitions emit the `AgentReleaseLifecycleEvent` detail payload on the platform EventBridge bus using detail types `platform.agent_version.promoted` and `platform.agent_version.rolled_back`.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -887,6 +887,12 @@ paths:
                   $ref: "#/components/schemas/AgentStatus"
                 releaseNotes:
                   type: string
+                evaluationScore:
+                  type: number
+                  format: float
+                evaluationReportUrl:
+                  type: string
+                  format: uri
       responses:
         "200":
           description: Status updated
@@ -1438,7 +1444,7 @@ components:
           $ref: "#/components/schemas/UtcTimestamp"
         releaseNotes:
           type: string
-          description: Operator-supplied release or rollback evidence.
+          description: Immutable approval evidence recorded when the release reaches `approved`.
         runtimeArn:
           type: string
         estimatedDurationSeconds:

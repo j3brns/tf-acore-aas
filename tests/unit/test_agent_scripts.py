@@ -9,7 +9,6 @@ from typing import Any
 
 import boto3
 import pytest
-from botocore.exceptions import ClientError
 from moto import mock_aws
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -385,17 +384,13 @@ transport = "sse"
 endpoint = "https://ag-ui.example.com/connect"
 """)
     stored_items: list[dict[str, object]] = []
-    latest_version_writes: list[dict[str, object]] = []
-
-    def put_item(**kwargs):
-        stored_items.append(kwargs["Item"])
-
-    def put_parameter(**kwargs):
-        latest_version_writes.append(kwargs)
-
-    fake_ssm = types.SimpleNamespace(put_parameter=put_parameter)
+    seen_request: dict[str, object] = {}
+    fake_ssm = types.SimpleNamespace()
 
     def fake_request_api(url, method, token, body=None):
+        seen_request["url"] = url
+        seen_request["method"] = method
+        seen_request["token"] = token
         stored_items.append(body)
         return {"status": "registered"}
 
@@ -429,21 +424,18 @@ endpoint = "https://ag-ui.example.com/connect"
     assert item["layerHash"] == ""
     assert item["layerS3Key"] == ""
     assert item["scriptS3Key"] == ""
+    assert item["status"] == "built"
     assert item["agUi"] == {
         "enabled": True,
         "transport": "sse",
         "endpoint": "https://ag-ui.example.com/connect",
     }
     assert item["runtimeArn"] == "arn:runtime:echo-agent"
-
-    assert latest_version_writes == [
-        {
-            "Name": f"/platform/agents/{env}/{agent_name}/latest-version",
-            "Value": "1.2.3",
-            "Type": "String",
-            "Overwrite": True,
-        }
-    ]
+    assert seen_request == {
+        "url": "http://localhost/v1/platform/agents",
+        "method": "POST",
+        "token": "fake-token",
+    }
 
 
 def test_register_agent_returns_false_when_dynamodb_write_fails(tmp_path, monkeypatch):
@@ -518,26 +510,13 @@ tier_minimum = "basic"
 handler = "handler:invoke"
 invocation_mode = "sync"
 """)
-    put_item_calls: list[dict[str, object]] = []
-
-    def failing_put_parameter(*args, **kwargs):
-        if kwargs.get("Name") == f"/platform/agents/{env}/{agent_name}/latest-version":
-            raise ClientError(
-                {"Error": {"Code": "InternalServerError", "Message": "ssm write failed"}},
-                "PutParameter",
-            )
-        return None
-
-    fake_table = types.SimpleNamespace(put_item=lambda **kwargs: put_item_calls.append(kwargs))
-    fake_resource = types.SimpleNamespace(Table=lambda table_name: fake_table)
-    fake_ssm = types.SimpleNamespace(put_parameter=failing_put_parameter)
+    fake_ssm = types.SimpleNamespace()
 
     monkeypatch.setattr(
         register_agent,
         "boto3",
         types.SimpleNamespace(
             client=lambda service_name, **kwargs: fake_ssm,
-            resource=lambda service_name, **kwargs: fake_resource,
         ),
     )
     monkeypatch.setattr(
@@ -557,7 +536,7 @@ invocation_mode = "sync"
     monkeypatch.setenv("API_BASE_URL", "http://localhost")
     monkeypatch.setenv("PLATFORM_ACCESS_TOKEN", "fake-token")
 
-    assert register_agent.register_agent(agent_name, env, None, None) is False
+    assert register_agent.register_agent(agent_name, env, None, None) is True
 
 
 def test_register_agent_container_allows_missing_zip_metadata(tmp_path, monkeypatch):

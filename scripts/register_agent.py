@@ -127,8 +127,6 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
             return False
 
     deployed_at = datetime.datetime.now(datetime.UTC).isoformat()
-    # Default status: PENDING for prod (requires approval), RELEASED for others
-    default_status = "pending" if env == "prod" else "released"
 
     body = {
         "agentName": agent_name,
@@ -141,7 +139,7 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
         "deployedAt": deployed_at,
         "invocationMode": manifest.invocation_mode.value,
         "streamingEnabled": manifest.streaming_enabled,
-        "status": default_status,
+        "status": "built",
         "runtimeArn": runtime_arn,
         "estimatedDurationSeconds": manifest.estimated_duration_seconds,
         "commitSha": os.environ.get("CI_COMMIT_SHA"),
@@ -180,20 +178,11 @@ def register_agent(agent_name: str, env: str, api_base_url: str | None, token: s
         logger.error("PLATFORM_ACCESS_TOKEN environment variable is not set")
         return False
 
-    register_url = f"{api_url.rstrip('/')}/v1/platform/agents/register"
+    register_url = f"{api_url.rstrip('/')}/v1/platform/agents"
 
     logger.info(f"Registering agent '{agent_name}' v{manifest.version} via API in {env}")
     try:
         _request_api(register_url, "POST", api_token, body)
-
-        # Update latest-version in SSM if released (as a fallback/convenience for infra)
-        if default_status == "released":
-            ssm.put_parameter(
-                Name=f"/platform/agents/{env}/{agent_name}/latest-version",
-                Value=manifest.version,
-                Type="String",
-                Overwrite=True,
-            )
     except Exception as e:
         logger.error(f"Registration failed: {e}")
         return False

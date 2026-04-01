@@ -2380,10 +2380,20 @@ def test_platform_register_agent_rejects_non_built_initial_status(
 def test_platform_promote_agent_updates_metadata_and_emits_event(
     fake_state: dict[str, Any],
 ) -> None:
-    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="approved")
+    _seed_agent_version(
+        fake_state,
+        agent_name="echo-agent",
+        version="1.2.0",
+        status="approved",
+        extra={
+            "approved_by": "approver-007",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "operator approval evidence",
+        },
+    )
     event = _event(
         method="PATCH",
-        body={"status": "promoted", "releaseNotes": "approved release evidence recorded"},
+        body={"status": "promoted", "releaseNotes": "promotion executed by operator"},
         caller_tenant_id="platform",
         roles=["Platform.Admin"],
     )
@@ -2394,9 +2404,9 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
     assert response["statusCode"] == 200
     item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]
     assert item["status"] == "promoted"
-    assert item["approved_by"] == "user-123"
-    assert item["approved_at"] == "2026-02-25T12:00:00Z"
-    assert item["release_notes"] == "approved release evidence recorded"
+    assert item["approved_by"] == "approver-007"
+    assert item["approved_at"] == "2026-02-24T18:30:00Z"
+    assert item["release_notes"] == "operator approval evidence"
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.promoted"
     assert detail["schemaVersion"] == 1
@@ -2415,9 +2425,33 @@ def test_platform_promote_agent_updates_metadata_and_emits_event(
     assert detail["version"] == "1.2.0"
     assert detail["previousStatus"] == "approved"
     assert detail["status"] == "promoted"
-    assert detail["approvedBy"] == "user-123"
-    assert detail["approvedAt"] == "2026-02-25T12:00:00Z"
-    assert detail["releaseNotes"] == "approved release evidence recorded"
+    assert detail["approvedBy"] == "approver-007"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "promotion executed by operator"
+
+
+def test_platform_approve_agent_records_immutable_approval_evidence(
+    fake_state: dict[str, Any],
+) -> None:
+    _seed_agent_version(
+        fake_state, agent_name="approve-agent", version="1.0.0", status="evaluation_passed"
+    )
+    event = _event(
+        method="PATCH",
+        body={"status": "approved", "releaseNotes": "two-person approval recorded"},
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents/approve-agent/versions/1.0.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 200
+    item = fake_state["db"].items[("AGENT#approve-agent", "VERSION#1.0.0")]
+    assert item["status"] == "approved"
+    assert item["approved_by"] == "user-123"
+    assert item["approved_at"] == "2026-02-25T12:00:00Z"
+    assert item["release_notes"] == "two-person approval recorded"
 
 
 def test_platform_rejects_invalid_agent_status_transition(fake_state: dict[str, Any]) -> None:
@@ -2468,6 +2502,9 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
         version="1.0.0",
         status="approved",
         extra={
+            "approved_by": "release-admin",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "approval evidence",
             "commit_sha": "abc12345",
             "pipeline_url": "https://gitlab.com/pipeline/123",
             "job_id": "job-456",
@@ -2496,21 +2533,78 @@ def test_platform_register_and_promote_with_evidence(fake_state: dict[str, Any])
     assert item["status"] == "promoted"
     assert item["evaluation_score"] == Decimal("0.98")
     assert item["evaluation_report_url"] == "https://frankfurt.aws/eval/789"
-    assert item["approved_by"] == "user-123"
+    assert item["approved_by"] == "release-admin"
+    assert item["approved_at"] == "2026-02-24T18:30:00Z"
+    assert item["release_notes"] == "approval evidence"
 
     # Verify event detail
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.promoted"
+    assert detail["approvedBy"] == "release-admin"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "Score: 0.98"
     assert detail["evaluationScore"] == 0.98
     assert detail["evaluationReportUrl"] == "https://frankfurt.aws/eval/789"
 
 
-def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
-    _seed_agent_version(fake_state, agent_name="rollback-agent", version="1.0.0", status="promoted")
+def test_platform_promote_requires_existing_approval_evidence(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(fake_state, agent_name="echo-agent", version="1.2.0", status="approved")
 
     event = _event(
         method="PATCH",
-        body={"status": "rolled_back"},
+        body={"status": "promoted"},
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+
+
+def test_platform_rejects_immutable_agent_metadata_updates(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(
+        fake_state,
+        agent_name="echo-agent",
+        version="1.2.0",
+        status="approved",
+        extra={
+            "approved_by": "release-admin",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "approval evidence",
+        },
+    )
+
+    event = _event(
+        method="PATCH",
+        body={"status": "promoted", "agUi": {"enabled": True, "endpoint": "https://example.com"}},
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents/echo-agent/versions/1.2.0"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+
+
+def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
+    _seed_agent_version(
+        fake_state,
+        agent_name="rollback-agent",
+        version="1.0.0",
+        status="promoted",
+        extra={
+            "approved_by": "release-admin",
+            "approved_at": "2026-02-24T18:30:00Z",
+            "release_notes": "approval evidence",
+        },
+    )
+
+    event = _event(
+        method="PATCH",
+        body={"status": "rolled_back", "releaseNotes": "runtime regression confirmed"},
         roles=["Platform.Admin"],
         caller_tenant_id="platform",
     )
@@ -2523,11 +2617,15 @@ def test_platform_rollback_with_metadata(fake_state: dict[str, Any]) -> None:
     assert item["status"] == "rolled_back"
     assert item["rolled_back_by"] == "user-123"
     assert item["rolled_back_at"] == "2026-02-25T12:00:00Z"
+    assert item["release_notes"] == "approval evidence"
 
     # Verify event detail
     detail_type, detail = _last_event_detail(fake_state)
     assert detail_type == "platform.agent_version.rolled_back"
     assert detail["status"] == "rolled_back"
+    assert detail["approvedBy"] == "release-admin"
+    assert detail["approvedAt"] == "2026-02-24T18:30:00Z"
+    assert detail["releaseNotes"] == "runtime regression confirmed"
     assert detail["rolledBackBy"] == "user-123"
     assert detail["rolledBackAt"] == "2026-02-25T12:00:00Z"
 
@@ -2537,6 +2635,9 @@ def test_platform_rollback_agent_emits_event(fake_state: dict[str, Any]) -> None
     fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["approved_by"] = "release-admin"
     fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["approved_at"] = (
         "2026-02-24T18:30:00Z"
+    )
+    fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.0")]["release_notes"] = (
+        "approval evidence"
     )
     event = _event(
         method="PATCH",
