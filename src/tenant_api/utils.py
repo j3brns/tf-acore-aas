@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -11,6 +12,11 @@ def now_utc() -> datetime:
     if _OVERRIDE_NOW:
         return _OVERRIDE_NOW
     return datetime.now(UTC)
+
+
+def get_retry_jitter(base_delay: float) -> float:
+    """Return a random jittered delay between 0 and base_delay using Full Jitter strategy."""
+    return secrets.SystemRandom().uniform(0, base_delay)
 
 
 def iso(dt: datetime) -> str:

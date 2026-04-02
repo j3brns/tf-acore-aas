@@ -305,9 +305,14 @@ def _enqueue_retry(job_item: dict[str, Any], attempt: int, *, delay_seconds: int
     if WEBHOOK_RETRY_QUEUE_URL is None:
         raise RuntimeError("WEBHOOK_RETRY_QUEUE_URL is not configured")
 
+    # Add jitter to delay to prevent thundering herd
+    from src.bridge.utils import get_retry_jitter
+
+    jittered_delay = int(get_retry_jitter(float(delay_seconds)))
+
     get_sqs().send_message(
         QueueUrl=WEBHOOK_RETRY_QUEUE_URL,
-        DelaySeconds=delay_seconds,
+        DelaySeconds=max(0, min(900, jittered_delay)),
         MessageBody=json.dumps(
             {
                 "tenantId": job_item.get("tenant_id"),

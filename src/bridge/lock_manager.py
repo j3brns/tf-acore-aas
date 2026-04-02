@@ -85,7 +85,9 @@ def trigger_failover(
     if not lock_id:
         logger.info("Failover in progress by another instance, skipping update")
         # Wait a bit and re-fetch config
-        time.sleep(2)
+        from src.bridge.utils import get_retry_jitter
+
+        time.sleep(get_retry_jitter(2.0))
         config = get_config_fn(force_refresh=True)
         return config.get("runtime_region", current_region)
 

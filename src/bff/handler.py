@@ -78,7 +78,10 @@ def _resolve_secret(secret_arn: str | None, env_value: str | None, env_name: str
                 extra={"attempt": attempt},
             )
             if attempt < _SECRET_FETCH_RETRIES:
-                time.sleep(_SECRET_FETCH_BASE_DELAY_SECONDS * attempt)
+                from src.tenant_api.utils import get_retry_jitter
+
+                delay = get_retry_jitter(_SECRET_FETCH_BASE_DELAY_SECONDS * attempt)
+                time.sleep(delay)
 
     # Fallback to direct environment variable if secret fetch fails
     return _required_env_value(env_name, env_value)
