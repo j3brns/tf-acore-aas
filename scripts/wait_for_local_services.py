@@ -39,9 +39,9 @@ def wait_for_service(
     while time.monotonic() < deadline:
         try:
             response = fetch(check.url, interval_seconds)
-            if hasattr(response, "__enter__"):
-                with response:
-                    return
+            closer = getattr(response, "close", None)
+            if callable(closer):
+                closer()
             return
         except OSError as exc:
             last_error = str(exc)
