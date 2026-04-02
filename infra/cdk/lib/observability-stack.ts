@@ -33,6 +33,7 @@ export class ObservabilityStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ObservabilityStackProps) {
     super(scope, id, props);
     const alarmNamePrefix = this.stackName;
+    const agentCoreMetricNamespace = 'AWS/BedrockAgentCore';
     const runtimeRegions = ['eu-west-1', 'eu-central-1'];
 
     // --- 1. Platform Operations Dashboard ---
@@ -162,7 +163,7 @@ export class ObservabilityStack extends cdk.Stack {
         left: runtimeRegions.map(
           (region) =>
             new cloudwatch.Metric({
-              namespace: 'AgentCore',
+              namespace: agentCoreMetricNamespace,
               metricName: 'ConcurrentSessions',
               region,
               statistic: 'Maximum',
@@ -172,7 +173,7 @@ export class ObservabilityStack extends cdk.Stack {
         right: runtimeRegions.map(
           (region) =>
             new cloudwatch.Metric({
-              namespace: 'AgentCore',
+              namespace: agentCoreMetricNamespace,
               metricName: 'ExecutionErrors',
               region,
               statistic: 'Sum',
@@ -338,12 +339,12 @@ export class ObservabilityStack extends cdk.Stack {
     });
 
     // FM-7: AgentCore Memory unavailable (Degraded mode metric)
-    // Note: AgentCore metrics are custom metrics from the SDK
+    // Keep alarm reads aligned with the namespace exported by AgentCoreStack metric streams.
     new cloudwatch.Alarm(this, 'Fm7AgentCoreMemoryDegradedAlarm', {
       alarmName: `${alarmNamePrefix}-FM-7-AgentCoreMemoryDegraded`,
       alarmDescription: 'AgentCore Memory is in degraded mode',
       metric: new cloudwatch.Metric({
-        namespace: 'AgentCore',
+        namespace: agentCoreMetricNamespace,
         metricName: 'DegradedMode',
         dimensionsMap: { Service: 'Memory' },
         period: cdk.Duration.minutes(5),
