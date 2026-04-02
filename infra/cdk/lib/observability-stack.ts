@@ -33,6 +33,7 @@ export class ObservabilityStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ObservabilityStackProps) {
     super(scope, id, props);
     const alarmNamePrefix = this.stackName;
+    const runtimeRegions = ['eu-west-1', 'eu-central-1'];
 
     // --- 1. Platform Operations Dashboard ---
 
@@ -157,23 +158,27 @@ export class ObservabilityStack extends cdk.Stack {
         height: 1,
       }),
       new cloudwatch.GraphWidget({
-        title: 'AgentCore Runtime (eu-west-1)',
-        left: [
-          new cloudwatch.Metric({
-            namespace: 'AgentCore',
-            metricName: 'ConcurrentSessions',
-            region: 'eu-west-1',
-            statistic: 'Maximum',
-          }),
-        ],
-        right: [
-          new cloudwatch.Metric({
-            namespace: 'AgentCore',
-            metricName: 'ExecutionErrors',
-            region: 'eu-west-1',
-            statistic: 'Sum',
-          }),
-        ],
+        title: 'AgentCore Runtime (Primary + Failover)',
+        left: runtimeRegions.map(
+          (region) =>
+            new cloudwatch.Metric({
+              namespace: 'AgentCore',
+              metricName: 'ConcurrentSessions',
+              region,
+              statistic: 'Maximum',
+              label: `${region} ConcurrentSessions`,
+            }),
+        ),
+        right: runtimeRegions.map(
+          (region) =>
+            new cloudwatch.Metric({
+              namespace: 'AgentCore',
+              metricName: 'ExecutionErrors',
+              region,
+              statistic: 'Sum',
+              label: `${region} ExecutionErrors`,
+            }),
+        ),
         width: 12,
       }),
       new cloudwatch.GraphWidget({

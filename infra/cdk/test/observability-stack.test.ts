@@ -71,6 +71,22 @@ describe('ObservabilityStack (TASK-026)', () => {
     });
   });
 
+  test('includes both primary and failover AgentCore runtime regions in the dashboard view', () => {
+    const template = synthStack();
+    const dashboards = template.findResources('AWS::CloudWatch::Dashboard') as Record<
+      string,
+      { Properties?: { DashboardBody?: unknown } }
+    >;
+    const dashboard = Object.values(dashboards)[0];
+    const dashboardBody = JSON.stringify(dashboard.Properties?.DashboardBody);
+
+    expect(dashboardBody).toContain('AgentCore Runtime (Primary + Failover)');
+    expect(dashboardBody).toContain('eu-west-1 ConcurrentSessions');
+    expect(dashboardBody).toContain('eu-central-1 ConcurrentSessions');
+    expect(dashboardBody).toContain('eu-west-1 ExecutionErrors');
+    expect(dashboardBody).toContain('eu-central-1 ExecutionErrors');
+  });
+
   test('creates FM-1 Runtime Region Unavailable alarm', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
