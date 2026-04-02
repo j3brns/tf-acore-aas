@@ -32,6 +32,15 @@ def json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+def as_float(value: Any, *, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a number")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number") from None
+
+
 def coerce_positive_int(value: Any, *, default: int) -> int:
     try:
         parsed = int(str(value))

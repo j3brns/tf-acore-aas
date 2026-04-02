@@ -31,12 +31,14 @@ from data_access.models import (
 )
 
 from src.tenant_api import (
+    agent_logic,
     auth,
     constants,
     db_factory,
     db_utils,
     events,
     http_utils,
+    lifecycle_logic,
     models,
     secrets_manager,
     serialization,
@@ -191,9 +193,34 @@ _require_aws_account_id = require_aws_account_id
 _parse_utc_timestamp = parse_utc_timestamp
 _parse_optional_utc_timestamp = parse_optional_utc_timestamp
 _coerce_positive_int = coerce_positive_int
-_as_float = utils.coerce_positive_int
+_as_float = utils.as_float
 _json_default = json_default
 _PLATFORM_TENANT_ID = PLATFORM_TENANT_ID
+
+_normalize_agent_status = agent_logic.normalize_agent_status_val
+_validate_agent_status_transition = agent_logic.validate_agent_status_transition
+_agent_event_detail_type = agent_logic.agent_event_detail_type
+_build_agent_release_lifecycle_event_detail = agent_logic.build_agent_release_lifecycle_event_detail
+_platform_audit_envelope = agent_logic._platform_audit_envelope
+
+_normalize_tier = lifecycle_logic.normalize_tier
+_normalize_status = lifecycle_logic.normalize_status
+_normalize_tenant_invite_role = lifecycle_logic.normalize_tenant_invite_role
+_platform_control_response = lifecycle_logic.platform_control_response
+
+_audit_export_bucket = db_factory.audit_export_bucket_name
+_tenant_s3_for_scope = db_factory.s3_for_tenant
+
+
+def _audit_export_url_expiry_seconds() -> int:
+    return constants.AUDIT_EXPORT_URL_EXPIRY_SECONDS
+
+
+def _failover_lock_name() -> str:
+    return os.environ.get(FAILOVER_LOCK_NAME_ENV, DEFAULT_FAILOVER_LOCK_NAME)
+
+
+_agents_table_name = db_factory.agents_table_name
 
 _TENANTS_TABLE_ENV = TENANTS_TABLE_ENV
 _AGENTS_TABLE_ENV = AGENTS_TABLE_ENV

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import secrets
+import urllib.parse
+import uuid
 from typing import Any
 
 try:
@@ -58,7 +61,7 @@ def handle_register_webhook(
     if callback_url is None:
         raise ValueError("callbackUrl is required")
 
-    parsed_url = shared.urllib.parse.urlparse(callback_url)
+    parsed_url = urllib.parse.urlparse(callback_url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         return shared._error(422, "UNPROCESSABLE_ENTITY", "callbackUrl must be a valid URL")
 
@@ -92,9 +95,9 @@ def handle_register_webhook(
             422, "UNPROCESSABLE_ENTITY", "description must be 256 characters or fewer"
         )
 
-    webhook_id = str(shared.uuid.uuid4())
+    webhook_id = str(uuid.uuid4())
     now = shared._now_utc()
-    webhook_secret = shared.secrets.token_urlsafe(32)
+    webhook_secret = secrets.token_urlsafe(32)
 
     webhook = {
         "PK": f"TENANT#{tenant_id}",

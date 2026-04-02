@@ -67,6 +67,19 @@ class QueueSelection:
 
 
 @dataclass(slots=True)
+class AuditFinding:
+    severity: Literal["error", "warning"]
+    issue_number: int
+    message: str
+
+
+@dataclass(slots=True)
+class SessionPair:
+    label: str
+    session_name: str
+
+
+@dataclass(slots=True)
 class BatchLaunchResult:
     issue_number: int
     agent: str
