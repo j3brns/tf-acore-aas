@@ -28,12 +28,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from scripts.issue_queue import (
-    build_queue,
-    fetch_repo_issues,
-    parse_issue_meta,
-)
-
 from scripts.issue_tool.agent_launch import (
     AGENT_CAPABILITIES,
     DEFAULT_INTERACTIVE_AGENT_POOL,
@@ -98,6 +92,11 @@ from scripts.issue_tool.github_client import (
     gh_json,
     gh_text,
     shutil_which,
+)
+from scripts.issue_tool.issue_queue import (
+    build_queue,
+    fetch_repo_issues,
+    parse_issue_meta,
 )
 from scripts.issue_tool.logic import (
     assert_issue_startable,
