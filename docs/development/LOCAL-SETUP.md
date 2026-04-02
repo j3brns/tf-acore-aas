@@ -58,11 +58,11 @@ After `make dev`, two test tenants are available. Their tenant IDs and JWTs are 
 
 | Variable              | Value      | Purpose  |
 |-----------------------|------------|----------|
-| BASIC_TENANT_JWT      | t-basic-001 | basic    |
-| PREMIUM_TENANT_JWT    | t-premium-001 | premium  |
-| ADMIN_JWT             | t-basic-001 | Platform.Admin |
+| BASIC_TENANT_JWT      | t-test-001 | basic    |
+| PREMIUM_TENANT_JWT    | t-test-002 | premium  |
+| ADMIN_JWT             | t-test-001 | Platform.Admin |
 
-Use these with `make agent-invoke AGENT=echo-agent TENANT=t-basic-001 ENV=local` or in your tests via `conftest.py`.
+Use these with `make dev-invoke` for the local bridge path, or in your tests via `conftest.py`.
 
 ## Running Tests
 

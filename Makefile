@@ -354,7 +354,7 @@ dev-invoke:
 	@TENANT=$$(grep BASIC_TENANT_ID .env.test 2>/dev/null | cut -d= -f2); \
 	uv run python scripts/dev-invoke.py \
 		--agent echo-agent \
-		--tenant "$${TENANT:-t-basic-001}" \
+		--tenant "$${TENANT:-t-test-001}" \
 		--prompt "$(or $(PROMPT),Hello from local environment)" \
 		--mode "$(or $(MODE),sync)"
 
@@ -560,12 +560,12 @@ agentcore-destroy:
 	@test -n "$(AGENT)" || (echo "ERROR: AGENT required. Usage: make agentcore-destroy AGENT=my-agent" && exit 1)
 	cd agents/$(AGENT) && uv run agentcore destroy
 
-## agent-invoke: Invoke a deployed agent
-## Usage: make agent-invoke AGENT=my-agent TENANT=t-abc123 [PROMPT="hello"] [MODE=sync]
+## agent-invoke: Invoke a deployed agent directly via the Bridge Lambda
+## Usage: make agent-invoke AGENT=my-agent TENANT=t-abc123 [PROMPT="hello"] [ENV=dev]
 agent-invoke:
 	@test -n "$(AGENT)" || (echo "ERROR: AGENT required" && exit 1)
 	@test -n "$(TENANT)" || (echo "ERROR: TENANT required" && exit 1)
-	uv run python scripts/dev-invoke.py \
+	uv run python scripts/agent-invoke.py \
 		--agent $(AGENT) \
 		--tenant $(TENANT) \
 		--env $(ENV) \

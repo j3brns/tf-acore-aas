@@ -27,11 +27,11 @@ make agentcore-invoke-runtime AGENT=my-agent # Invoke the toolkit-managed runtim
 
 # 5. (Optional) Test platform integration locally (requires Docker)
 make dev                                    # Start local environment (LocalStack + mocks)
-make agent-invoke AGENT=my-agent TENANT=t-basic-001 ENV=local  # Invoke via local bridge
+make dev-invoke                              # Invoke via local bridge with seeded local fixtures
 
 # 6. Validate locally, then push through A5C to AWS dev (real compute)
 make agent-push AGENT=my-agent ENV=dev      # Package, run agent tests, deploy to Runtime, and register
-make agent-invoke AGENT=my-agent ENV=dev    # Invoke your agent on real AWS
+make agent-invoke AGENT=my-agent TENANT=t-test-001 ENV=dev  # Invoke your agent on real AWS
 ```
 
 ## Local vs. AWS Development
@@ -297,7 +297,7 @@ This dataset is used by the evaluation gate during pipeline promotion.
   "sync": [
     {
       "id": "basic-greeting",
-      "input": {"prompt": "Hello", "tenantId": "t-basic-001"},
+      "input": {"prompt": "Hello", "tenantId": "t-test-001"},
       "expected": {"result": "Hello back"}
     }
   ]

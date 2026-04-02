@@ -40,7 +40,8 @@ cp -r agents/echo-agent agents/my-first-agent
 # Edit pyproject.toml: change name, version, owner_team
 # Edit handler.py: change the response
 make agent-push AGENT=my-first-agent ENV=dev
-make agent-invoke AGENT=my-first-agent TENANT=t-basic-001 ENV=local PROMPT="hello world"
+make dev-invoke
+make agent-invoke AGENT=my-first-agent TENANT=t-test-001 ENV=dev PROMPT="hello world"
 ```
 
 ## Success Criteria
