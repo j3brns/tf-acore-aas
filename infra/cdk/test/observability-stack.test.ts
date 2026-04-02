@@ -81,6 +81,7 @@ describe('ObservabilityStack (TASK-026)', () => {
     const dashboardBody = JSON.stringify(dashboard.Properties?.DashboardBody);
 
     expect(dashboardBody).toContain('AgentCore Runtime (Primary + Failover)');
+    expect(dashboardBody).toContain('AWS/BedrockAgentCore');
     expect(dashboardBody).toContain('eu-west-1 ConcurrentSessions');
     expect(dashboardBody).toContain('eu-central-1 ConcurrentSessions');
     expect(dashboardBody).toContain('eu-west-1 ExecutionErrors');
@@ -138,6 +139,7 @@ describe('ObservabilityStack (TASK-026)', () => {
     const template = synthStack();
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'ObservabilityStack-FM-7-AgentCoreMemoryDegraded',
+      Namespace: 'AWS/BedrockAgentCore',
       MetricName: 'DegradedMode',
     });
   });
