@@ -94,8 +94,8 @@ These are stable fixture-based renders derived from the current SPA page structu
 
 **LocalStack not starting**: ensure Docker is running (`docker ps` should work).
 
-**make dev-invoke fails with 401**: LocalStack may not have finished seeding.
-Wait 10 seconds and retry, or check `docker compose logs localstack`.
+**make dev-invoke fails with 401**: local startup did not complete cleanly.
+Check `docker compose logs localstack mock-runtime mock-jwks` and rerun `make dev`.
 
 **uv: command not found**: run `source ~/.bashrc` or open a new terminal after install.
 
