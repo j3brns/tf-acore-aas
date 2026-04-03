@@ -40,6 +40,8 @@ This starts:
 - **Mock JWKS endpoint** on :8766 — issues test JWTs
 
 Then seeds LocalStack with two test tenants and all SSM parameters.
+Startup is not considered ready until the post-bootstrap seeded state exists:
+required LocalStack tables, required SSM parameters, and a populated `.env.test`.
 
 ## Verifying the Setup
 
@@ -47,8 +49,9 @@ Then seeds LocalStack with two test tenants and all SSM parameters.
 make dev-invoke
 ```
 
-If this exits cleanly, the local invocation path is wired. Use `make test-int`
-for a stronger end-to-end check once the local stack is running.
+If this exits cleanly, the local invocation path is wired. `make dev` now also
+fails when endpoint health is green but the seeded local state is incomplete.
+Use `make test-int` for a stronger end-to-end check once the local stack is running.
 
 **Note**: The **Mock AgentCore Runtime** returns canned responses (defined in `tests/mocks/mock_runtime/main.py`). It does **not** execute your actual agent code. To test your agent's logic locally, use `make agent-test`.
 

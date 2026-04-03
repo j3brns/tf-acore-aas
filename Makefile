@@ -336,6 +336,7 @@ dev:
 	docker compose up -d
 	uv run python scripts/wait_for_local_services.py
 	uv run python scripts/dev-bootstrap.py
+	uv run python scripts/wait_for_local_services.py --check-seeded-state
 	@echo ""
 	@echo "==> Local environment ready"
 	@echo "    Try: make dev-invoke"

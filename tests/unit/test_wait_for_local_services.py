@@ -79,3 +79,48 @@ def test_main_returns_non_zero_when_a_service_never_becomes_ready(monkeypatch, c
 
     assert rc == 1
     assert "boom" in capsys.readouterr().err
+
+
+def test_verify_seeded_state_rejects_missing_env_test_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeDdb:
+        def list_tables(self) -> dict[str, list[str]]:
+            return {"TableNames": list(wait_for_local_services.REQUIRED_TABLES)}
+
+    class _FakeSsm:
+        def get_parameters(self, *, Names: list[str]) -> dict[str, list[dict[str, str]]]:
+            return {"Parameters": [{"Name": name, "Value": "ok"} for name in Names]}
+
+    clients = iter([_FakeDdb(), _FakeSsm()])
+
+    monkeypatch.setattr(
+        wait_for_local_services.boto3,
+        "client",
+        lambda *args, **kwargs: next(clients),
+    )
+
+    with pytest.raises(RuntimeError, match="missing env file"):
+        wait_for_local_services.verify_seeded_state(
+            localstack_endpoint="http://localhost:4566",
+            aws_region="eu-west-2",
+            env_test_path=tmp_path / ".env.test",
+        )
+
+
+def test_main_returns_non_zero_when_seeded_state_is_incomplete(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        wait_for_local_services,
+        "wait_for_all_services",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        wait_for_local_services,
+        "verify_seeded_state",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("missing env file")),
+    )
+
+    rc = wait_for_local_services.main(["--check-seeded-state"])
+
+    assert rc == 1
+    assert "missing env file" in capsys.readouterr().err
