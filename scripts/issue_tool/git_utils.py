@@ -32,7 +32,12 @@ def eprint(msg: str) -> None:
 
 def repo_root() -> Path:
     try:
-        return Path(run(["git", "rev-parse", "--show-toplevel"]).stdout.strip())
+        common_dir = Path(
+            run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout.strip()
+        )
+        if common_dir.name == ".git":
+            return common_dir.parent.resolve()
+        return Path(run(["git", "rev-parse", "--show-toplevel"]).stdout.strip()).resolve()
     except subprocess.CalledProcessError as exc:
         raise CliError("Not inside a git repository") from exc
 
