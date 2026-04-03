@@ -122,11 +122,12 @@ def _seed_tenant(ddb: Any, *, status: str = "active", budget: float = BUDGET) ->
         Item={
             "PK": f"TENANT#{TENANT_ID}",
             "SK": "METADATA",
-            "tenant_id": TENANT_ID,
-            "app_id": APP_ID,
+            "tenantId": TENANT_ID,
+            "appId": APP_ID,
             "tier": TIER,
             "status": status,
-            "monthly_budget_usd": Decimal(str(budget)),
+            "monthlyBudgetUsd": Decimal(str(budget)),
+            "updatedAt": "2026-02-25T12:00:00Z",
         }
     )
 
@@ -169,10 +170,13 @@ def test_billing_aggregation_and_cost(mock_aws_clients: Any) -> None:
     resp = table.get_item(Key={"PK": f"TENANT#{TENANT_ID}", "SK": f"BILLING#{year_month}"})
     summary = resp["Item"]
 
-    assert summary["total_input_tokens"] == 3000
-    assert summary["total_output_tokens"] == 2000
+    assert summary["tenantId"] == TENANT_ID
+    assert summary["yearMonth"] == year_month
+    assert summary["totalInputTokens"] == 3000
+    assert summary["totalOutputTokens"] == 2000
     # Cost: (3.0 * 0.1) + (2.0 * 0.2) = 0.3 + 0.4 = 0.7
-    assert float(summary["total_cost_usd"]) == 0.7
+    assert float(summary["totalCostUsd"]) == 0.7
+    assert summary["updatedAt"]
 
 
 def test_budget_exceeded_suspension(mock_aws_clients: Any) -> None:
@@ -209,9 +213,12 @@ def test_incremental_update(mock_aws_clients: Any) -> None:
         Item={
             "PK": f"TENANT#{TENANT_ID}",
             "SK": f"BILLING#{year_month}",
-            "total_input_tokens": 5000,
-            "total_output_tokens": 2000,
-            "total_cost_usd": Decimal("1.5"),
+            "tenantId": TENANT_ID,
+            "yearMonth": year_month,
+            "updatedAt": "2026-02-01T00:00:00Z",
+            "totalInputTokens": 5000,
+            "totalOutputTokens": 2000,
+            "totalCostUsd": Decimal("1.5"),
         }
     )
 
@@ -227,10 +234,10 @@ def test_incremental_update(mock_aws_clients: Any) -> None:
     resp = table.get_item(Key={"PK": f"TENANT#{TENANT_ID}", "SK": f"BILLING#{year_month}"})
     summary = resp["Item"]
 
-    assert summary["total_input_tokens"] == 6000
-    assert summary["total_output_tokens"] == 3000
+    assert summary["totalInputTokens"] == 6000
+    assert summary["totalOutputTokens"] == 3000
     # New cost: 1.5 + (1*0.1 + 1*0.2) = 1.5 + 0.3 = 1.8
-    assert float(summary["total_cost_usd"]) == 1.8
+    assert float(summary["totalCostUsd"]) == 1.8
 
 
 def test_missing_pricing_parameter_fails_tenant_and_records_error(mock_aws_clients: Any) -> None:

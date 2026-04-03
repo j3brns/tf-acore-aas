@@ -30,11 +30,8 @@ os.environ["TENANTS_TABLE_NAME"] = "platform-tenants"
 os.environ["INVOCATIONS_TABLE_NAME"] = "platform-invocations"
 
 from src.billing.handler import _get_active_tenants, _process_tenant
-from src.tenant_api.handler import (
-    CallerIdentity,
-    TenantApiDependencies,
-    _handle_platform_billing_status,
-)
+from src.tenant_api.models import CallerIdentity, TenantApiDependencies
+from src.tenant_api.ops_control import handle_platform_billing_status
 
 
 @pytest.fixture
@@ -86,7 +83,7 @@ def test_get_active_tenants_paginated(mock_aws_clients: Any) -> None:
                         {
                             "PK": "TENANT#t0",
                             "SK": "METADATA",
-                            "tenant_id": "t0",
+                            "tenantId": "t0",
                             "status": "active",
                             "tier": "basic",
                         }
@@ -99,14 +96,14 @@ def test_get_active_tenants_paginated(mock_aws_clients: Any) -> None:
                         {
                             "PK": "TENANT#t1",
                             "SK": "METADATA",
-                            "tenant_id": "t1",
+                            "tenantId": "t1",
                             "status": "active",
                             "tier": "basic",
                         },
                         {
                             "PK": "TENANT#t2",
                             "SK": "METADATA",
-                            "tenant_id": "t2",
+                            "tenantId": "t2",
                             "status": "active",
                             "tier": "basic",
                         },
@@ -147,9 +144,9 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
         # handler can extract totals for metric emission and budget enforcement.
         mock_table.update_item.return_value = {
             "Attributes": {
-                "total_input_tokens": 2000,
-                "total_output_tokens": 0,
-                "total_cost_usd": 0.2,
+                "totalInputTokens": 2000,
+                "totalOutputTokens": 0,
+                "totalCostUsd": 0.2,
             }
         }
 
@@ -178,7 +175,7 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
             },
         ]
 
-        tenant = {"tenant_id": tenant_id, "tier": "basic", "app_id": app_id, "status": "active"}
+        tenant = {"tenantId": tenant_id, "tier": "basic", "appId": app_id, "status": "active"}
         _process_tenant(tenant, yesterday)
 
         # CR003: billing now uses atomic ADD update_item instead of put_item.
@@ -191,11 +188,11 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
 
 
 def test_platform_billing_status_pagination(mock_aws_clients: Any) -> None:
-    """Verify that _handle_platform_billing_status paginates through billing summaries."""
+    """Verify that handle_platform_billing_status returns canonical summary fields."""
     year_month = datetime.now(UTC).strftime("%Y-%m")
 
     caller = CallerIdentity(
-        tenant_id="platform-admin",
+        tenant_id="platform",
         app_id="platform-admin",
         tier="premium",
         sub="admin-sub",
@@ -214,33 +211,49 @@ def test_platform_billing_status_pagination(mock_aws_clients: Any) -> None:
         platform_quota_client=MagicMock(),
     )
 
-    with patch("src.tenant_api.handler.TenantScopedDynamoDB") as mock_db_class:
+    with patch("src.tenant_api.ops_control.db_factory.control_plane_db") as mock_control_plane_db:
         mock_db = MagicMock()
-        mock_db_class.return_value = mock_db
-
-        # mock scan_all for BILLING records
+        mock_control_plane_db.return_value = mock_db
         mock_db.scan_all.return_value = [
             {
                 "PK": "TENANT#t1",
                 "SK": f"BILLING#{year_month}",
-                "total_cost_usd": 10.0,
-                "total_input_tokens": 1000,
-                "total_output_tokens": 500,
+                "tenantId": "t1",
+                "totalCostUsd": 10.0,
+                "totalInputTokens": 1000,
+                "totalOutputTokens": 500,
+                "updatedAt": "2026-02-01T00:00:00Z",
             },
             {
                 "PK": "TENANT#t2",
                 "SK": f"BILLING#{year_month}",
-                "total_cost_usd": 20.0,
-                "total_input_tokens": 2000,
-                "total_output_tokens": 1000,
+                "tenantId": "t2",
+                "totalCostUsd": 20.0,
+                "totalInputTokens": 2000,
+                "totalOutputTokens": 1000,
+                "updatedAt": "2026-02-02T00:00:00Z",
             },
         ]
 
-        result = _handle_platform_billing_status(caller, deps)
+        result = handle_platform_billing_status({}, caller, deps)
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["tenantCount"] == 2
-        assert body["totalCostUsd"] == 30.0
-        assert body["totalTokens"] == 4500  # (1000+500) + (2000+1000) = 1500 + 3000 = 4500
+        assert body["yearMonth"] == year_month
+        assert body["summaries"] == [
+            {
+                "tenantId": "t1",
+                "totalInputTokens": 1000,
+                "totalOutputTokens": 500,
+                "totalCostUsd": 10.0,
+                "lastUpdated": "2026-02-01T00:00:00Z",
+            },
+            {
+                "tenantId": "t2",
+                "totalInputTokens": 2000,
+                "totalOutputTokens": 1000,
+                "totalCostUsd": 20.0,
+                "lastUpdated": "2026-02-02T00:00:00Z",
+            },
+        ]
         assert mock_db.scan_all.call_count == 1
