@@ -18,6 +18,17 @@ The platform bootstrap flow assumes one AWS account per environment.
 Record the AWS account ID for the target environment — needed for CDK bootstrap
 and IAM role verification.
 
+Before running any bootstrap step, export:
+
+```bash
+export BOOTSTRAP_ACCOUNT_ID=<target-account-id>
+export PLATFORM_HOME_REGION=eu-west-2
+export AWS_REGION=$PLATFORM_HOME_REGION
+```
+
+The bootstrap flow now fails closed if the active caller account does not match
+`BOOTSTRAP_ACCOUNT_ID` or if `AWS_REGION` does not match `PLATFORM_HOME_REGION`.
+
 ## Entra App Registration (manual — see entra-setup.md)
 
 This step cannot be automated. An Entra admin must create the app registration
@@ -83,6 +94,9 @@ The script checks what already exists before creating resources.
 To re-run a specific step using the corresponding make target:
 ```bash
 export BOOTSTRAP_IAM_USER=<bootstrap-iam-username>
+export BOOTSTRAP_ACCOUNT_ID=<target-account-id>
+export PLATFORM_HOME_REGION=eu-west-2
+export AWS_REGION=$PLATFORM_HOME_REGION
 make bootstrap-secrets ENV=dev          # re-run step: seed-secrets
 make bootstrap-gitlab-oidc ENV=dev      # re-run step: gitlab-oidc
 make bootstrap-post-deploy ENV=dev      # re-run step: post-deploy
@@ -92,6 +106,9 @@ make bootstrap-verify ENV=dev           # re-run step: verify
 Or call bootstrap.py directly with the step name:
 ```bash
 export BOOTSTRAP_IAM_USER=<bootstrap-iam-username>
+export BOOTSTRAP_ACCOUNT_ID=<target-account-id>
+export PLATFORM_HOME_REGION=eu-west-2
+export AWS_REGION=$PLATFORM_HOME_REGION
 uv run python scripts/bootstrap.py --step seed-secrets --env dev
 ```
 

@@ -86,6 +86,51 @@ def test_resolve_agent_record_queries_control_plane_db_for_latest_promoted_versi
     mock_db.query.assert_called_once_with("platform-agents", pk_value="AGENT#echo-agent")
 
 
+def test_resolve_agent_record_skips_promoted_records_with_missing_zip_layer_metadata() -> None:
+    mock_db = MagicMock()
+    mock_db.query.return_value.items = [
+        {
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.1.0",
+            "agent_name": "echo-agent",
+            "version": "1.1.0",
+            "owner_team": "platform",
+            "tier_minimum": "basic",
+            "layer_hash": "",
+            "layer_s3_key": "",
+            "script_s3_key": "script-1",
+            "deployed_at": "2026-01-03T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+            "status": "promoted",
+        },
+        {
+            "PK": "AGENT#echo-agent",
+            "SK": "VERSION#1.0.0",
+            "agent_name": "echo-agent",
+            "version": "1.0.0",
+            "owner_team": "platform",
+            "tier_minimum": "basic",
+            "layer_hash": "hash-0",
+            "layer_s3_key": "layer-0",
+            "script_s3_key": "script-0",
+            "deployed_at": "2026-01-02T00:00:00Z",
+            "invocation_mode": "sync",
+            "streaming_enabled": False,
+            "status": "promoted",
+        },
+    ]
+
+    record = discovery_service.resolve_agent_record(
+        mock_db,
+        agents_table="platform-agents",
+        agent_name="echo-agent",
+    )
+
+    assert record is not None
+    assert record.version == "1.0.0"
+
+
 def test_get_agent_detail_uses_platform_context_db_factory() -> None:
     mock_db = MagicMock()
     mock_db.query.return_value.items = [

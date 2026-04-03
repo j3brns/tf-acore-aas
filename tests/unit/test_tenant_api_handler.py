@@ -438,7 +438,6 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     deps = tenant_api_handler.TenantApiDependencies(
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
-        dynamodb=FakeDynamoDbResource(),
         ssm=FakeSsm(),
         awslambda=FakeLambdaClient(),
         usage_client=FakeUsageClient(),
@@ -2385,6 +2384,62 @@ def test_platform_register_agent_rejects_non_built_initial_status(
 
     assert response["statusCode"] == 400
     assert ("AGENT#echo-agent", "VERSION#1.2.1") not in fake_state["db"].items
+
+
+def test_platform_register_agent_rejects_missing_zip_layer_metadata(
+    fake_state: dict[str, Any],
+) -> None:
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.2",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "",
+            "layerS3Key": "",
+            "scriptS3Key": "scripts/1.2.2.zip",
+            "invocationMode": "sync",
+        },
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 400
+    assert ("AGENT#echo-agent", "VERSION#1.2.2") not in fake_state["db"].items
+
+
+def test_platform_register_agent_allows_container_without_zip_layer_metadata(
+    fake_state: dict[str, Any],
+) -> None:
+    event = _event(
+        method="POST",
+        body={
+            "agentName": "echo-agent",
+            "version": "1.2.6",
+            "ownerTeam": "platform",
+            "tierMinimum": "basic",
+            "layerHash": "",
+            "layerS3Key": "",
+            "scriptS3Key": "",
+            "runtimeArn": "arn:runtime:echo-agent",
+            "invocationMode": "sync",
+        },
+        roles=["Platform.Admin"],
+        caller_tenant_id="platform",
+    )
+    event["path"] = "/v1/platform/agents"
+
+    response = _invoke(event)
+
+    assert response["statusCode"] == 201
+    item = fake_state["db"].items[("AGENT#echo-agent", "VERSION#1.2.6")]
+    assert item["runtime_arn"] == "arn:runtime:echo-agent"
+    assert item["layer_hash"] == ""
+    assert item["layer_s3_key"] == ""
 
 
 def test_platform_promote_agent_updates_metadata_and_emits_event(

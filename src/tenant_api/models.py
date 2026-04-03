@@ -30,7 +30,6 @@ class CallerIdentity:
 class TenantApiDependencies:
     secretsmanager: Any
     events: Any
-    dynamodb: Any
     ssm: Any
     awslambda: Any
     usage_client: Any

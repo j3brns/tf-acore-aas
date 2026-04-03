@@ -24,6 +24,10 @@ export function createPlatformStorage(
   props: { envName: string },
 ): PlatformStorageResources {
   const { envName } = props;
+  const pointInTimeRecoverySpecification = {
+    pointInTimeRecoveryEnabled: true,
+  } satisfies dynamodb.PointInTimeRecoverySpecification;
+
   const tenantsTable = new dynamodb.Table(scope, 'TenantsTable', {
     tableName: 'platform-tenants',
     partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
@@ -32,7 +36,7 @@ export function createPlatformStorage(
     readCapacity: 5,
     writeCapacity: 5,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -53,7 +57,7 @@ export function createPlatformStorage(
     readCapacity: 5,
     writeCapacity: 5,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -66,7 +70,7 @@ export function createPlatformStorage(
     readCapacity: 5,
     writeCapacity: 5,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -80,7 +84,7 @@ export function createPlatformStorage(
     writeCapacity: 1,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
     timeToLiveAttribute: 'ttl',
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -91,7 +95,7 @@ export function createPlatformStorage(
     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
     timeToLiveAttribute: 'expiration',
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -103,7 +107,7 @@ export function createPlatformStorage(
     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
     timeToLiveAttribute: 'ttl',
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -116,7 +120,7 @@ export function createPlatformStorage(
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
     timeToLiveAttribute: 'ttl',
     stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
@@ -128,7 +132,7 @@ export function createPlatformStorage(
     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     encryption: dynamodb.TableEncryption.AWS_MANAGED,
     timeToLiveAttribute: 'ttl',
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification,
     deletionProtection: true,
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });

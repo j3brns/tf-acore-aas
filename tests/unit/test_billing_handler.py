@@ -22,13 +22,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import boto3
 import pytest
 from moto import mock_aws
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.billing.integrations import BillingIntegrations
 
 # Set environment variables for handler
 os.environ["AWS_REGION"] = "eu-west-2"
@@ -54,10 +56,7 @@ BUDGET = 5.0
 @pytest.fixture
 def mock_aws_clients() -> Generator[None, None, None]:
     with mock_aws():
-        billing_handler._ssm = None
-        billing_handler._events = None
-        billing_handler._cloudwatch = None
-        billing_handler._pricing_provider = None
+        billing_handler._integrations = None
 
         # Setup DynamoDB
         ddb = boto3.resource("dynamodb", region_name="eu-west-2")
@@ -108,10 +107,7 @@ def mock_aws_clients() -> Generator[None, None, None]:
 
         yield
 
-        billing_handler._ssm = None
-        billing_handler._events = None
-        billing_handler._cloudwatch = None
-        billing_handler._pricing_provider = None
+        billing_handler._integrations = None
 
 
 def _seed_tenant(ddb: Any, *, status: str = "active", budget: float = BUDGET) -> None:
@@ -334,7 +330,14 @@ def test_billing_emits_token_metrics(mock_aws_clients: Any) -> None:
 
     # Run handler with cloudwatch patch
     event = {"date": yesterday.date().isoformat()}
-    with patch("src.billing.handler._cloudwatch") as mock_cw:
+    mock_cw = MagicMock()
+    billing_handler._integrations = BillingIntegrations(
+        ssm=boto3.client("ssm", region_name="eu-west-2"),
+        events=boto3.client("events", region_name="eu-west-2"),
+        cloudwatch=mock_cw,
+        pricing_provider=billing_handler._get_integrations().pricing_provider,
+    )
+    try:
         lambda_handler(event, MagicMock())
 
         # Verify put_metric_data was called with token metrics
@@ -351,3 +354,5 @@ def test_billing_emits_token_metrics(mock_aws_clients: Any) -> None:
                 assert m["Value"] == 1000.0
             if m["MetricName"] == "OutputTokens":
                 assert m["Value"] == 500.0
+    finally:
+        billing_handler._integrations = None

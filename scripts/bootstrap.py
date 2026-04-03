@@ -111,6 +111,14 @@ def require_aws_region() -> str:
     return region
 
 
+def require_bootstrap_account_id() -> str:
+    """Read the intended bootstrap AWS account from environment and fail closed if missing."""
+    account_id = os.environ.get("BOOTSTRAP_ACCOUNT_ID", "").strip()
+    if not account_id:
+        raise RuntimeError("BOOTSTRAP_ACCOUNT_ID must be set")
+    return account_id
+
+
 def _input_value(env_name: str, prompt: str, *, secret: bool) -> str:
     """Read from env first; fall back to interactive prompt."""
     from_env = os.environ.get(env_name)
@@ -160,6 +168,7 @@ def run_command(command: list[str], *, cwd: Path | None = None) -> dict[str, Any
 def build_context(env_name: str) -> BootstrapContext:
     """Create runtime context from environment + caller identity."""
     aws_region = require_aws_region()
+    intended_account_id = require_bootstrap_account_id()
     home_region = os.environ.get("PLATFORM_HOME_REGION", DEFAULT_HOME_REGION)
     runtime_region = os.environ.get("PLATFORM_RUNTIME_REGION", DEFAULT_RUNTIME_REGION)
     fallback_region = os.environ.get("PLATFORM_FALLBACK_REGION", DEFAULT_FALLBACK_REGION)
@@ -173,6 +182,17 @@ def build_context(env_name: str) -> BootstrapContext:
     identity = sts.get_caller_identity()
     account_id = str(identity["Account"])
     caller_arn = str(identity["Arn"])
+
+    if account_id != intended_account_id:
+        raise RuntimeError(
+            "Active AWS account does not match BOOTSTRAP_ACCOUNT_ID "
+            f"(active={account_id} expected={intended_account_id})"
+        )
+    if aws_region != home_region:
+        raise RuntimeError(
+            "AWS_REGION must match PLATFORM_HOME_REGION for bootstrap execution "
+            f"(aws_region={aws_region} home_region={home_region})"
+        )
 
     return BootstrapContext(
         env=env_name,
@@ -378,7 +398,7 @@ def step_seed_secrets(ctx: BootstrapContext) -> dict[str, Any]:
         ),
     }
 
-    secrets_client = boto3.client("secretsmanager", region_name=ctx.aws_region)
+    secrets_client = boto3.client("secretsmanager", region_name=ctx.home_region)
     secret_names: list[str] = []
     created = 0
     updated = 0
@@ -406,7 +426,7 @@ def step_seed_secrets(ctx: BootstrapContext) -> dict[str, Any]:
 
 def validate_seed_secrets(ctx: BootstrapContext) -> dict[str, Any]:
     """Validate required secrets exist."""
-    secrets_client = boto3.client("secretsmanager", region_name=ctx.aws_region)
+    secrets_client = boto3.client("secretsmanager", region_name=ctx.home_region)
     found: list[str] = []
     for template in SECRET_TEMPLATES.values():
         secret_name = template.format(env=ctx.env)

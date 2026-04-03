@@ -18,9 +18,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-import boto3
 from aws_lambda_powertools import Logger, Tracer
-from aws_lambda_powertools.utilities.parameters import SSMProvider
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
 from data_access.client import ControlPlaneDynamoDB, TenantScopedDynamoDB
@@ -30,6 +28,8 @@ from data_access.models import (
     TenantTier,
 )
 
+from src.billing.integrations import BillingIntegrations, build_billing_integrations
+
 logger = Logger(service="billing")
 tracer = Tracer()
 
@@ -38,43 +38,19 @@ TENANTS_TABLE = os.environ["TENANTS_TABLE_NAME"]
 INVOCATIONS_TABLE = os.environ["INVOCATIONS_TABLE_NAME"]
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 
-# Boto3 clients — lazy initialisation (matches handler convention; avoids import-time failures)
-_ssm = None
-_events = None
-_cloudwatch = None
-_pricing_provider = None
+# Billing AWS integrations — lazy initialisation to avoid import-time failures
+_integrations: BillingIntegrations | None = None
 
 
 def _aws_region() -> str:
     return os.environ["AWS_REGION"]
 
 
-def _get_ssm() -> Any:
-    global _ssm
-    if _ssm is None:
-        _ssm = boto3.client("ssm", region_name=_aws_region())
-    return _ssm
-
-
-def _get_events() -> Any:
-    global _events
-    if _events is None:
-        _events = boto3.client("events", region_name=_aws_region())
-    return _events
-
-
-def _get_cloudwatch() -> Any:
-    global _cloudwatch
-    if _cloudwatch is None:
-        _cloudwatch = boto3.client("cloudwatch", region_name=_aws_region())
-    return _cloudwatch
-
-
-def _get_pricing_provider() -> SSMProvider:
-    global _pricing_provider
-    if _pricing_provider is None:
-        _pricing_provider = SSMProvider(boto3_client=_get_ssm())
-    return _pricing_provider
+def _get_integrations() -> BillingIntegrations:
+    global _integrations
+    if _integrations is None:
+        _integrations = build_billing_integrations(region=_aws_region())
+    return _integrations
 
 
 class PricingResolutionError(RuntimeError):
@@ -85,7 +61,7 @@ def _get_pricing(tier: str) -> dict[str, float]:
     """Fetch pricing for a tier from SSM."""
     path = f"/platform/billing/pricing/{tier}"
     try:
-        parsed = _get_pricing_provider().get(path, max_age=300, transform="json")
+        parsed = _get_integrations().pricing_provider.get(path, max_age=300, transform="json")
     except Exception as exc:
         raise PricingResolutionError(f"Failed to fetch pricing parameter {path} from SSM") from exc
 
@@ -259,7 +235,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
             {"Name": "TenantId", "Value": tenant_id},
             {"Name": "Tier", "Value": tier},
         ]
-        _get_cloudwatch().put_metric_data(
+        _get_integrations().cloudwatch.put_metric_data(
             Namespace="Platform/Billing",
             MetricData=[
                 {
@@ -313,7 +289,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
             )
 
             # Publish event
-            _get_events().put_events(
+            _get_integrations().events.put_events(
                 Entries=[
                     {
                         "Source": "platform.billing",

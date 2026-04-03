@@ -23,12 +23,12 @@ ADRs: ADR-006
 from __future__ import annotations
 
 import argparse
-import hashlib
 import logging
 import os
 import shutil
 import subprocess
-import tomllib
+import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -41,8 +41,18 @@ logging.basicConfig(
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import layer_manifest  # noqa: E402
+
+compute_dependency_hash = layer_manifest.compute_dependency_hash
+read_agent_deps = layer_manifest.read_agent_deps
+read_agent_lockfile = layer_manifest.read_agent_lockfile
+read_deployment_type = layer_manifest.read_deployment_type
+
 BUILD_DIR = REPO_ROOT / ".build"
-HASH_LENGTH = 16
 PYTHON_PLATFORM = "aarch64-manylinux2014"
 PYTHON_VERSION = "3.12"
 ARM64_TOKENS = ("aarch64", "arm64")
@@ -81,59 +91,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def read_agent_deps(agent_name: str) -> list[str]:
-    """Read [project.dependencies] from agents/{agent_name}/pyproject.toml."""
-    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
-    if not toml_path.exists():
-        raise FileNotFoundError(f"pyproject.toml not found: {toml_path}")
-
-    with toml_path.open("rb") as fh:
-        data = tomllib.load(fh)
-
-    deps = data.get("project", {}).get("dependencies", [])
-    if not isinstance(deps, list):
-        raise ValueError(f"[project.dependencies] must be a list in {toml_path}")
-    return [str(dep) for dep in deps]
-
-
-def read_deployment_type(agent_name: str) -> str:
-    """Read deployment.type from agents/{agent_name}/pyproject.toml."""
-    toml_path = REPO_ROOT / "agents" / agent_name / "pyproject.toml"
-    if not toml_path.exists():
-        raise FileNotFoundError(f"pyproject.toml not found: {toml_path}")
-
-    with toml_path.open("rb") as fh:
-        data = tomllib.load(fh)
-
-    deployment = data.get("tool", {}).get("agentcore", {}).get("deployment", {})
-    deployment_type = deployment.get("type", "zip")
-    if not isinstance(deployment_type, str):
-        raise ValueError(f"[tool.agentcore.deployment.type] must be a string in {toml_path}")
-    return deployment_type
-
-
-def read_agent_lockfile(agent_name: str) -> str | None:
-    """Read uv.lock from agents/{agent_name}/uv.lock if it exists.
-
-    Returns the file content as a string, or None if the lockfile is absent.
-    """
-    lock_path = REPO_ROOT / "agents" / agent_name / "uv.lock"
-    if not lock_path.exists():
-        return None
-    return lock_path.read_text(encoding="utf-8")
-
-
-def compute_dependency_hash(deps: list[str], lockfile_content: str | None = None) -> str:
-    """Return canonical dependency hash used for S3 key and SSM metadata.
-
-    Includes lockfile content when present to track transitive dependency changes.
-    """
-    canonical = "\n".join(sorted(dep.strip() for dep in deps))
-    if lockfile_content is not None:
-        canonical = canonical + "\n---lockfile---\n" + lockfile_content
-    return hashlib.sha256(canonical.encode()).hexdigest()[:HASH_LENGTH]
-
-
 def build_dependencies(dependencies: list[str], target_dir: Path) -> None:
     """Cross-compile dependencies for arm64 using uv."""
     if target_dir.exists():
@@ -155,6 +112,13 @@ def build_dependencies(dependencies: list[str], target_dir: Path) -> None:
     ]
     logger.info("Building arm64 dependencies for %d packages", len(dependencies))
     subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
+def create_build_workspace(agent_name: str, dep_hash: str) -> Path:
+    """Create a unique workspace under an agent/hash-scoped build root."""
+    scoped_root = BUILD_DIR / "layer-builds" / agent_name / dep_hash
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=scoped_root))
 
 
 def _extract_wheel_tags(wheel_text: str) -> list[str]:
@@ -289,17 +253,21 @@ def run(agent_name: str, env: str) -> int:
     lockfile = read_agent_lockfile(agent_name)
     dep_hash = compute_dependency_hash(deps, lockfile_content=lockfile)
 
-    deps_dir = BUILD_DIR / "deps"
-    zip_path = BUILD_DIR / f"{agent_name}-deps-{dep_hash}.zip"
-    build_dependencies(deps, deps_dir)
-    verify_arm64_artifacts(deps_dir)
-    create_layer_zip(deps_dir, zip_path)
-    verify_arm64_zip(zip_path)
+    workspace_dir = create_build_workspace(agent_name, dep_hash)
+    deps_dir = workspace_dir / "deps"
+    zip_path = workspace_dir / f"{agent_name}-deps-{dep_hash}.zip"
+    try:
+        build_dependencies(deps, deps_dir)
+        verify_arm64_artifacts(deps_dir)
+        create_layer_zip(deps_dir, zip_path)
+        verify_arm64_zip(zip_path)
 
-    bucket = resolve_layer_bucket(env, aws_region)
-    key = f"layers/{zip_path.name}"
-    upload_layer_zip(zip_path, bucket=bucket, key=key, aws_region=aws_region)
-    put_layer_metadata(agent_name, env, dep_hash, key, aws_region)
+        bucket = resolve_layer_bucket(env, aws_region)
+        key = f"layers/{zip_path.name}"
+        upload_layer_zip(zip_path, bucket=bucket, key=key, aws_region=aws_region)
+        put_layer_metadata(agent_name, env, dep_hash, key, aws_region)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     logger.info("Layer published for %s: s3://%s/%s", agent_name, bucket, key)
     print(f"LAYER_BUILT agent={agent_name} hash={dep_hash} s3=s3://{bucket}/{key}")

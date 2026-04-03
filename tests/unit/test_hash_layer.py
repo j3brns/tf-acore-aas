@@ -25,6 +25,22 @@ def _load_hash_layer_module() -> Any:
 
 
 hl: Any = _load_hash_layer_module()
+build_layer: Any
+
+
+def _load_build_layer_module() -> Any:
+    repo_root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "build_layer_script", repo_root / "scripts" / "build_layer.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+build_layer = _load_build_layer_module()
 
 _REGION = "eu-west-2"
 
@@ -73,6 +89,13 @@ def test_hash_length_is_16_chars() -> None:
 def test_empty_deps_returns_hash() -> None:
     result = hl.compute_dependency_hash([])
     assert len(result) == 16
+
+
+def test_build_and_hash_scripts_share_manifest_hash_helpers() -> None:
+    assert hl.compute_dependency_hash is build_layer.compute_dependency_hash
+    assert hl.read_agent_deps is build_layer.read_agent_deps
+    assert hl.read_agent_lockfile is build_layer.read_agent_lockfile
+    assert hl.read_deployment_type is build_layer.read_deployment_type
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +210,7 @@ def test_run_returns_0_for_container_deployment_without_ssm(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(hl, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(hl.layer_manifest, "REPO_ROOT", tmp_path)
     agent_dir = tmp_path / "agents" / "agui-agent"
     agent_dir.mkdir(parents=True)
     (agent_dir / "pyproject.toml").write_text(

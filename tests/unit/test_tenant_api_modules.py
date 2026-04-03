@@ -37,7 +37,6 @@ def module_state(monkeypatch: pytest.MonkeyPatch, fixed_now: Any) -> dict[str, A
     deps = tenant_api_handler.TenantApiDependencies(
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
-        dynamodb=None,
         ssm=FakeSsm(),
         awslambda=FakeLambdaClient(),
         usage_client=FakeUsageClient(),
