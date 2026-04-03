@@ -28,6 +28,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -155,6 +156,13 @@ def build_dependencies(dependencies: list[str], target_dir: Path) -> None:
     ]
     logger.info("Building arm64 dependencies for %d packages", len(dependencies))
     subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
+def create_build_workspace(agent_name: str, dep_hash: str) -> Path:
+    """Create a unique workspace under an agent/hash-scoped build root."""
+    scoped_root = BUILD_DIR / "layer-builds" / agent_name / dep_hash
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=scoped_root))
 
 
 def _extract_wheel_tags(wheel_text: str) -> list[str]:
@@ -289,17 +297,21 @@ def run(agent_name: str, env: str) -> int:
     lockfile = read_agent_lockfile(agent_name)
     dep_hash = compute_dependency_hash(deps, lockfile_content=lockfile)
 
-    deps_dir = BUILD_DIR / "deps"
-    zip_path = BUILD_DIR / f"{agent_name}-deps-{dep_hash}.zip"
-    build_dependencies(deps, deps_dir)
-    verify_arm64_artifacts(deps_dir)
-    create_layer_zip(deps_dir, zip_path)
-    verify_arm64_zip(zip_path)
+    workspace_dir = create_build_workspace(agent_name, dep_hash)
+    deps_dir = workspace_dir / "deps"
+    zip_path = workspace_dir / f"{agent_name}-deps-{dep_hash}.zip"
+    try:
+        build_dependencies(deps, deps_dir)
+        verify_arm64_artifacts(deps_dir)
+        create_layer_zip(deps_dir, zip_path)
+        verify_arm64_zip(zip_path)
 
-    bucket = resolve_layer_bucket(env, aws_region)
-    key = f"layers/{zip_path.name}"
-    upload_layer_zip(zip_path, bucket=bucket, key=key, aws_region=aws_region)
-    put_layer_metadata(agent_name, env, dep_hash, key, aws_region)
+        bucket = resolve_layer_bucket(env, aws_region)
+        key = f"layers/{zip_path.name}"
+        upload_layer_zip(zip_path, bucket=bucket, key=key, aws_region=aws_region)
+        put_layer_metadata(agent_name, env, dep_hash, key, aws_region)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
 
     logger.info("Layer published for %s: s3://%s/%s", agent_name, bucket, key)
     print(f"LAYER_BUILT agent={agent_name} hash={dep_hash} s3=s3://{bucket}/{key}")

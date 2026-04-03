@@ -91,6 +91,22 @@ def test_build_dependencies_uses_required_arm64_flags(
     assert captured["check"] is True
 
 
+def test_create_build_workspace_is_agent_hash_scoped_and_unique(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bl, "BUILD_DIR", tmp_path / ".build")
+
+    first = bl.create_build_workspace("echo-agent", "abc123")
+    second = bl.create_build_workspace("echo-agent", "abc123")
+
+    expected_root = tmp_path / ".build" / "layer-builds" / "echo-agent" / "abc123"
+    assert first.parent == expected_root
+    assert second.parent == expected_root
+    assert first != second
+    assert first.exists()
+    assert second.exists()
+
+
 def test_verify_arm64_zip_accepts_arm64_wheel_and_binary(tmp_path: Path) -> None:
     deps_dir = tmp_path / "deps"
     _write_arm64_deps_fixture(deps_dir)
@@ -127,8 +143,10 @@ def test_run_uploads_zip_and_updates_ssm(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("AWS_REGION", _REGION)
     monkeypatch.setenv("PLATFORM_LAYER_BUCKET", bucket)
     monkeypatch.setattr(bl, "BUILD_DIR", tmp_path / ".build")
+    captured: dict[str, Path] = {}
 
     def _fake_build_dependencies(_deps: list[str], target_dir: Path) -> None:
+        captured["deps_dir"] = target_dir
         _write_arm64_deps_fixture(target_dir)
 
     monkeypatch.setattr(bl, "build_dependencies", _fake_build_dependencies)
@@ -141,6 +159,10 @@ def test_run_uploads_zip_and_updates_ssm(tmp_path: Path, monkeypatch: pytest.Mon
         lockfile_content=bl.read_agent_lockfile("echo-agent"),
     )
     expected_key = f"layers/echo-agent-deps-{expected_hash}.zip"
+    expected_workspace_root = tmp_path / ".build" / "layer-builds" / "echo-agent" / expected_hash
+
+    assert captured["deps_dir"].parent.parent == expected_workspace_root
+    assert not captured["deps_dir"].parent.exists()
 
     ssm = boto3.client("ssm", region_name=_REGION)
     hash_param = ssm.get_parameter(Name="/platform/layers/dev/echo-agent/hash")
