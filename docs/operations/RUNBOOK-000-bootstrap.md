@@ -81,6 +81,7 @@ make bootstrap-verify ENV=dev
 
 ### Step 7: Delete Bootstrap IAM User (MANDATORY)
 ```bash
+export BOOTSTRAP_IAM_USER=<bootstrap-iam-username>
 make bootstrap-delete-iam-user ENV=dev
 # Deletes the bootstrap IAM user credentials
 # From this point: all operations via OIDC or Entra

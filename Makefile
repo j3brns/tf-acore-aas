@@ -154,6 +154,8 @@ bootstrap-verify:
 
 ## bootstrap-delete-iam-user: Delete the temporary bootstrap IAM user (MANDATORY)
 bootstrap-delete-iam-user:
+	@test -n "$(ENV)" || (echo "ERROR: ENV required" && exit 1)
+	@test -n "$$BOOTSTRAP_IAM_USER" || (echo "ERROR: BOOTSTRAP_IAM_USER must be set" && exit 1)
 	@echo "WARNING: This deletes the bootstrap IAM user. Ensure you can access the platform via Entra first."
 	@read -p "Type 'delete' to confirm: " confirm && [ "$$confirm" = "delete" ]
 	uv run python scripts/bootstrap.py --step delete-bootstrap-user --env $(ENV)

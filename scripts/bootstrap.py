@@ -810,18 +810,13 @@ def validate_verify(ctx: BootstrapContext) -> dict[str, Any]:
 
 
 def _resolve_bootstrap_user(ctx: BootstrapContext) -> str:
-    """Resolve bootstrap IAM username from env or caller ARN."""
+    """Resolve bootstrap IAM username from explicit environment only."""
     explicit = os.environ.get("BOOTSTRAP_IAM_USER", "").strip()
     if explicit:
         return explicit
 
-    prefix = f"arn:aws:iam::{ctx.account_id}:user/"
-    if ctx.caller_arn.startswith(prefix):
-        return ctx.caller_arn[len(prefix) :]
-
     raise RuntimeError(
-        "Set BOOTSTRAP_IAM_USER to delete the bootstrap IAM user "
-        "when current caller is not an IAM user ARN"
+        "BOOTSTRAP_IAM_USER must be set explicitly before deleting the bootstrap IAM user"
     )
 
 

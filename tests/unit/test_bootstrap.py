@@ -170,3 +170,16 @@ def test_execute_step_failure_is_recorded(monkeypatch: pytest.MonkeyPatch) -> No
     assert last["step"] == "seed-secrets"
     assert last["status"] == "failed"
     assert last["details"]["errorType"] == "RuntimeError"
+
+
+def test_resolve_bootstrap_user_requires_explicit_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BOOTSTRAP_IAM_USER", raising=False)
+
+    with pytest.raises(RuntimeError, match="BOOTSTRAP_IAM_USER must be set explicitly"):
+        bootstrap._resolve_bootstrap_user(_ctx())
+
+
+def test_resolve_bootstrap_user_uses_explicit_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOOTSTRAP_IAM_USER", "bootstrap-user-dev")
+
+    assert bootstrap._resolve_bootstrap_user(_ctx()) == "bootstrap-user-dev"
