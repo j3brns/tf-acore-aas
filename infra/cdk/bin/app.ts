@@ -71,6 +71,7 @@ const platformStack = new PlatformStack(app, `platform-core-${env}`, {
   env: awsEnv,
   description: `Platform core services — ${env}`,
   vpc: networkStack.vpc,
+  lambdaSecurityGroup: networkStack.lambdaSecurityGroup,
 });
 
 // 4. TenantStack (real deployments triggered by EventBridge per-tenant)

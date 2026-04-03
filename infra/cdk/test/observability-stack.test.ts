@@ -33,10 +33,15 @@ describe('ObservabilityStack (TASK-026)', () => {
         },
       ],
     });
+    const lambdaSecurityGroup = new ec2.SecurityGroup(networkStack, 'MockLambdaSecurityGroup', {
+      vpc: mockVpc,
+      description: 'Trusted SG for platform Lambdas',
+    });
 
     const platformStack = new PlatformStack(app, 'PlatformStack', {
       env,
       vpc: mockVpc,
+      lambdaSecurityGroup,
     });
 
     const observabilityStack = new ObservabilityStack(app, 'ObservabilityStack', {

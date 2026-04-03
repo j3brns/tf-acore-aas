@@ -64,6 +64,7 @@ type GatewayPolicyConfiguration = {
 
 export interface PlatformStackProps extends cdk.StackProps {
   readonly vpc: ec2.IVpc;
+  readonly lambdaSecurityGroup: ec2.ISecurityGroup;
 }
 
 function ensureTenantStubTemplate(
@@ -106,6 +107,7 @@ function ensureTenantStubTemplate(
 
 export class PlatformStack extends cdk.Stack {
   public readonly vpc: ec2.IVpc;
+  public readonly lambdaSecurityGroup: ec2.ISecurityGroup;
   public readonly api: apigateway.RestApi;
   public readonly tenantsTable: dynamodb.Table;
   public readonly agentsTable: dynamodb.Table;
@@ -136,6 +138,7 @@ export class PlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PlatformStackProps) {
     super(scope, id, props);
     this.vpc = props.vpc;
+    this.lambdaSecurityGroup = props.lambdaSecurityGroup;
 
     const env = ((this.node.tryGetContext('env') as string | undefined) ?? 'dev').toLowerCase();
     const bridgeCanaryPolicy = this.resolveBridgeCanaryPolicy(env);
@@ -1085,6 +1088,7 @@ export class PlatformStack extends cdk.Stack {
       memorySize: props.memorySize,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [this.lambdaSecurityGroup],
       environment: {
         LOG_LEVEL: 'INFO',
         ...props.environment,

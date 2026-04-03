@@ -17,6 +17,7 @@ export interface NetworkStackProps extends cdk.StackProps {
 
 export class NetworkStack extends cdk.Stack {
   public readonly vpc: ec2.Vpc;
+  public readonly lambdaSecurityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props?: NetworkStackProps) {
     super(scope, id, props);
@@ -50,6 +51,7 @@ export class NetworkStack extends cdk.Stack {
       allowAllOutbound: false,
       description: 'Security group for platform Lambdas running in private subnets',
     });
+    this.lambdaSecurityGroup = lambdaSecurityGroup;
 
     const endpointSecurityGroup = new ec2.SecurityGroup(this, 'InterfaceEndpointSecurityGroup', {
       vpc: this.vpc,

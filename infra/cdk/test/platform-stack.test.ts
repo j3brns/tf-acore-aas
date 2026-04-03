@@ -30,10 +30,15 @@ describe('PlatformStack (TASK-023)', () => {
         },
       ],
     });
+    const lambdaSecurityGroup = new ec2.SecurityGroup(networkStack, 'MockLambdaSecurityGroup', {
+      vpc: mockVpc,
+      description: 'Trusted SG for platform Lambdas',
+    });
 
     const stack = new PlatformStack(app, `platform-core-${environment}`, {
       env,
       vpc: mockVpc,
+      lambdaSecurityGroup,
     });
     return Template.fromStack(stack);
   };
@@ -135,6 +140,30 @@ describe('PlatformStack (TASK-023)', () => {
         }),
       ]),
     );
+  });
+
+  test('attaches VPC Lambdas to the endpoint-trusted Lambda security group', () => {
+    const template = synthTemplate('dev');
+
+    const lambdaFunctions = template.findResources('AWS::Lambda::Function') as Record<
+      string,
+      {
+        Properties?: {
+          FunctionName?: string;
+          VpcConfig?: { SecurityGroupIds?: unknown[] };
+        };
+      }
+    >;
+
+    const securityGroupIdTokens = new Set<string>();
+
+    for (const resource of Object.values(lambdaFunctions)) {
+      const securityGroupIds = resource.Properties?.VpcConfig?.SecurityGroupIds;
+      expect(securityGroupIds).toHaveLength(1);
+      securityGroupIdTokens.add(JSON.stringify(securityGroupIds?.[0]));
+    }
+
+    expect(securityGroupIdTokens.size).toBe(1);
   });
 
   test('creates environment-aware bridge rollout policy with auto-rollback alarm', () => {
