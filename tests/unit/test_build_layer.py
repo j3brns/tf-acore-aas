@@ -159,7 +159,7 @@ def test_run_uploads_zip_and_updates_ssm(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_run_skips_container_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bl, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(bl.layer_manifest, "REPO_ROOT", tmp_path)
     agent_dir = tmp_path / "agents" / "agui-agent"
     agent_dir.mkdir(parents=True)
     (agent_dir / "pyproject.toml").write_text(
