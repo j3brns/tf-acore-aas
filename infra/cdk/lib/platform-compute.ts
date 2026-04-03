@@ -240,6 +240,7 @@ export function createPlatformCompute(
       OPS_LOCKS_TABLE: storage.opsLocksTable.tableName,
       FAILOVER_LOCK_NAME: 'platform-runtime-failover',
       RUNTIME_REGION_PARAM: '/platform/config/runtime-region',
+      TENANT_EXECUTION_ROLE_PARAM_TEMPLATE: '/platform/tenants/{tenant_id}/execution-role-arn',
       APPCONFIG_APPLICATION_ID: storage.appconfigApp.ref,
       APPCONFIG_ENVIRONMENT_ID: storage.appconfigEnv.ref,
       APPCONFIG_PROFILE_ID: storage.capabilityProfile.ref,
@@ -257,6 +258,20 @@ export function createPlatformCompute(
       resources: [
         `arn:aws:ssm:${stack.region}:${stack.account}:parameter/platform/config/runtime-region`,
       ],
+    }),
+  );
+  bridgeFn.addToRolePolicy(
+    new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [
+        `arn:aws:ssm:${stack.region}:${stack.account}:parameter/platform/tenants/*/execution-role-arn`,
+      ],
+    }),
+  );
+  bridgeFn.addToRolePolicy(
+    new iam.PolicyStatement({
+      actions: ['sts:AssumeRole'],
+      resources: ['arn:aws:iam::*:role/platform-tenant-*-execution-role'],
     }),
   );
   bridgeFn.addToRolePolicy(

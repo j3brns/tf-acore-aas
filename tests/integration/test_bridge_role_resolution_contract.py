@@ -24,6 +24,18 @@ class FakeLambdaContext:
     aws_request_id = "req-integration-role-resolution"
 
 
+@pytest.fixture(autouse=True)
+def mock_capabilities():
+    with patch("src.bridge.handler.get_capability_client") as mock:
+        mock_client = MagicMock()
+        mock.return_value = mock_client
+
+        policy = MagicMock()
+        policy.is_enabled.return_value = True
+        mock_client.fetch_policy.return_value = policy
+        yield mock
+
+
 @pytest.fixture
 def aws_credentials():
     os.environ["AWS_ACCESS_KEY_ID"] = "testing"  # pragma: allowlist secret
@@ -69,6 +81,7 @@ def _seed_agent(ddb: Any) -> None:
             "layer_s3_key": "layer.zip",
             "script_s3_key": "script.zip",
             "deployed_at": "2026-01-01T00:00:00Z",
+            "status": "promoted",
             "invocation_mode": "sync",
             "streaming_enabled": False,
             "runtime_arn": "arn:aws:bedrock-agentcore:eu-west-1:210987654321:runtime/echo-agent",
@@ -83,8 +96,8 @@ def _invoke_event() -> dict[str, Any]:
         "pathParameters": {"agentName": "echo-agent"},
         "requestContext": {
             "authorizer": {
-                "tenantid": "t-001",
-                "appid": "app-001",
+                "tenantId": "t-001",
+                "appId": "app-001",
                 "tier": "basic",
                 "sub": "user-1",
             }

@@ -648,8 +648,31 @@ describe('PlatformStack (TASK-023)', () => {
           OPS_LOCKS_TABLE: Match.anyValue(),
           FAILOVER_LOCK_NAME: 'platform-runtime-failover',
           RUNTIME_REGION_PARAM: '/platform/config/runtime-region',
+          TENANT_EXECUTION_ROLE_PARAM_TEMPLATE: '/platform/tenants/{tenant_id}/execution-role-arn',
         }),
       },
+    });
+
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'ssm:GetParameter',
+            Effect: 'Allow',
+            Resource: 'arn:aws:ssm:eu-west-2:123456789012:parameter/platform/tenants/*/execution-role-arn',
+          }),
+          Match.objectLike({
+            Action: 'sts:AssumeRole',
+            Effect: 'Allow',
+            Resource: 'arn:aws:iam::*:role/platform-tenant-*-execution-role',
+          }),
+        ]),
+      },
+      Roles: Match.arrayWith([
+        {
+          Ref: Match.stringLikeRegexp('bridgeLambdaServiceRole'),
+        },
+      ]),
     });
   });
 
