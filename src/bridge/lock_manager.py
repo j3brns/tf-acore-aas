@@ -6,7 +6,7 @@ from typing import Any
 
 from aws_lambda_powertools import Logger
 
-from src.bridge.constants import OPS_LOCKS_TABLE
+from src.bridge.constants import FAILOVER_LOCK_NAME, OPS_LOCKS_TABLE
 
 logger = Logger(service="bridge-lock-manager")
 
@@ -78,7 +78,7 @@ def trigger_failover(
     import time
 
     new_region = "eu-central-1" if current_region == "eu-west-1" else "eu-west-1"
-    lock_name = "runtime-region-failover"
+    lock_name = FAILOVER_LOCK_NAME
     identity = f"bridge-lambda-{os.environ.get('AWS_LAMBDA_LOG_STREAM_NAME', 'local')}"
 
     lock_id = acquire_lock(dynamodb, lock_name=lock_name, identity=identity)

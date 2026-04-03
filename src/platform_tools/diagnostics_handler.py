@@ -41,7 +41,7 @@ RUNBOOKS = {
         "trigger": "ServiceUnavailableException from the active runtime region (e.g., eu-west-1).",
         "steps": [
             "1. Verify regional outage via Service Health Dashboard or CloudWatch metrics.",
-            "2. Acquire the runtime-region-failover lock via the Platform API.",
+            "2. Acquire the platform-runtime-failover lock via the Platform API.",
             "3. Trigger failover to the fallback region (e.g., eu-central-1) "
             "via POST /v1/platform/failover.",
             "4. Verify traffic is flowing in the new region.",

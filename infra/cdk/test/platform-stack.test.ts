@@ -587,6 +587,19 @@ describe('PlatformStack (TASK-023)', () => {
           POWERTOOLS_SERVICE_NAME: 'admin-ops-service',
           TENANTS_TABLE_NAME: Match.anyValue(),
           OPS_LOCKS_TABLE: Match.anyValue(),
+          FAILOVER_LOCK_NAME: 'platform-runtime-failover',
+        }),
+      },
+    });
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'platform-core-dev-bridge',
+      Handler: 'handler.handler',
+      Environment: {
+        Variables: Match.objectLike({
+          OPS_LOCKS_TABLE: Match.anyValue(),
+          FAILOVER_LOCK_NAME: 'platform-runtime-failover',
+          RUNTIME_REGION_PARAM: '/platform/config/runtime-region',
         }),
       },
     });

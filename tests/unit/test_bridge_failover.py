@@ -180,7 +180,7 @@ def test_handler_failover_already_in_progress(setup_data):
     lock_table = ddb.Table("platform-ops-locks")
     lock_table.put_item(
         Item={
-            "PK": "LOCK#runtime-region-failover",
+            "PK": "LOCK#platform-runtime-failover",
             "SK": "METADATA",
             "lock_id": "other-id",
             "ttl": int(time.time()) + 300,

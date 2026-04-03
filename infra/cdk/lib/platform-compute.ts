@@ -170,6 +170,7 @@ export function createPlatformCompute(
       POWERTOOLS_SERVICE_NAME: 'admin-ops-service',
       TENANTS_TABLE_NAME: storage.tenantsTable.tableName,
       OPS_LOCKS_TABLE: storage.opsLocksTable.tableName,
+      FAILOVER_LOCK_NAME: 'platform-runtime-failover',
       RUNTIME_REGION_PARAM: '/platform/config/runtime-region',
       FALLBACK_REGION_PARAM: '/platform/config/fallback-region',
     },
@@ -214,6 +215,9 @@ export function createPlatformCompute(
       INVOCATIONS_TABLE: storage.invocationsTable.tableName,
       JOBS_TABLE: storage.jobsTable.tableName,
       TENANTS_TABLE: storage.tenantsTable.tableName,
+      OPS_LOCKS_TABLE: storage.opsLocksTable.tableName,
+      FAILOVER_LOCK_NAME: 'platform-runtime-failover',
+      RUNTIME_REGION_PARAM: '/platform/config/runtime-region',
       APPCONFIG_APPLICATION_ID: storage.appconfigApp.ref,
       APPCONFIG_ENVIRONMENT_ID: storage.appconfigEnv.ref,
       APPCONFIG_PROFILE_ID: storage.capabilityProfile.ref,
@@ -224,6 +228,15 @@ export function createPlatformCompute(
   storage.agentsTable.grantReadData(bridgeFn);
   storage.invocationsTable.grantReadWriteData(bridgeFn);
   storage.jobsTable.grantReadWriteData(bridgeFn);
+  storage.opsLocksTable.grantReadWriteData(bridgeFn);
+  bridgeFn.addToRolePolicy(
+    new iam.PolicyStatement({
+      actions: ['ssm:GetParameter', 'ssm:PutParameter'],
+      resources: [
+        `arn:aws:ssm:${stack.region}:${stack.account}:parameter/platform/config/runtime-region`,
+      ],
+    }),
+  );
   bridgeFn.addToRolePolicy(
     new iam.PolicyStatement({
       actions: ['appconfig:GetLatestConfiguration', 'appconfig:StartConfigurationSession'],
