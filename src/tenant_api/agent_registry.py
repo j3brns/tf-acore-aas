@@ -50,6 +50,26 @@ _REGISTER_MUTABLE_FIELDS = frozenset(
 )
 
 
+def _requires_zip_layer_metadata(item: dict[str, Any]) -> bool:
+    runtime_arn = str(item.get("runtime_arn", "")).strip()
+    return runtime_arn == ""
+
+
+def _validate_layer_metadata_invariants(item: dict[str, Any]) -> None:
+    if not _requires_zip_layer_metadata(item):
+        return
+
+    missing_fields: list[str] = []
+    if str(item.get("layer_hash", "")).strip() == "":
+        missing_fields.append("layerHash")
+    if str(item.get("layer_s3_key", "")).strip() == "":
+        missing_fields.append("layerS3Key")
+
+    if missing_fields:
+        joined = ", ".join(missing_fields)
+        raise ValueError(f"Zip-agent registration requires non-empty {joined}")
+
+
 def handle_list_agents(
     event: dict[str, Any],
     caller: models.CallerIdentity,
@@ -122,6 +142,8 @@ def handle_register_agent(
         "endpoint": str(body.get("agUiEndpoint", "")).strip() or None,
     }
     item["ag_ui"] = ag_ui
+
+    _validate_layer_metadata_invariants(item)
 
     db.put_item(db_factory.agents_table_name(), item)
 

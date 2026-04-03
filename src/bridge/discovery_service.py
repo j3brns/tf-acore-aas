@@ -151,7 +151,10 @@ def resolve_agent_record(
             agents_table, {"PK": f"AGENT#{agent_name}", "SK": f"VERSION#{agent_version}"}
         )
         if item and is_invokable_agent_status(_coerce_optional_string(item.get("status"))):
-            return _agent_record_from_item(item)
+            try:
+                return _agent_record_from_item(item)
+            except ValueError:
+                return None
         return None
 
     # Query for all versions and pick latest promoted
@@ -167,11 +170,22 @@ def resolve_agent_record(
         return None
 
     sorted_items = sorted(promoted_items, key=_agent_record_sort_key, reverse=True)
-    return _agent_record_from_item(sorted_items[0])
+    for item in sorted_items:
+        try:
+            return _agent_record_from_item(item)
+        except ValueError:
+            continue
+    return None
 
 
 def _agent_record_from_item(item: dict[str, Any]) -> AgentRecord:
     from data_access.models import AgentAgUiConfig, AgentRecord, AgentStatus
+
+    runtime_arn = _coerce_optional_string(item.get("runtime_arn"))
+    layer_hash = str(item.get("layer_hash", "")).strip()
+    layer_s3_key = str(item.get("layer_s3_key", "")).strip()
+    if runtime_arn is None and (layer_hash == "" or layer_s3_key == ""):
+        raise ValueError("Incomplete zip-agent layer metadata")
 
     ag_ui_item = item.get("ag_ui", {})
     return AgentRecord(
@@ -179,14 +193,14 @@ def _agent_record_from_item(item: dict[str, Any]) -> AgentRecord:
         version=str(item.get("version", "")),
         owner_team=str(item.get("owner_team", "")),
         tier_minimum=TenantTier(str(item.get("tier_minimum", TenantTier.BASIC.value))),
-        layer_hash=str(item.get("layer_hash", "")),
-        layer_s3_key=str(item.get("layer_s3_key", "")),
+        layer_hash=layer_hash,
+        layer_s3_key=layer_s3_key,
         script_s3_key=str(item.get("script_s3_key", "")),
         deployed_at=str(item.get("deployed_at", "")),
         invocation_mode=InvocationMode(str(item.get("invocation_mode", InvocationMode.SYNC.value))),
         streaming_enabled=bool(item.get("streaming_enabled", False)),
         status=AgentStatus(str(item.get("status", AgentStatus.PROMOTED.value))),
-        runtime_arn=_coerce_optional_string(item.get("runtime_arn")),
+        runtime_arn=runtime_arn,
         estimated_duration_seconds=item.get("estimated_duration_seconds"),
         ag_ui=AgentAgUiConfig(
             enabled=bool(ag_ui_item.get("enabled", False)),
