@@ -42,6 +42,58 @@ def _ctx() -> object:
     )
 
 
+def test_build_context_requires_expected_account_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.delenv("BOOTSTRAP_ACCOUNT_ID", raising=False)
+
+    with pytest.raises(RuntimeError, match="BOOTSTRAP_ACCOUNT_ID must be set"):
+        bootstrap.build_context("dev")
+
+
+def test_build_context_rejects_account_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    monkeypatch.setenv("BOOTSTRAP_ACCOUNT_ID", "999988887777")
+
+    class FakeSts:
+        def get_caller_identity(self) -> dict[str, str]:
+            return {
+                "Account": "111122223333",
+                "Arn": "arn:aws:iam::111122223333:user/bootstrap-user",
+            }
+
+    monkeypatch.setattr(
+        bootstrap.boto3,
+        "client",
+        lambda service_name, region_name=None: FakeSts(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Active AWS account does not match BOOTSTRAP_ACCOUNT_ID",
+    ):
+        bootstrap.build_context("dev")
+
+
+def test_build_context_rejects_non_home_region_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.setenv("BOOTSTRAP_ACCOUNT_ID", "111122223333")
+    monkeypatch.setenv("PLATFORM_HOME_REGION", _REGION)
+
+    class FakeSts:
+        def get_caller_identity(self) -> dict[str, str]:
+            return {
+                "Account": "111122223333",
+                "Arn": "arn:aws:iam::111122223333:user/bootstrap-user",
+            }
+
+    monkeypatch.setattr(bootstrap.boto3, "client", lambda service_name, region_name=None: FakeSts())
+
+    with pytest.raises(RuntimeError, match="AWS_REGION must match PLATFORM_HOME_REGION"):
+        bootstrap.build_context("dev")
+
+
 def test_parse_args_supports_first_deploy_step() -> None:
     args = bootstrap.parse_args(["--step", "first-deploy", "--env", "dev"])
     assert args.step == "first-deploy"
@@ -122,6 +174,46 @@ def test_upsert_secret_create_then_update() -> None:
     assert first == "created"
     assert second in {"created", "updated"}
     assert final_value == "value-2"
+
+
+def test_step_seed_secrets_uses_home_region_for_secret_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeSecretsClient:
+        def create_secret(self, **_kwargs: object) -> None:
+            return None
+
+        def put_secret_value(self, **_kwargs: object) -> None:
+            return None
+
+    def _fake_client(service_name: str, *, region_name: str) -> FakeSecretsClient:
+        assert service_name == "secretsmanager"
+        calls.append(region_name)
+        return FakeSecretsClient()
+
+    monkeypatch.setattr(bootstrap.boto3, "client", _fake_client)
+    monkeypatch.setenv("BOOTSTRAP_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv("BOOTSTRAP_ENTRA_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("BOOTSTRAP_ENTRA_CLIENT_SECRET", "secret-value")
+    monkeypatch.setenv("BOOTSTRAP_PLATFORM_PRIVATE_KEY_PASSPHRASE", "passphrase")
+
+    ctx = bootstrap.BootstrapContext(
+        env="dev",
+        aws_region="eu-central-1",
+        home_region="eu-west-2",
+        runtime_region="eu-west-1",
+        fallback_region="eu-central-1",
+        account_id="111122223333",
+        caller_arn="arn:aws:iam::111122223333:user/bootstrap-user",
+        report_bucket="platform-bootstrap-reports-dev",
+        report_key="bootstrap-report.json",
+    )
+
+    bootstrap.step_seed_secrets(ctx)
+
+    assert calls == ["eu-west-2"]
 
 
 @mock_aws
