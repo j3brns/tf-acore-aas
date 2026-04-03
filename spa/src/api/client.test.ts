@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiClient, ApiError, type AccessTokenProvider, type TokenRequestOptions } from "./client";
+import { ApiClient, type AccessTokenProvider, type TokenRequestOptions } from "./client";
 
 function createResponse(status: number, body: unknown, contentType = "application/json"): Response {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
@@ -65,7 +65,9 @@ describe("ApiClient", () => {
     const tokenProvider = vi.fn<AccessTokenProvider>().mockResolvedValue("token-1");
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(createResponse(403, { error: { code: "FORBIDDEN" } }));
+      .mockResolvedValue(
+        createResponse(503, { error: { code: "UPSTREAM_UNAVAILABLE" }, retryAfterSeconds: 30 }),
+      );
 
     const client = new ApiClient({
       baseUrl: "https://api.example.com",
@@ -73,7 +75,13 @@ describe("ApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.request("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    await expect(client.request("/v1/agents")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 503,
+      code: "UPSTREAM_UNAVAILABLE",
+      retryAfterSeconds: 30,
+      isRetryable: true,
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -159,5 +167,41 @@ describe("ApiClient", () => {
 
     await client.request("/v1/health");
     expect(observedOptions).toEqual([undefined]);
+  });
+
+  it("retries transient network failures for idempotent requests", async () => {
+    const tokenProvider = vi.fn<AccessTokenProvider>().mockResolvedValue("token-1");
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("network down"))
+      .mockResolvedValueOnce(createResponse(200, { ok: true }));
+
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      getAccessToken: tokenProvider,
+      fetchImpl,
+    });
+
+    await expect(client.request<{ ok: boolean }>("/v1/health")).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry transient network failures for non-idempotent requests", async () => {
+    const tokenProvider = vi.fn<AccessTokenProvider>().mockResolvedValue("token-1");
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new TypeError("network down"));
+
+    const client = new ApiClient({
+      baseUrl: "https://api.example.com",
+      getAccessToken: tokenProvider,
+      fetchImpl,
+    });
+
+    await expect(
+      client.request("/v1/agents/echo-agent/invoke", {
+        method: "POST",
+        body: JSON.stringify({ input: "hello" }),
+      }),
+    ).rejects.toThrow("network down");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
