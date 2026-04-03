@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import boto3
 from moto import mock_aws
@@ -78,10 +79,10 @@ def _failover_event(lock_id: str) -> dict[str, Any]:
         "body": json.dumps({"targetRegion": "eu-central-1", "lockId": lock_id}),
         "requestContext": {
             "authorizer": {
-                "tenantid": "t-admin",
+                "tenantid": "platform",
                 "appid": "app-admin",
                 "tier": "premium",
-                "sub": "user-123",
+                "sub": "ops@example.com",
                 "roles": ["Platform.Admin"],
             }
         },
@@ -119,10 +120,11 @@ def test_failover_route_updates_ssm_and_bridge_reads_new_runtime_region(monkeypa
         deps = tenant_api_handler.TenantApiDependencies(
             secretsmanager=_FakeSecretsManager(),
             events=_FakeEvents(),
-            dynamodb=ddb_resource,
             ssm=ssm,
+            awslambda=MagicMock(),
             usage_client=_FakeUsageClient(),
             memory_provisioner=_FakeMemoryProvisioner(),
+            platform_quota_client=MagicMock(),
         )
         monkeypatch.setattr(tenant_api_handler, "_dependencies", lambda: deps)
 
@@ -131,7 +133,7 @@ def test_failover_route_updates_ssm_and_bridge_reads_new_runtime_region(monkeypa
         )
 
         assert response["statusCode"] == 200
-        assert json.loads(response["body"])["status"] == "completed"
+        assert json.loads(response["body"])["status"] == "failover_executed"
 
         bridge_handler._ssm_client = None
         bridge_handler._config_cache = {}

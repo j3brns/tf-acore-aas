@@ -92,14 +92,8 @@ describe('IdentityStack', () => {
     }
   });
 
-  test('creates Entra JWKS layer and exposes resolved JWKS URL output', () => {
-    template.resourceCountIs('AWS::Lambda::LayerVersion', 1);
-    template.hasResourceProperties('AWS::Lambda::LayerVersion', {
-      LayerName: 'platform-entra-jwks-dev',
-      Description: 'Entra JWKS config layer (dev)',
-      CompatibleRuntimes: ['python3.12'],
-    });
-
+  test('exposes the resolved Entra JWKS URL without a redundant config layer', () => {
+    template.resourceCountIs('AWS::Lambda::LayerVersion', 0);
     template.hasOutput('EntraJwksUrl', {
       Value:
         'https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/discovery/v2.0/keys',

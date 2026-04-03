@@ -438,7 +438,6 @@ def fake_state(monkeypatch: pytest.MonkeyPatch, fixed_now: datetime) -> dict[str
     deps = tenant_api_handler.TenantApiDependencies(
         secretsmanager=FakeSecretsManager(),
         events=FakeEvents(),
-        dynamodb=FakeDynamoDbResource(),
         ssm=FakeSsm(),
         awslambda=FakeLambdaClient(),
         usage_client=FakeUsageClient(),

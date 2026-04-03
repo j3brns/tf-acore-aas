@@ -69,6 +69,8 @@ def setup_delivery_env(aws_credentials):
 
         webhook_handler._sqs_client = None
         webhook_handler._http_session = None
+        webhook_handler.integrations._sqs_client = None
+        webhook_handler.integrations._http_session = None
         webhook_handler.JOBS_TABLE = "platform-jobs"
         webhook_handler.TENANTS_TABLE = "platform-tenants"
         webhook_handler.WEBHOOK_RETRY_QUEUE_URL = retry_queue_url
@@ -143,7 +145,7 @@ def test_delivers_signed_webhook_and_marks_job_delivered(setup_delivery_env):
     response = MagicMock()
     response.raise_for_status.return_value = None
 
-    with patch.object(webhook_handler, "get_http_session") as mock_get_http_session:
+    with patch.object(webhook_handler.integrations, "get_http_session") as mock_get_http_session:
         mock_post = MagicMock(return_value=response)
         mock_get_http_session.return_value.post = mock_post
         result = webhook_handler.handler(
@@ -178,7 +180,7 @@ def test_queues_retry_after_delivery_failure(setup_delivery_env):
     _seed_registration(tenants_table)
     job_item = _seed_job(jobs_table)
 
-    with patch.object(webhook_handler, "get_http_session") as mock_get_http_session:
+    with patch.object(webhook_handler.integrations, "get_http_session") as mock_get_http_session:
         mock_get_http_session.return_value.post = MagicMock(
             side_effect=requests.RequestException("temporary failure")
         )
@@ -213,7 +215,7 @@ def test_marks_job_failed_and_sends_dlq_after_retries_exhausted(setup_delivery_e
     _seed_registration(tenants_table)
     _seed_job(jobs_table)
 
-    with patch.object(webhook_handler, "get_http_session") as mock_get_http_session:
+    with patch.object(webhook_handler.integrations, "get_http_session") as mock_get_http_session:
         mock_get_http_session.return_value.post = MagicMock(
             side_effect=requests.RequestException("still failing")
         )
