@@ -197,7 +197,7 @@ describe('PlatformApi', () => {
     const template = synthApi();
 
     template.hasResourceProperties('AWS::ApiGateway::RestApi', {
-      ApiKeySourceType: 'AUTHORIZER',
+      ApiKeySourceType: 'AUTHORIZER', // pragma: allowlist secret
     });
     template.resourceCountIs('AWS::ApiGateway::UsagePlan', 3);
 
