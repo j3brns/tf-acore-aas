@@ -32,6 +32,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 from data_access import (
+    ControlPlaneDynamoDB,
     TenantCapabilityClient,
     TenantScopedDynamoDB,
 )
@@ -107,10 +108,6 @@ def get_sts() -> Any:
     return boto3.client("sts", region_name=_aws_region())
 
 
-def get_dynamodb() -> Any:
-    return boto3.resource("dynamodb", region_name=_aws_region())
-
-
 def get_cloudwatch() -> Any:
     return boto3.client("cloudwatch", region_name=_aws_region())
 
@@ -156,7 +153,6 @@ def get_runtime_client(region: str, credentials: dict[str, Any] | None = None) -
 
 def trigger_failover(current_region: str) -> str:
     return lock_manager.trigger_failover(
-        dynamodb=get_dynamodb(),
         ssm=get_ssm(),
         current_region=current_region,
         get_config_fn=get_config,
@@ -177,6 +173,15 @@ _assume_tenant_role = role_resolver.assume_tenant_role
 _AGENTS_TABLE = AGENTS_TABLE
 
 
+def get_platform_context() -> TenantContext:
+    return TenantContext(
+        tenant_id="platform",
+        app_id="platform-bridge",
+        tier=TenantTier.PREMIUM,
+        sub="bridge-lambda",
+    )
+
+
 def get_tenant_record(tenant_context: TenantContext) -> dict[str, Any] | None:
     try:
         db = TenantScopedDynamoDB(tenant_context)
@@ -190,7 +195,7 @@ def get_tenant_record(tenant_context: TenantContext) -> dict[str, Any] | None:
 
 def get_agent_record(agent_name: str, agent_version: str | None = None) -> AgentRecord | None:
     return discovery_resolve_agent_record(
-        get_dynamodb(),
+        ControlPlaneDynamoDB(get_platform_context()),
         agents_table=AGENTS_TABLE,
         agent_name=agent_name,
         agent_version=agent_version,

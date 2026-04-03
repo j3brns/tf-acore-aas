@@ -56,7 +56,6 @@ def mock_aws_clients() -> Generator[None, None, None]:
     with mock_aws():
         billing_handler._ssm = None
         billing_handler._events = None
-        billing_handler._dynamodb = None
         billing_handler._cloudwatch = None
         billing_handler._pricing_provider = None
 
@@ -111,7 +110,6 @@ def mock_aws_clients() -> Generator[None, None, None]:
 
         billing_handler._ssm = None
         billing_handler._events = None
-        billing_handler._dynamodb = None
         billing_handler._cloudwatch = None
         billing_handler._pricing_provider = None
 

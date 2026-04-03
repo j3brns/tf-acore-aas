@@ -1216,14 +1216,11 @@ def test_client_initializers_require_aws_region(monkeypatch):
     with (
         patch("src.bridge.handler._ssm_client", None),
         patch("src.bridge.handler._sts_client", None),
-        patch("src.bridge.handler._dynamodb_resource", None),
     ):
         with pytest.raises(KeyError, match="AWS_REGION"):
             bridge_module.get_ssm()
         with pytest.raises(KeyError, match="AWS_REGION"):
             bridge_module.get_sts()
-        with pytest.raises(KeyError, match="AWS_REGION"):
-            bridge_module.get_dynamodb()
 
 
 def test_handler_async_uses_registered_webhook_callback(setup_data):

@@ -22,7 +22,6 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-import boto3
 import jwt
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.idempotency import (
@@ -34,10 +33,13 @@ from aws_lambda_powertools.utilities.parameters import get_secret
 from jwt import PyJWKClient
 
 try:
-    from data_access import TenantCapabilityClient
+    from data_access import ControlPlaneDynamoDB, TenantCapabilityClient, TenantContext, TenantTier
 except ImportError:
     # Fallback for environments where data-access-lib is not yet bundled
     TenantCapabilityClient = None
+    ControlPlaneDynamoDB = None
+    TenantContext = None
+    TenantTier = None
 
 logger = Logger(service="gateway-request-interceptor")
 tracer = Tracer()
@@ -50,7 +52,6 @@ SCOPED_TOKEN_ISSUER = os.environ.get("SCOPED_TOKEN_ISSUER", "platform-gateway")
 
 _TIER_ORDER = {"basic": 0, "standard": 1, "premium": 2}
 _jwk_client: PyJWKClient | None = None
-_dynamodb_resource: Any | None = None
 _capability_client: Any | None = None
 
 
@@ -91,16 +92,15 @@ def get_jwk_client() -> PyJWKClient | None:
     return _jwk_client
 
 
-def get_dynamodb():
-    """Lazily initialize DynamoDB resource."""
-    global _dynamodb_resource
-    if _dynamodb_resource is None:
-        region = os.environ.get("AWS_REGION")
-        if region:
-            _dynamodb_resource = boto3.resource("dynamodb", region_name=region)
-        else:
-            _dynamodb_resource = boto3.resource("dynamodb")
-    return _dynamodb_resource
+def get_platform_context():
+    if TenantContext is None or TenantTier is None:
+        raise RuntimeError("data-access-lib is required for tool record lookups")
+    return TenantContext(
+        tenant_id="platform",
+        app_id="gateway-request-interceptor",
+        tier=TenantTier.PREMIUM,
+        sub="request-interceptor",
+    )
 
 
 def _get_header(headers: dict[str, str], key: str) -> str | None:
@@ -207,12 +207,13 @@ def _extract_minimum_tier(tool_record: dict[str, Any]) -> str:
 
 def get_tool_record(tool_name: str, tenant_id: str) -> dict[str, Any] | None:
     """Fetch tenant-specific tool first, then global."""
-    table = get_dynamodb().Table(TOOLS_TABLE)
+    if ControlPlaneDynamoDB is None:
+        raise RuntimeError("data-access-lib is required for tool record lookups")
+    db = ControlPlaneDynamoDB(get_platform_context())
     primary_key = {"PK": f"TOOL#{tool_name}"}
     candidate_sort_keys = [f"TENANT#{tenant_id}", "GLOBAL"]
     for sort_key in candidate_sort_keys:
-        response = table.get_item(Key={**primary_key, "SK": sort_key}, ConsistentRead=True)
-        item = response.get("Item")
+        item = db.get_item(TOOLS_TABLE, {**primary_key, "SK": sort_key}, ConsistentRead=True)
         if item and bool(item.get("enabled", False)):
             return dict(item)
     return None

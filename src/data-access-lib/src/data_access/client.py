@@ -195,14 +195,16 @@ class TenantScopedDynamoDB:
             attempted_key=attempted_key,
         )
 
-    def get_item(self, table_name: str, key: dict[str, Any]) -> dict[str, Any] | None:
+    def get_item(
+        self, table_name: str, key: dict[str, Any], **extra_kwargs: Any
+    ) -> dict[str, Any] | None:
         """Get a single item, enforcing tenant partition on PK.
 
         Returns the item dict, or None if the item does not exist.
         """
         self._validate_pk(key)
         table = self._dynamodb.Table(table_name)
-        response = table.get_item(Key=key)
+        response = table.get_item(Key=key, **extra_kwargs)
         return response.get("Item")
 
     def put_item(
@@ -211,6 +213,7 @@ class TenantScopedDynamoDB:
         item: dict[str, Any],
         *,
         condition_expression: str | None = None,
+        **extra_kwargs: Any,
     ) -> None:
         """Write an item, enforcing tenant partition on PK."""
         self._validate_pk(item)
@@ -218,6 +221,7 @@ class TenantScopedDynamoDB:
         kwargs: dict[str, Any] = {"Item": item}
         if condition_expression:
             kwargs["ConditionExpression"] = condition_expression
+        kwargs.update(extra_kwargs)
         table.put_item(**kwargs)
 
     def update_item(
@@ -249,11 +253,11 @@ class TenantScopedDynamoDB:
             kwargs["ConditionExpression"] = condition_expression
         return table.update_item(**kwargs)
 
-    def delete_item(self, table_name: str, key: dict[str, Any]) -> None:
+    def delete_item(self, table_name: str, key: dict[str, Any], **extra_kwargs: Any) -> None:
         """Delete an item, enforcing tenant partition on PK."""
         self._validate_pk(key)
         table = self._dynamodb.Table(table_name)
-        table.delete_item(Key=key)
+        table.delete_item(Key=key, **extra_kwargs)
 
     def query(
         self,
@@ -265,6 +269,7 @@ class TenantScopedDynamoDB:
         limit: int | None = None,
         scan_index_forward: bool = True,
         exclusive_start_key: dict[str, Any] | None = None,
+        **extra_kwargs: Any,
     ) -> PaginatedItems:
         """Query the caller's tenant partition.
 
@@ -292,6 +297,7 @@ class TenantScopedDynamoDB:
             kwargs["Limit"] = limit
         if exclusive_start_key is not None:
             kwargs["ExclusiveStartKey"] = exclusive_start_key
+        kwargs.update(extra_kwargs)
 
         response = table.query(**kwargs)
         return PaginatedItems(
@@ -380,6 +386,80 @@ class ControlPlaneDynamoDB(TenantScopedDynamoDB):
 
     def _validate_pk(self, key: dict[str, Any]) -> None:
         _ = key
+
+    def query(
+        self,
+        table_name: str,
+        *,
+        pk_value: str | None = None,
+        key_condition: ConditionBase | None = None,
+        sk_condition: ConditionBase | None = None,
+        filter_expression: ConditionBase | None = None,
+        index_name: str | None = None,
+        limit: int | None = None,
+        scan_index_forward: bool = True,
+        exclusive_start_key: dict[str, Any] | None = None,
+        **extra_kwargs: Any,
+    ) -> PaginatedItems:
+        table = self._dynamodb.Table(table_name)
+        if key_condition is None:
+            if pk_value is None:
+                raise ValueError("ControlPlaneDynamoDB.query requires pk_value or key_condition")
+            key_condition = Key("PK").eq(pk_value)
+            if sk_condition is not None:
+                key_condition = key_condition & sk_condition
+
+        kwargs: dict[str, Any] = {
+            "KeyConditionExpression": key_condition,
+            "ScanIndexForward": scan_index_forward,
+        }
+        if filter_expression is not None:
+            kwargs["FilterExpression"] = filter_expression
+        if index_name is not None:
+            kwargs["IndexName"] = index_name
+        if limit is not None:
+            kwargs["Limit"] = limit
+        if exclusive_start_key is not None:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        kwargs.update(extra_kwargs)
+
+        response = table.query(**kwargs)
+        return PaginatedItems(
+            items=response.get("Items", []),
+            last_evaluated_key=response.get("LastEvaluatedKey"),
+        )
+
+    def query_all(
+        self,
+        table_name: str,
+        *,
+        pk_value: str | None = None,
+        key_condition: ConditionBase | None = None,
+        sk_condition: ConditionBase | None = None,
+        filter_expression: ConditionBase | None = None,
+        index_name: str | None = None,
+        scan_index_forward: bool = True,
+        **extra_kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        exclusive_start_key = None
+        while True:
+            result = self.query(
+                table_name,
+                pk_value=pk_value,
+                key_condition=key_condition,
+                sk_condition=sk_condition,
+                filter_expression=filter_expression,
+                index_name=index_name,
+                scan_index_forward=scan_index_forward,
+                exclusive_start_key=exclusive_start_key,
+                **extra_kwargs,
+            )
+            items.extend(result.items)
+            exclusive_start_key = result.last_evaluated_key
+            if not exclusive_start_key:
+                break
+        return items
 
     def scan(
         self,

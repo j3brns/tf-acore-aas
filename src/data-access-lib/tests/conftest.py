@@ -40,7 +40,12 @@ def mock_cw() -> MagicMock:
     return MagicMock()
 
 
-def make_dynamo_db(ctx: TenantContext, *, cw: Any = None) -> tuple[TenantScopedDynamoDB, Any]:
+def make_dynamo_db(
+    ctx: TenantContext,
+    *,
+    cw: Any = None,
+    db_cls: type[TenantScopedDynamoDB] = TenantScopedDynamoDB,
+) -> tuple[TenantScopedDynamoDB, Any]:
     dynamodb = boto3.resource("dynamodb", region_name=REGION)
     dynamodb.create_table(
         TableName=TABLE_NAME,
@@ -55,7 +60,7 @@ def make_dynamo_db(ctx: TenantContext, *, cw: Any = None) -> tuple[TenantScopedD
         BillingMode="PAY_PER_REQUEST",
     )
     cw_client = cw or MagicMock()
-    db = TenantScopedDynamoDB(ctx, dynamodb_resource=dynamodb, cloudwatch_client=cw_client)
+    db = db_cls(ctx, dynamodb_resource=dynamodb, cloudwatch_client=cw_client)
     return db, dynamodb
 
 

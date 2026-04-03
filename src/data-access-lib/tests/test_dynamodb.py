@@ -74,6 +74,21 @@ class TestTenantScopedDynamoDBGetItem:
         assert kwargs["Namespace"] == "platform/security"
         assert kwargs["MetricData"][0]["MetricName"] == "TenantAccessViolation"
 
+    def test_get_item_passes_through_optional_kwargs(self, ctx) -> None:
+        mock_dynamo = MagicMock()
+        mock_table = MagicMock()
+        mock_dynamo.Table.return_value = mock_table
+        mock_table.get_item.return_value = {"Item": {}}
+
+        db = TenantScopedDynamoDB(ctx, dynamodb_resource=mock_dynamo, cloudwatch_client=MagicMock())
+        db.get_item(
+            TABLE_NAME,
+            {"PK": f"TENANT#{TENANT_ID}", "SK": "METADATA"},
+            ConsistentRead=True,
+        )
+
+        assert mock_table.get_item.call_args.kwargs["ConsistentRead"] is True
+
 
 class TestTenantScopedDynamoDBPutItem:
     def test_put_item_own_tenant_succeeds(self, ctx, mock_cw: MagicMock) -> None:
@@ -116,6 +131,23 @@ class TestTenantScopedDynamoDBPutItem:
             db, _ = make_dynamo_db(ctx, cw=mock_cw)
             db.put_item(TABLE_NAME, {"PK": "LOCK#failover", "SK": "METADATA"})
         mock_cw.put_metric_data.assert_not_called()
+
+    def test_put_item_passes_through_optional_kwargs(self, ctx) -> None:
+        mock_dynamo = MagicMock()
+        mock_table = MagicMock()
+        mock_dynamo.Table.return_value = mock_table
+
+        db = TenantScopedDynamoDB(ctx, dynamodb_resource=mock_dynamo, cloudwatch_client=MagicMock())
+        db.put_item(
+            TABLE_NAME,
+            {"PK": f"TENANT#{TENANT_ID}", "SK": "INV#001"},
+            ConditionExpression="attribute_not_exists(PK)",
+            ExpressionAttributeValues={":lock_id": "lock-123"},
+        )
+
+        call_kwargs = mock_table.put_item.call_args.kwargs
+        assert call_kwargs["ConditionExpression"] == "attribute_not_exists(PK)"
+        assert call_kwargs["ExpressionAttributeValues"] == {":lock_id": "lock-123"}
 
 
 class TestTenantScopedDynamoDBUpdateItem:
@@ -195,6 +227,23 @@ class TestTenantScopedDynamoDBDeleteItem:
         assert exc_info.value.caller_tenant_id == TENANT_ID
         assert exc_info.value.tenant_id == OTHER_TENANT_ID
         mock_cw.put_metric_data.assert_called_once()
+
+    def test_delete_item_passes_through_optional_kwargs(self, ctx) -> None:
+        mock_dynamo = MagicMock()
+        mock_table = MagicMock()
+        mock_dynamo.Table.return_value = mock_table
+
+        db = TenantScopedDynamoDB(ctx, dynamodb_resource=mock_dynamo, cloudwatch_client=MagicMock())
+        db.delete_item(
+            TABLE_NAME,
+            {"PK": f"TENANT#{TENANT_ID}", "SK": "DEL#001"},
+            ConditionExpression="lock_id = :lock_id",
+            ExpressionAttributeValues={":lock_id": "lock-123"},
+        )
+
+        call_kwargs = mock_table.delete_item.call_args.kwargs
+        assert call_kwargs["ConditionExpression"] == "lock_id = :lock_id"
+        assert call_kwargs["ExpressionAttributeValues"] == {":lock_id": "lock-123"}
 
 
 class TestTenantScopedDynamoDBQuery:
@@ -277,6 +326,57 @@ class TestTenantScopedDynamoDBQuery:
             db, _ = make_dynamo_db(ctx, cw=mock_cw)
             result = db.query(TABLE_NAME)
         assert result.items == []
+
+
+class TestControlPlaneDynamoDBQuery:
+    def test_query_by_pk_value_returns_items(self, ctx, mock_cw: MagicMock) -> None:
+        with mock_aws():
+            db, dynamo = make_dynamo_db(ctx, cw=mock_cw, db_cls=ControlPlaneDynamoDB)
+            table = dynamo.Table(TABLE_NAME)
+            table.put_item(Item={"PK": "AGENT#echo-agent", "SK": "VERSION#1.0.0"})
+            table.put_item(Item={"PK": "AGENT#echo-agent", "SK": "VERSION#1.1.0"})
+
+            result = db.query(TABLE_NAME, pk_value="AGENT#echo-agent")
+
+        assert [item["SK"] for item in result.items] == ["VERSION#1.0.0", "VERSION#1.1.0"]
+
+    def test_query_accepts_explicit_key_condition_and_extra_kwargs(self, ctx) -> None:
+        from boto3.dynamodb.conditions import Key
+
+        mock_dynamo = MagicMock()
+        mock_table = MagicMock()
+        mock_dynamo.Table.return_value = mock_table
+        mock_table.query.return_value = {"Items": []}
+        db = ControlPlaneDynamoDB(ctx, dynamodb_resource=mock_dynamo, cloudwatch_client=MagicMock())
+
+        db.query(
+            TABLE_NAME,
+            key_condition=Key("executionRoleArn").eq("arn:aws:iam::123:role/example"),
+            index_name="gsi-execution-role-arn",
+            ProjectionExpression="PK, SK",
+        )
+
+        call_kwargs = mock_table.query.call_args.kwargs
+        assert call_kwargs["IndexName"] == "gsi-execution-role-arn"
+        assert call_kwargs["ProjectionExpression"] == "PK, SK"
+
+    def test_query_all_paginates_until_complete(self, ctx) -> None:
+        mock_dynamo = MagicMock()
+        mock_table = MagicMock()
+        mock_dynamo.Table.return_value = mock_table
+        mock_table.query.side_effect = [
+            {
+                "Items": [{"PK": "AGENT#echo", "SK": "VERSION#1.0.0"}],
+                "LastEvaluatedKey": {"PK": "AGENT#echo"},
+            },
+            {"Items": [{"PK": "AGENT#echo", "SK": "VERSION#1.1.0"}]},
+        ]
+        db = ControlPlaneDynamoDB(ctx, dynamodb_resource=mock_dynamo, cloudwatch_client=MagicMock())
+
+        items = db.query_all(TABLE_NAME, pk_value="AGENT#echo")
+
+        assert [item["SK"] for item in items] == ["VERSION#1.0.0", "VERSION#1.1.0"]
+        assert mock_table.query.call_count == 2
 
     def test_query_always_uses_caller_partition(self, ctx, mock_cw: MagicMock) -> None:
         with mock_aws():

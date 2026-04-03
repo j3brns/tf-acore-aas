@@ -41,7 +41,6 @@ EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 # Boto3 clients — lazy initialisation (matches handler convention; avoids import-time failures)
 _ssm = None
 _events = None
-_dynamodb = None
 _cloudwatch = None
 _pricing_provider = None
 
@@ -62,13 +61,6 @@ def _get_events() -> Any:
     if _events is None:
         _events = boto3.client("events", region_name=_aws_region())
     return _events
-
-
-def _get_dynamodb() -> Any:
-    global _dynamodb
-    if _dynamodb is None:
-        _dynamodb = boto3.resource("dynamodb", region_name=_aws_region())
-    return _dynamodb
 
 
 def _get_cloudwatch() -> Any:
@@ -166,7 +158,7 @@ def _get_active_tenants() -> list[dict[str, Any]]:
         tier=TenantTier.PREMIUM,
         sub="billing-pipeline",
     )
-    db = ControlPlaneDynamoDB(ctx, dynamodb_resource=_get_dynamodb())
+    db = ControlPlaneDynamoDB(ctx)
     # CR001: FilterExpression requires Attr() conditions, not Key() conditions.
     # Key() is only valid in KeyConditionExpression.
     return db.scan_all(
@@ -205,7 +197,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
         tier=TenantTier(tier),
         sub="billing-pipeline",
     )
-    db = TenantScopedDynamoDB(ctx, dynamodb_resource=_get_dynamodb())
+    db = TenantScopedDynamoDB(ctx)
 
     # 1. Query invocations for the day
     # SK starts with INV#timestamp

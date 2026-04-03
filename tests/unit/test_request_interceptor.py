@@ -42,7 +42,6 @@ def patch_module_constants():
 @pytest.fixture(autouse=True)
 def reset_globals():
     request_interceptor._jwk_client = None
-    request_interceptor._dynamodb_resource = None
     request_interceptor._idempotency_handler = None
     request_interceptor._idempotency_handler_table = None
     request_interceptor._warned_fallback_signing_key = False

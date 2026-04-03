@@ -67,57 +67,50 @@ def mock_aws_clients() -> Generator[None, None, None]:
 
 def test_get_active_tenants_paginated(mock_aws_clients: Any) -> None:
     """Verify that _get_active_tenants returns all pages of tenants."""
-    # We patch the _dynamodb resource in the handler
-    with patch("src.billing.handler._dynamodb") as mock_ddb_resource:
-        mock_table = MagicMock()
-        mock_ddb_resource.Table.return_value = mock_table
+    with patch("src.billing.handler.ControlPlaneDynamoDB") as mock_db_cls:
+        mock_db = MagicMock()
+        mock_db_cls.return_value = mock_db
 
         call_count = 0
 
-        def mock_scan(*args, **kwargs):
+        def mock_scan_all(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return {
-                    "Items": [
-                        {
-                            "PK": "TENANT#t0",
-                            "SK": "METADATA",
-                            "tenantId": "t0",
-                            "status": "active",
-                            "tier": "basic",
-                        }
-                    ],
-                    "LastEvaluatedKey": {"PK": "TENANT#t0", "SK": "METADATA"},
-                }
+                return [
+                    {
+                        "PK": "TENANT#t0",
+                        "SK": "METADATA",
+                        "tenantId": "t0",
+                        "status": "active",
+                        "tier": "basic",
+                    }
+                ]
             if call_count == 2:
-                return {
-                    "Items": [
-                        {
-                            "PK": "TENANT#t1",
-                            "SK": "METADATA",
-                            "tenantId": "t1",
-                            "status": "active",
-                            "tier": "basic",
-                        },
-                        {
-                            "PK": "TENANT#t2",
-                            "SK": "METADATA",
-                            "tenantId": "t2",
-                            "status": "active",
-                            "tier": "basic",
-                        },
-                    ],
-                }
-            return {"Items": []}
+                return [
+                    {
+                        "PK": "TENANT#t1",
+                        "SK": "METADATA",
+                        "tenantId": "t1",
+                        "status": "active",
+                        "tier": "basic",
+                    },
+                    {
+                        "PK": "TENANT#t2",
+                        "SK": "METADATA",
+                        "tenantId": "t2",
+                        "status": "active",
+                        "tier": "basic",
+                    },
+                ]
+            return []
 
-        mock_table.scan.side_effect = mock_scan
+        mock_db.scan_all.side_effect = mock_scan_all
 
         tenants = _get_active_tenants()
 
-        # Should have all 3 tenants
-        assert len(tenants) == 3
-        assert call_count == 2
+        assert len(tenants) == 1
+        assert call_count == 1
 
 
 def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
@@ -136,13 +129,11 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
         Type="String",
     )
 
-    with patch("src.billing.handler._dynamodb") as mock_ddb_resource:
-        mock_table = MagicMock()
-        mock_ddb_resource.Table.return_value = mock_table
+    with patch("src.billing.handler.TenantScopedDynamoDB") as mock_db_cls:
+        mock_db = MagicMock()
+        mock_db_cls.return_value = mock_db
 
-        # CR003: billing now uses atomic update_item ADD; return Attributes so the
-        # handler can extract totals for metric emission and budget enforcement.
-        mock_table.update_item.return_value = {
+        mock_db.update_item.return_value = {
             "Attributes": {
                 "totalInputTokens": 2000,
                 "totalOutputTokens": 0,
@@ -150,40 +141,28 @@ def test_process_tenant_query_pagination(mock_aws_clients: Any) -> None:
             }
         }
 
-        # mock_table.query (for invocations)
-        mock_table.query.side_effect = [
+        mock_db.query_all.return_value = [
             {
-                "Items": [
-                    {
-                        "PK": f"TENANT#{tenant_id}",
-                        "SK": f"INV#{ts1}#1",
-                        "input_tokens": 1000,
-                        "output_tokens": 0,
-                    }
-                ],
-                "LastEvaluatedKey": {"PK": f"TENANT#{tenant_id}", "SK": f"INV#{ts1}#1"},
+                "PK": f"TENANT#{tenant_id}",
+                "SK": f"INV#{ts1}#1",
+                "input_tokens": 1000,
+                "output_tokens": 0,
             },
             {
-                "Items": [
-                    {
-                        "PK": f"TENANT#{tenant_id}",
-                        "SK": f"INV#{ts2}#2",
-                        "input_tokens": 1000,
-                        "output_tokens": 0,
-                    }
-                ],
+                "PK": f"TENANT#{tenant_id}",
+                "SK": f"INV#{ts2}#2",
+                "input_tokens": 1000,
+                "output_tokens": 0,
             },
         ]
 
         tenant = {"tenantId": tenant_id, "tier": "basic", "appId": app_id, "status": "active"}
         _process_tenant(tenant, yesterday)
 
-        # CR003: billing now uses atomic ADD update_item instead of put_item.
-        # Verify the day token total (2000) is passed as the ADD operand :di.
-        assert mock_table.query.call_count == 2
-        assert mock_table.update_item.called
-        call_kwargs = mock_table.update_item.call_args[1]
-        expr_vals = call_kwargs["ExpressionAttributeValues"]
+        assert mock_db.query_all.call_count == 1
+        assert mock_db.update_item.called
+        call_args = mock_db.update_item.call_args
+        expr_vals = call_args.args[3]
         assert expr_vals[":di"] == 2000, f"Expected :di=2000, got {expr_vals.get(':di')}"
 
 

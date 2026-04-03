@@ -15,11 +15,11 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-import boto3
 import jwt
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.logging import correlation_paths
 from boto3.dynamodb.conditions import Attr, Key
+from data_access import ControlPlaneDynamoDB, TenantContext, TenantTier
 from jwt import PyJWKClient
 
 logger = Logger(service="authoriser")
@@ -33,7 +33,6 @@ TENANTS_TABLE = os.environ.get("TENANTS_TABLE")
 
 # Global clients — connection reuse across warm starts
 _jwk_client: PyJWKClient | None = None
-_dynamodb_resource = None
 
 # CR005: In-memory TTL cache for SigV4 ARN→tenant binding.
 # Avoids a full DynamoDB table scan on every machine-auth request.
@@ -56,6 +55,15 @@ def _aws_region() -> str:
     return os.environ["AWS_REGION"]
 
 
+def get_platform_context() -> TenantContext:
+    return TenantContext(
+        tenant_id=_PLATFORM_TENANT_ID,
+        app_id="platform-authoriser",
+        tier=TenantTier.PREMIUM,
+        sub="authoriser-lambda",
+    )
+
+
 def get_jwk_client() -> PyJWKClient | None:
     """Lazy initialization of PyJWKClient."""
     global _jwk_client
@@ -63,14 +71,6 @@ def get_jwk_client() -> PyJWKClient | None:
         # Cache JWKS for 5 minutes (300s) as per ARCHITECTURE.md
         _jwk_client = PyJWKClient(ENTRA_JWKS_URL, cache_jwk_set=True, lifespan=300)
     return _jwk_client
-
-
-def get_dynamodb():
-    """Lazy initialization of boto3 resource."""
-    global _dynamodb_resource
-    if _dynamodb_resource is None:
-        _dynamodb_resource = boto3.resource("dynamodb", region_name=_aws_region())
-    return _dynamodb_resource
 
 
 def generate_policy(
@@ -96,17 +96,16 @@ def generate_policy(
 def get_tenant_status(tenant_id: str) -> str | None:
     """Fetch tenant status from DynamoDB.
 
-    The authoriser runs before a TenantContext exists, so it uses the
-    system-level DynamoDB client directly.
+    The authoriser runs before a caller TenantContext exists, so it uses
+    the reserved platform control-plane context.
     """
     if not TENANTS_TABLE:
         logger.warning("TENANTS_TABLE not set, assuming active (dev mode)")
         return "active"
 
     try:
-        table = get_dynamodb().Table(TENANTS_TABLE)
-        response = table.get_item(Key={"PK": f"TENANT#{tenant_id}", "SK": "METADATA"})
-        item = response.get("Item")
+        db = ControlPlaneDynamoDB(get_platform_context())
+        item = db.get_item(TENANTS_TABLE, {"PK": f"TENANT#{tenant_id}", "SK": "METADATA"})
         if item:
             status = item.get("status")
             return str(status) if status is not None else None
@@ -148,25 +147,26 @@ def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
 
     # 2. Resolve via DynamoDB GSI
     candidate_role_arns = _sigv4_caller_role_arns(caller_arn)
-    table = get_dynamodb().Table(TENANTS_TABLE)
+    db = ControlPlaneDynamoDB(get_platform_context())
     matches: dict[str, dict[str, str]] = {}
 
     try:
         for role_arn in candidate_role_arns:
             # O(1) GSI Query
-            response = table.query(
-                IndexName="gsi-execution-role-arn",
-                KeyConditionExpression=Key("executionRoleArn").eq(role_arn),
+            response = db.query(
+                TENANTS_TABLE,
+                key_condition=Key("executionRoleArn").eq(role_arn),
+                index_name="gsi-execution-role-arn",
                 ProjectionExpression="PK, SK",
             )
 
-            for index_item in response.get("Items", []):
+            for index_item in response.items:
                 # Follow-up GetItem for full metadata (since GSI is KEYS_ONLY)
-                full_item_resp = table.get_item(
-                    Key={"PK": index_item["PK"], "SK": index_item["SK"]},
+                item = db.get_item(
+                    TENANTS_TABLE,
+                    {"PK": index_item["PK"], "SK": index_item["SK"]},
                     ProjectionExpression="tenantId, tenant_id, appId, app_id, tier",
                 )
-                item = full_item_resp.get("Item")
                 if not item:
                     continue
 

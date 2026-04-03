@@ -5,14 +5,24 @@ from datetime import UTC, datetime
 from typing import Any
 
 from aws_lambda_powertools import Logger
+from data_access import ControlPlaneDynamoDB, TenantContext, TenantTier
 
 from src.bridge.constants import FAILOVER_LOCK_NAME, OPS_LOCKS_TABLE
 
 logger = Logger(service="bridge-lock-manager")
 
 
+def _platform_context() -> TenantContext:
+    return TenantContext(
+        tenant_id="platform",
+        app_id="bridge-lock-manager",
+        tier=TenantTier.PREMIUM,
+        sub="bridge-lock-manager",
+    )
+
+
 def acquire_lock(
-    dynamodb: Any,
+    db: ControlPlaneDynamoDB,
     *,
     lock_name: str,
     identity: str,
@@ -22,11 +32,11 @@ def acquire_lock(
     lock_id = str(uuid.uuid4())
     now = datetime.now(UTC)
     ttl = int(now.timestamp()) + ttl_seconds
-    table = dynamodb.Table(OPS_LOCKS_TABLE)
 
     try:
-        table.put_item(
-            Item={
+        db.put_item(
+            OPS_LOCKS_TABLE,
+            item={
                 "PK": f"LOCK#{lock_name}",
                 "SK": "METADATA",
                 "lock_id": lock_id,
@@ -43,16 +53,16 @@ def acquire_lock(
 
 
 def release_lock(
-    dynamodb: Any,
+    db: ControlPlaneDynamoDB,
     *,
     lock_name: str,
     lock_id: str,
 ) -> bool:
     """Release a distributed lock in DynamoDB."""
-    table = dynamodb.Table(OPS_LOCKS_TABLE)
     try:
-        table.delete_item(
-            Key={"PK": f"LOCK#{lock_name}", "SK": "METADATA"},
+        db.delete_item(
+            OPS_LOCKS_TABLE,
+            key={"PK": f"LOCK#{lock_name}", "SK": "METADATA"},
             ConditionExpression="lock_id = :lock_id",
             ExpressionAttributeValues={":lock_id": lock_id},
         )
@@ -63,7 +73,6 @@ def release_lock(
 
 def trigger_failover(
     *,
-    dynamodb: Any,
     ssm: Any,
     current_region: str,
     get_config_fn: Any,
@@ -80,8 +89,9 @@ def trigger_failover(
     new_region = "eu-central-1" if current_region == "eu-west-1" else "eu-west-1"
     lock_name = FAILOVER_LOCK_NAME
     identity = f"bridge-lambda-{os.environ.get('AWS_LAMBDA_LOG_STREAM_NAME', 'local')}"
+    db = ControlPlaneDynamoDB(_platform_context())
 
-    lock_id = acquire_lock(dynamodb, lock_name=lock_name, identity=identity)
+    lock_id = acquire_lock(db, lock_name=lock_name, identity=identity)
     if not lock_id:
         logger.info("Failover in progress by another instance, skipping update")
         # Wait a bit and re-fetch config
@@ -115,4 +125,4 @@ def trigger_failover(
         logger.exception("Failed to trigger failover")
         return current_region
     finally:
-        release_lock(dynamodb, lock_name=lock_name, lock_id=lock_id)
+        release_lock(db, lock_name=lock_name, lock_id=lock_id)

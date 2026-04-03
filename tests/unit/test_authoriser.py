@@ -627,22 +627,13 @@ def test_get_jwk_client_logic(mock_env):
             assert client is not None
 
 
-def test_get_dynamodb_logic(mock_env):
-    from src.authoriser.handler import get_dynamodb
+def test_get_platform_context_logic(mock_env):
+    from src.authoriser.handler import get_platform_context
 
-    with patch("src.authoriser.handler._dynamodb_resource", None):
-        db = get_dynamodb()
-        assert db is not None
-
-
-def test_get_dynamodb_requires_aws_region(mock_env, monkeypatch):
-    from src.authoriser.handler import get_dynamodb
-
-    monkeypatch.delenv("AWS_REGION", raising=False)
-
-    with patch("src.authoriser.handler._dynamodb_resource", None):
-        with pytest.raises(KeyError, match="AWS_REGION"):
-            get_dynamodb()
+    ctx = get_platform_context()
+    assert ctx.tenant_id == "platform"
+    assert ctx.app_id == "platform-authoriser"
+    assert ctx.sub == "authoriser-lambda"
 
 
 def test_get_tenant_status_no_table(mock_env):
@@ -652,25 +643,23 @@ def test_get_tenant_status_no_table(mock_env):
         assert get_tenant_status("any") == "active"
 
 
-@patch("src.authoriser.handler.get_dynamodb")
-def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_get_dynamodb, mock_env):
+@patch("src.authoriser.handler.ControlPlaneDynamoDB")
+def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_db_cls, mock_env):
     from src.authoriser import handler as authoriser_handler
     from src.authoriser.handler import resolve_sigv4_tenant_binding
 
     authoriser_handler._sigv4_binding_cache.clear()
-    mock_table = MagicMock()
-    mock_get_dynamodb.return_value.Table.return_value = mock_table
+    mock_db = MagicMock()
+    mock_db_cls.return_value = mock_db
 
     # 1. GSI Query returns PK/SK
-    mock_table.query.return_value = {"Items": [{"PK": "TENANT#t-test-001", "SK": "METADATA"}]}
+    mock_db.query.return_value.items = [{"PK": "TENANT#t-test-001", "SK": "METADATA"}]
 
     # 2. GetItem returns full metadata
-    mock_table.get_item.return_value = {
-        "Item": {
-            "tenantId": "t-test-001",
-            "appId": "app-001",
-            "tier": "not-a-tier",
-        }
+    mock_db.get_item.return_value = {
+        "tenantId": "t-test-001",
+        "appId": "app-001",
+        "tier": "not-a-tier",
     }
 
     binding = resolve_sigv4_tenant_binding(
@@ -680,14 +669,14 @@ def test_resolve_sigv4_tenant_binding_invalid_tier_falls_back_to_basic(mock_get_
     assert binding == {"tenant_id": "t-test-001", "app_id": "app-001", "tier": "basic"}
 
 
-@patch("src.authoriser.handler.get_dynamodb")
-def test_resolve_sigv4_tenant_binding_uses_gsi_query(mock_get_dynamodb, mock_env):
+@patch("src.authoriser.handler.ControlPlaneDynamoDB")
+def test_resolve_sigv4_tenant_binding_uses_gsi_query(mock_db_cls, mock_env):
     from src.authoriser import handler as authoriser_handler
     from src.authoriser.handler import resolve_sigv4_tenant_binding
 
-    mock_table = MagicMock()
-    mock_get_dynamodb.return_value.Table.return_value = mock_table
-    mock_table.query.return_value = {"Items": []}
+    mock_db = MagicMock()
+    mock_db_cls.return_value = mock_db
+    mock_db.query.return_value.items = []
     authoriser_handler._sigv4_binding_cache.clear()
 
     resolve_sigv4_tenant_binding(
@@ -695,14 +684,14 @@ def test_resolve_sigv4_tenant_binding_uses_gsi_query(mock_get_dynamodb, mock_env
     )
 
     # Verify GSI Query was used instead of Scan
-    assert mock_table.query.called
-    kwargs = mock_table.query.call_args.kwargs
-    assert kwargs["IndexName"] == "gsi-execution-role-arn"
-    assert "KeyConditionExpression" in kwargs
-    assert "ProjectionExpression" in kwargs
-    assert "PK" in kwargs["ProjectionExpression"]
-    assert "SK" in kwargs["ProjectionExpression"]
-    assert not mock_table.scan.called
+    assert mock_db.query.called
+    call_args = mock_db.query.call_args
+    assert call_args.args[0] == OS_ENV["TENANTS_TABLE"]
+    assert call_args.kwargs["index_name"] == "gsi-execution-role-arn"
+    assert "key_condition" in call_args.kwargs
+    assert "ProjectionExpression" in call_args.kwargs
+    assert "PK" in call_args.kwargs["ProjectionExpression"]
+    assert "SK" in call_args.kwargs["ProjectionExpression"]
 
 
 @patch("src.authoriser.handler.get_jwk_client")
@@ -714,17 +703,15 @@ def test_handler_unexpected_error(mock_get_jwk_client, mock_env, lambda_context)
 
 
 @patch("src.authoriser.handler.get_jwk_client")
-@patch("src.authoriser.handler.get_dynamodb")
-def test_get_tenant_status_error(mock_get_db, mock_get_jwk_client, mock_env, lambda_context):
+@patch("src.authoriser.handler.ControlPlaneDynamoDB")
+def test_get_tenant_status_error(mock_db_cls, mock_get_jwk_client, mock_env, lambda_context):
     token = "valid.token"
     event = {"methodArn": "arn", "authorizationToken": f"Bearer {token}"}
     payload = {"tenantid": "t-test", "appid": "app", "sub": "user"}
 
     mock_db = MagicMock()
-    mock_get_db.return_value = mock_db
-    mock_table = MagicMock()
-    mock_db.Table.return_value = mock_table
-    mock_table.get_item.side_effect = Exception("DB Error")
+    mock_db_cls.return_value = mock_db
+    mock_db.get_item.side_effect = Exception("DB Error")
 
     mock_jwk_client = MagicMock()
     mock_get_jwk_client.return_value = mock_jwk_client
