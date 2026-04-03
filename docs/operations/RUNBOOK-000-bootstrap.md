@@ -10,6 +10,17 @@ Bootstrap the platform from scratch into a new AWS environment. Run once per env
 - Entra app registration completed (see docs/entra-setup.md)
 - Record: Entra client ID, Entra tenant ID, GitLab project ID
 
+Export the target bootstrap contract before any step:
+
+```bash
+export BOOTSTRAP_ACCOUNT_ID=<target-account-id>
+export PLATFORM_HOME_REGION=eu-west-2
+export AWS_REGION=$PLATFORM_HOME_REGION
+```
+
+Bootstrap now fails closed when the active caller account does not match
+`BOOTSTRAP_ACCOUNT_ID` or when `AWS_REGION` is not the home region.
+
 ## Steps (run in order — each must succeed before proceeding)
 
 ### Step 1: CDK Bootstrap (all regions)
