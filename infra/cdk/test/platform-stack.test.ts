@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { PlatformStack } from '../lib/platform-stack';
 
@@ -368,23 +369,41 @@ describe('PlatformStack (TASK-023)', () => {
     });
   });
 
-  test('configures CloudFront custom error responses for SPA route fallback', () => {
+  test('configures CloudFront route fallback without masking missing asset failures', () => {
+    template.resourceCountIs('AWS::CloudFront::Function', 1);
+
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        CustomErrorResponses: [
-          {
-            ErrorCode: 403,
-            ResponseCode: 200,
-            ResponsePagePath: '/index.html',
-            ErrorCachingMinTTL: 0,
-          },
-          {
-            ErrorCode: 404,
-            ResponseCode: 200,
-            ResponsePagePath: '/index.html',
-            ErrorCachingMinTTL: 0,
-          },
-        ],
+        DefaultCacheBehavior: Match.objectLike({
+          FunctionAssociations: Match.arrayWith([
+            Match.objectLike({
+              EventType: 'viewer-request',
+              FunctionARN: Match.anyValue(),
+            }),
+          ]),
+        }),
+      }),
+    });
+
+    const distributions = template.findResources('AWS::CloudFront::Distribution');
+    const [distribution] = Object.values(distributions) as Array<{
+      Properties?: { DistributionConfig?: Record<string, unknown> };
+    }>;
+    expect(distribution.Properties?.DistributionConfig).not.toHaveProperty('CustomErrorResponses');
+  });
+
+  test('distinguishes SPA shell caching from immutable asset caching', () => {
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        DefaultCacheBehavior: Match.objectLike({
+          CachePolicyId: cloudfront.CachePolicy.CACHING_DISABLED.cachePolicyId,
+        }),
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: 'assets/*',
+            CachePolicyId: cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId,
+          }),
+        ]),
       }),
     });
   });

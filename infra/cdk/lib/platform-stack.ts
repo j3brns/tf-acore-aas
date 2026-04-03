@@ -351,6 +351,23 @@ export class PlatformStack extends cdk.Stack {
       },
     });
 
+    const spaRouteRewriteFunction = new cloudfront.Function(this, 'SpaRouteRewriteFunction', {
+      comment: 'Rewrite SPA deep links to index.html without masking missing asset failures',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri || '/';
+  var lastSegment = uri.substring(uri.lastIndexOf('/') + 1);
+
+  if (uri === '/' || lastSegment.indexOf('.') === -1) {
+    request.uri = '/index.html';
+  }
+
+  return request;
+}
+      `),
+    });
+
     this.spaDistribution = new cloudfront.CfnDistribution(this, 'SpaDistribution', {
       distributionConfig: {
         enabled: true,
@@ -364,20 +381,6 @@ export class PlatformStack extends cdk.Stack {
           includeCookies: false,
           prefix: 'spa-cloudfront/',
         },
-        customErrorResponses: [
-          {
-            errorCode: 403,
-            responsePagePath: '/index.html',
-            responseCode: 200,
-            errorCachingMinTtl: 0,
-          },
-          {
-            errorCode: 404,
-            responsePagePath: '/index.html',
-            responseCode: 200,
-            errorCachingMinTtl: 0,
-          },
-        ],
         origins: [
           {
             id: 'SpaS3Origin',
@@ -394,9 +397,27 @@ export class PlatformStack extends cdk.Stack {
           compress: true,
           allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
           cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
-          cachePolicyId: cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId,
+          cachePolicyId: cloudfront.CachePolicy.CACHING_DISABLED.cachePolicyId,
           responseHeadersPolicyId: spaResponseHeadersPolicy.attrId,
+          functionAssociations: [
+            {
+              eventType: 'viewer-request',
+              functionArn: spaRouteRewriteFunction.functionArn,
+            },
+          ],
         },
+        cacheBehaviors: [
+          {
+            pathPattern: 'assets/*',
+            targetOriginId: 'SpaS3Origin',
+            viewerProtocolPolicy: 'redirect-to-https',
+            compress: true,
+            allowedMethods: ['GET', 'HEAD', 'OPTIONS'],
+            cachedMethods: ['GET', 'HEAD', 'OPTIONS'],
+            cachePolicyId: cloudfront.CachePolicy.CACHING_OPTIMIZED.cachePolicyId,
+            responseHeadersPolicyId: spaResponseHeadersPolicy.attrId,
+          },
+        ],
         restrictions: {
           geoRestriction: {
             restrictionType: 'none',
