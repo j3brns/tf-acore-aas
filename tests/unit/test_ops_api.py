@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.tenant_api import db_utils as tenant_api_db_utils
 from src.tenant_api import handler as tenant_api_handler
+from src.tenant_api import ops_control
 from tests.unit.test_tenant_api_handler import (
     FakeDynamoDbResource,
     FakeEvents,
@@ -145,3 +146,21 @@ def test_de_scoped_ops_routes_do_not_expose_placeholder_success(
 
     assert response["statusCode"] == 405
     assert _body(response)["error"]["code"] == "METHOD_NOT_ALLOWED"
+
+
+def test_platform_agent_read_only_surface_is_bounded_to_authoritative_routes() -> None:
+    assert ops_control.READ_ONLY_PLATFORM_DIAGNOSTIC_ROUTES == {
+        ("GET", "/v1/platform/agents"),
+        ("GET", "/v1/platform/quota"),
+        ("GET", "/v1/platform/billing/status"),
+    }
+    assert ("POST", "/v1/platform/failover") not in ops_control.READ_ONLY_PLATFORM_DIAGNOSTIC_ROUTES
+    assert ("POST", "/v1/platform/agents") not in ops_control.READ_ONLY_PLATFORM_DIAGNOSTIC_ROUTES
+    assert (
+        ("GET", "/v1/platform/ops/top-tenants")
+        not in ops_control.READ_ONLY_PLATFORM_DIAGNOSTIC_ROUTES
+    )
+    assert (
+        ("GET", "/v1/platform/ops/tenants/{tenant}/invocations")
+        not in ops_control.READ_ONLY_PLATFORM_DIAGNOSTIC_ROUTES
+    )

@@ -31,6 +31,14 @@ PLATFORM_ADMIN_PATHS = {
     "/v1/platform/billing/status",
 }
 
+READ_ONLY_PLATFORM_DIAGNOSTIC_ROUTES = frozenset(
+    {
+        ("GET", "/v1/platform/agents"),
+        ("GET", "/v1/platform/quota"),
+        ("GET", "/v1/platform/billing/status"),
+    }
+)
+
 
 def handle_platform_failover(
     event: dict[str, Any],

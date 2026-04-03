@@ -848,7 +848,10 @@ paths:
       tags: [Platform]
       operationId: platformListAgents
       summary: List all agents for operators
-      description: Returns all registered agent versions with canonical release state and governance metadata.
+      description: >
+        Returns all registered agent versions with canonical release state and governance
+        metadata from `platform-agents`. This route is part of the bounded read-only
+        platform-agent diagnostics surface.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -945,7 +948,9 @@ paths:
       operationId: getPlatformQuota
       summary: Get platform quota status
       description: >
-        Returns the current AgentCore quota utilisation across regions.
+        Returns the current AgentCore quota utilisation across regions from authoritative
+        Service Quotas and CloudWatch signals. This route is part of the bounded read-only
+        platform-agent diagnostics surface.
       x-required-roles:
         - Platform.Admin
         - Platform.Operator
@@ -972,6 +977,51 @@ paths:
                           type: number
                         utilisationPercentage:
                           type: number
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/platform/billing/status:
+    get:
+      tags: [Platform]
+      operationId: getPlatformBillingStatus
+      summary: Get platform billing summaries
+      description: >
+        Returns monthly tenant billing summaries from authoritative control-plane billing
+        records. This route is part of the bounded read-only platform-agent diagnostics
+        surface.
+      x-required-roles:
+        - Platform.Admin
+        - Platform.Operator
+      responses:
+        "200":
+          description: Monthly billing summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  yearMonth:
+                    type: string
+                  summaries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tenantId:
+                          type: string
+                        totalInputTokens:
+                          type: integer
+                        totalOutputTokens:
+                          type: integer
+                        totalCostUsd:
+                          type: number
+                        lastUpdated:
+                          type: string
+                          format: date-time
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

@@ -296,6 +296,29 @@ Operator
 Design rule: platform agents assist and orchestrate control-plane operations; they do
 not bypass the control plane.
 
+### Read-Only Platform-Agent Diagnostics Surface
+
+The bounded read-only platform-agent surface is intentionally narrow and limited to
+authoritative control-plane signals:
+
+- `GET /v1/platform/agents`: canonical release and governance state from
+  `platform-agents`
+- `GET /v1/platform/quota`: live quota utilisation from Service Quotas and CloudWatch
+- `GET /v1/platform/billing/status`: billing summaries from control-plane records
+
+These routes may be summarized by platform-agent runbook assistance because they
+stay within platform-owned control-plane state and do not require direct customer
+invocation content.
+
+The following are explicitly outside the read-only platform-agent diagnostics surface
+unless and until they are reintroduced with authoritative backing:
+
+- synthetic or de-scoped `/v1/platform/ops/*` summary endpoints
+- raw customer invocation/session convenience views
+- AG-UI bootstrap/runtime connectivity flows
+- mutating control-plane actions such as failover, release promotion, rollback, or
+  agent registration
+
 ## Configuration Ownership Model
 
 The platform splits configuration ownership by change semantics rather than by
