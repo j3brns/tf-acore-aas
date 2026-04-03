@@ -142,11 +142,15 @@ def handle_platform_billing_status(
             "yearMonth": year_month,
             "summaries": [
                 {
-                    "tenantId": s.get("tenantId"),
-                    "totalInputTokens": int(s.get("total_input_tokens", 0)),
-                    "totalOutputTokens": int(s.get("total_output_tokens", 0)),
-                    "totalCostUsd": float(s.get("total_cost_usd", 0.0)),
-                    "lastUpdated": s.get("last_updated"),
+                    "tenantId": s.get("tenantId") or s.get("tenant_id"),
+                    "totalInputTokens": int(
+                        s.get("totalInputTokens", s.get("total_input_tokens", 0))
+                    ),
+                    "totalOutputTokens": int(
+                        s.get("totalOutputTokens", s.get("total_output_tokens", 0))
+                    ),
+                    "totalCostUsd": float(s.get("totalCostUsd", s.get("total_cost_usd", 0.0))),
+                    "lastUpdated": s.get("updatedAt") or s.get("last_updated"),
                 }
                 for s in summaries
             ],

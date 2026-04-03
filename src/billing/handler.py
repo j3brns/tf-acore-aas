@@ -128,6 +128,35 @@ def _iso_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _read_str_field(record: dict[str, Any], *names: str, default: str | None = None) -> str | None:
+    for name in names:
+        value = record.get(name)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return default
+
+
+def _read_float_field(record: dict[str, Any], *names: str, default: float = 0.0) -> float:
+    for name in names:
+        value = record.get(name)
+        if value is None:
+            continue
+        return float(value)
+    return default
+
+
+def _read_int_field(record: dict[str, Any], *names: str, default: int = 0) -> int:
+    for name in names:
+        value = record.get(name)
+        if value is None:
+            continue
+        return int(value)
+    return default
+
+
 def _get_active_tenants() -> list[dict[str, Any]]:
     """Scan platform-tenants for active/suspended tenants."""
     # System context for admin scan
@@ -148,10 +177,14 @@ def _get_active_tenants() -> list[dict[str, Any]]:
 
 
 def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
-    tenant_id = tenant["tenant_id"]
-    tier = tenant["tier"]
-    budget = float(tenant.get("monthly_budget_usd", 0.0))
-    app_id = tenant.get("app_id", "unknown")
+    tenant_id = _read_str_field(tenant, "tenantId", "tenant_id")
+    if tenant_id is None:
+        raise ValueError("tenant record is missing tenantId")
+    tier = _read_str_field(tenant, "tier")
+    if tier is None:
+        raise ValueError(f"tenant {tenant_id} is missing tier")
+    budget = _read_float_field(tenant, "monthlyBudgetUsd", "monthly_budget_usd", default=0.0)
+    app_id = _read_str_field(tenant, "appId", "app_id", default="unknown") or "unknown"
     pricing_path = f"/platform/billing/pricing/{tier}"
 
     # Day window
@@ -205,8 +238,10 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
     update_response = db.update_item(
         TENANTS_TABLE,
         summary_key,
-        "SET tenant_id = :tid, year_month = :ym, last_updated = :lu "
-        "ADD total_input_tokens :di, total_output_tokens :do, total_cost_usd :dc",
+        "SET tenantId = :tid, tenant_id = :tid, yearMonth = :ym, year_month = :ym, "
+        "updatedAt = :lu, last_updated = :lu "
+        "ADD totalInputTokens :di, total_input_tokens :di, totalOutputTokens :do, "
+        "total_output_tokens :do, totalCostUsd :dc, total_cost_usd :dc",
         {
             ":tid": tenant_id,
             ":ym": year_month,
@@ -217,9 +252,13 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
         },
     )
     updated = update_response.get("Attributes", {})
-    total_input = int(updated.get("total_input_tokens", day_input))
-    total_output = int(updated.get("total_output_tokens", day_output))
-    total_cost = float(updated.get("total_cost_usd", day_cost))
+    total_input = _read_int_field(
+        updated, "totalInputTokens", "total_input_tokens", default=day_input
+    )
+    total_output = _read_int_field(
+        updated, "totalOutputTokens", "total_output_tokens", default=day_output
+    )
+    total_cost = _read_float_field(updated, "totalCostUsd", "total_cost_usd", default=day_cost)
 
     # 4. Emit metrics for observability
     # Monthly cost metric used for per-tenant budget alarms
@@ -275,7 +314,7 @@ def _process_tenant(tenant: dict[str, Any], date_to_process: datetime) -> None:
             db.update_item(
                 TENANTS_TABLE,
                 {"PK": f"TENANT#{tenant_id}", "SK": "METADATA"},
-                "SET #s = :s, updated_at = :u",
+                "SET #s = :s, updatedAt = :u, updated_at = :u",
                 {":s": TenantStatus.SUSPENDED, ":u": _iso_now()},
                 expression_attribute_names={"#s": "status"},
                 condition_expression="attribute_exists(PK)",
