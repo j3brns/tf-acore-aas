@@ -412,7 +412,7 @@ def test_write_validation_receipt_writes_issue_scoped_receipt(tmp_path):
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert payload["issue_number"] == 33
     assert payload["branch"] == "wt/task/33-test"
-    assert payload["head_sha"] == "abc123def456"
+    assert payload["head_sha"] == "abc123def456"  # pragma: allowlist secret
     assert payload["check"] == "validate-pre-push"
     assert payload["result"] == "pass"
 
@@ -1852,6 +1852,8 @@ def test_launch_zellij_batch_session_adds_tabs_to_existing_session(monkeypatch, 
 
 
 def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch, capsys, tmp_path):
+    from scripts.issue_tool import github_client
+
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     target = worktree_issues.WorktreeInfo(
@@ -1905,8 +1907,10 @@ def test_close_issue_done_normalizes_labels_for_already_closed_issue(monkeypatch
         return ""
 
     monkeypatch.setattr(worktree_issues, "gh_text", _gh_text)
+    monkeypatch.setattr(github_client, "gh_text", _gh_text)
     monkeypatch.setattr(worktree_issues, "issue_has_handback_comment", lambda **_kwargs: False)
     monkeypatch.setattr(worktree_issues, "ensure_label_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(github_client, "ensure_label_exists", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         worktree_issues,
         "local_branch_exists",

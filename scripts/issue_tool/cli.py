@@ -35,6 +35,24 @@ from scripts.issue_tool.agent_launch import (
     launch_interactive_session,
     resolve_launch_request,
 )
+from scripts.issue_tool.closeout import (
+    cleanup_finished_worktree as _cleanup_finished_worktree,
+)
+from scripts.issue_tool.closeout import (
+    closeout_event as _closeout_event,
+)
+from scripts.issue_tool.closeout import (
+    closeout_report_path as _closeout_report_path,
+)
+from scripts.issue_tool.closeout import (
+    read_closeout_report,
+)
+from scripts.issue_tool.closeout import (
+    verify_cleanup_finished as _verify_cleanup_finished,
+)
+from scripts.issue_tool.closeout import (
+    write_closeout_report as _write_closeout_report,
+)
 from scripts.issue_tool.constants import (
     ANSI_ESCAPE_RE,
     CR_TITLE_RE,
@@ -2264,59 +2282,30 @@ def finish_summary(root: Path, *, path: Path | None = None) -> None:
 
 
 def cleanup_finished_worktree(root: Path, target: WorktreeInfo) -> dict[str, bool]:
-    result = {
-        "worktree_removed": False,
-        "branch_deleted": False,
-        "worktree_pruned": False,
-    }
-    branch = target.branch
-    print("Cleaning up worktree...")
-    try:
-        cwd = Path(os.getcwd()).resolve()
-    except FileNotFoundError:
-        cwd = None
-    if cwd is None or cwd == target.path.resolve() or target.path.resolve() in cwd.parents:
-        os.chdir(root)
-    if target.path.exists():
-        run(["git", "worktree", "remove", str(target.path)], cwd=root)
-        print(f"Removed worktree {target.path}")
-        result["worktree_removed"] = True
-    else:
-        print(f"Worktree path missing, skipping remove: {target.path}")
-    if branch and branch != "(detached)" and WORKTREE_BRANCH_REGEX.fullmatch(branch):
-        if local_branch_exists(root, branch):
-            run(["git", "branch", "-d", branch], cwd=root)
-            print(f"Deleted branch {branch}")
-            result["branch_deleted"] = True
-        else:
-            print(f"Branch already absent, skipping delete: {branch}")
-    run(["git", "worktree", "prune"], cwd=root)
-    print("Pruned stale worktree refs")
-    result["worktree_pruned"] = True
-    return result
+    return _cleanup_finished_worktree(
+        root,
+        target,
+        local_branch_exists_fn=local_branch_exists,
+        os_module=os,
+        run_fn=run,
+    )
 
 
 def closeout_report_path(root: Path, target: WorktreeInfo) -> Path:
-    issue_id = extract_issue_id_from_branch(target.branch) or "unknown"
-    safe_branch = re.sub(r"[^A-Za-z0-9._-]+", "_", target.branch)
-    return root / WORKTREE_CLOSEOUT_DIR / f"issue-{issue_id}-{safe_branch}.json"
+    return _closeout_report_path(
+        root,
+        target,
+        extract_issue_id_from_branch_fn=extract_issue_id_from_branch,
+    )
 
 
 def write_closeout_report(root: Path, target: WorktreeInfo, payload: dict[str, object]) -> Path:
-    path = closeout_report_path(root, target)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "branch": target.branch,
-        "generated_at": datetime.now(UTC).isoformat(),
-        "worktree_path": str(target.path),
-        **payload,
-    }
-    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def read_closeout_report(path: Path) -> dict[str, object]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _write_closeout_report(
+        root,
+        target,
+        payload,
+        extract_issue_id_from_branch_fn=extract_issue_id_from_branch,
+    )
 
 
 def closeout_event(
@@ -2327,35 +2316,22 @@ def closeout_event(
     repo: str | None,
     issue_id: int | None,
 ) -> dict[str, object]:
-    return {
-        "ts": datetime.now(UTC).isoformat(),
-        "pid": os.getpid(),
-        "stage": stage,
-        "message": message,
-        "branch": target.branch,
-        "worktree_path": str(target.path),
-        "repo": repo,
-        "issue_id": issue_id,
-    }
+    return _closeout_event(
+        stage=stage,
+        message=message,
+        target=target,
+        repo=repo,
+        issue_id=issue_id,
+    )
 
 
 def verify_cleanup_finished(root: Path, target: WorktreeInfo) -> list[str]:
-    issues: list[str] = []
-    current_worktrees = list_worktrees(root)
-    if any(
-        wt.path.resolve() == target.path.resolve() for wt in current_worktrees if wt.path.exists()
-    ):
-        issues.append(f"worktree still registered: {target.path}")
-    if target.path.exists():
-        issues.append(f"worktree path still exists: {target.path}")
-    if (
-        target.branch
-        and target.branch != "(detached)"
-        and WORKTREE_BRANCH_REGEX.fullmatch(target.branch)
-    ):
-        if local_branch_exists(root, target.branch):
-            issues.append(f"local branch still exists: {target.branch}")
-    return issues
+    return _verify_cleanup_finished(
+        root,
+        target,
+        list_worktrees_fn=list_worktrees,
+        local_branch_exists_fn=local_branch_exists,
+    )
 
 
 def close_issue_done(root: Path, *, path: Path | None = None, force: bool = False) -> None:
