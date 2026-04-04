@@ -6,6 +6,8 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from src.platform_aws import aws_region, boto3_client
+
 try:
     from aws_lambda_powertools import Logger
 
@@ -41,20 +43,20 @@ _events_client = None
 
 
 def _aws_region() -> str:
-    return os.environ["AWS_REGION"]
+    return aws_region()
 
 
 def get_cloudformation():
     global _cloudformation_client
     if _cloudformation_client is None:
-        _cloudformation_client = boto3.client("cloudformation", region_name=_aws_region())
+        _cloudformation_client = boto3_client("cloudformation", region_name=_aws_region())
     return _cloudformation_client
 
 
 def get_events():
     global _events_client
     if _events_client is None:
-        _events_client = boto3.client("events", region_name=_aws_region())
+        _events_client = boto3_client("events", region_name=_aws_region())
     return _events_client
 
 

@@ -29,6 +29,7 @@ from data_access.models import (
 )
 
 from src.billing.integrations import BillingIntegrations, build_billing_integrations
+from src.platform_aws import aws_region
 
 logger = Logger(service="billing")
 tracer = Tracer()
@@ -43,7 +44,7 @@ _integrations: BillingIntegrations | None = None
 
 
 def _aws_region() -> str:
-    return os.environ["AWS_REGION"]
+    return aws_region()
 
 
 def _get_integrations() -> BillingIntegrations:

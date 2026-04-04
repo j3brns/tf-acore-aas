@@ -72,6 +72,7 @@ from src.bridge.constants import (
     SESSIONS_TABLE,
     TENANTS_TABLE,
 )
+from src.platform_aws import aws_region, boto3_client
 
 from .discovery_service import (
     get_agent_detail as discovery_get_agent_detail,

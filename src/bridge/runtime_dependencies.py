@@ -17,10 +17,11 @@ from src.bridge.constants import (
     TENANTS_TABLE,
 )
 from src.bridge.discovery_service import resolve_agent_record as discovery_resolve_agent_record
+from src.platform_aws import aws_region, boto3_client
 
 
 def _aws_region() -> str:
-    return os.environ["AWS_REGION"]
+    return aws_region()
 
 
 def get_capability_client() -> TenantCapabilityClient:
@@ -28,15 +29,15 @@ def get_capability_client() -> TenantCapabilityClient:
 
 
 def get_ssm() -> Any:
-    return boto3.client("ssm", region_name=_aws_region())
+    return boto3_client("ssm", region_name=_aws_region())
 
 
 def get_sts() -> Any:
-    return boto3.client("sts", region_name=_aws_region())
+    return boto3_client("sts", region_name=_aws_region())
 
 
 def get_cloudwatch() -> Any:
-    return boto3.client("cloudwatch", region_name=_aws_region())
+    return boto3_client("cloudwatch", region_name=_aws_region())
 
 
 def get_http_session() -> requests.Session:
