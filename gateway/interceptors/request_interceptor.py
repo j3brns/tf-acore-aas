@@ -18,7 +18,6 @@ import hashlib
 import json
 import os
 import time
-import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -31,6 +30,8 @@ from aws_lambda_powertools.utilities.idempotency import (
 )
 from aws_lambda_powertools.utilities.parameters import get_secret
 from jwt import PyJWKClient
+
+from gateway.interceptors import request_idempotency, request_tier, request_token
 
 try:
     from data_access import ControlPlaneDynamoDB, TenantCapabilityClient, TenantContext, TenantTier
@@ -63,6 +64,19 @@ def get_capability_client():
     return _capability_client
 
 
+def get_capability_policy():
+    if not (
+        os.environ.get("APPCONFIG_APPLICATION_ID")
+        and os.environ.get("APPCONFIG_ENVIRONMENT_ID")
+        and os.environ.get("APPCONFIG_PROFILE_ID")
+    ):
+        return None
+    capability_client = get_capability_client()
+    if not capability_client:
+        return None
+    return capability_client.fetch_policy()
+
+
 _warned_fallback_signing_key = False
 _idempotency_handler: Callable[..., dict[str, Any]] | None = None
 _idempotency_handler_table: str | None = None
@@ -72,16 +86,10 @@ _scoped_token_signing_key_expiry: float = 0
 
 
 def _scoped_token_ttl_seconds() -> int:
-    value = os.environ.get("SCOPED_TOKEN_TTL_SECONDS", "300")
-    try:
-        ttl = int(value)
-    except ValueError:
-        logger.warning(
-            "Invalid SCOPED_TOKEN_TTL_SECONDS, falling back to 300",
-            extra={"value": value},
-        )
-        return 300
-    return max(1, ttl)
+    return request_token.scoped_token_ttl_seconds(
+        os.environ.get("SCOPED_TOKEN_TTL_SECONDS"),
+        logger=logger,
+    )
 
 
 def get_jwk_client() -> PyJWKClient | None:
@@ -183,61 +191,38 @@ def _extract_tool_name(method: str, body: dict[str, Any]) -> str | None:
 
 
 def _build_idempotency_key(headers: dict[str, str], body: dict[str, Any]) -> str | None:
-    session_id = _get_header(headers, "Mcp-Session-Id")
-    request_id = body.get("id")
-    if not session_id or request_id is None:
-        return None
-    return f"{session_id}:{request_id}"
+    return request_idempotency.build_idempotency_key(headers, body, get_header=_get_header)
 
 
 def _is_tier_allowed(tenant_tier: str, minimum_tier: str) -> bool:
-    tenant_rank = _TIER_ORDER.get(tenant_tier, -1)
-    minimum_rank = _TIER_ORDER.get(minimum_tier, 100)
-    return tenant_rank >= minimum_rank
+    return request_tier.is_tier_allowed(tenant_tier, minimum_tier, tier_order=_TIER_ORDER)
 
 
 def _extract_minimum_tier(tool_record: dict[str, Any]) -> str:
-    minimum = tool_record.get("tierMinimum")
-    if minimum is None:
-        minimum = tool_record.get("tier_minimum")
-    if minimum is None:
-        return "basic"
-    return str(minimum)
+    return request_tier.extract_minimum_tier(tool_record)
 
 
 def get_tool_record(tool_name: str, tenant_id: str) -> dict[str, Any] | None:
-    """Fetch tenant-specific tool first, then global."""
     if ControlPlaneDynamoDB is None:
         raise RuntimeError("data-access-lib is required for tool record lookups")
-    db = ControlPlaneDynamoDB(get_platform_context())
-    primary_key = {"PK": f"TOOL#{tool_name}"}
-    candidate_sort_keys = [f"TENANT#{tenant_id}", "GLOBAL"]
-    for sort_key in candidate_sort_keys:
-        item = db.get_item(TOOLS_TABLE, {**primary_key, "SK": sort_key}, ConsistentRead=True)
-        if item and bool(item.get("enabled", False)):
-            return dict(item)
-    return None
+    return request_tier.get_tool_record(
+        tool_name,
+        tenant_id,
+        db_factory=ControlPlaneDynamoDB,
+        get_platform_context=get_platform_context,
+        tools_table=TOOLS_TABLE,
+    )
 
 
 def _validate_bearer_token(token: str) -> dict[str, Any] | None:
-    if not ENTRA_AUDIENCE or not ENTRA_ISSUER:
-        logger.error("ENTRA_AUDIENCE and ENTRA_ISSUER must be configured for JWT validation")
-        return None
-
-    jwk_client = get_jwk_client()
-    if jwk_client is None:
-        logger.error("JWK client unavailable (ENTRA_JWKS_URL missing)")
-        return None
-
-    signing_key = jwk_client.get_signing_key_from_jwt(token)
-    payload = jwt.decode(
+    return request_token.validate_bearer_token(
         token,
-        signing_key.key,
-        algorithms=["RS256"],
-        audience=ENTRA_AUDIENCE,
-        issuer=ENTRA_ISSUER,
+        entra_audience=ENTRA_AUDIENCE,
+        entra_issuer=ENTRA_ISSUER,
+        get_jwk_client=get_jwk_client,
+        jwt_module=jwt,
+        logger=logger,
     )
-    return payload if isinstance(payload, dict) else None
 
 
 def _get_scoped_token_signing_key() -> str:
@@ -304,23 +289,19 @@ def _issue_scoped_token(
     mcp_session_id: str | None,
     mcp_request_id: Any,
 ) -> str:
-    now = int(time.time())
-    ttl = _scoped_token_ttl_seconds()
-    claims = {
-        "iss": SCOPED_TOKEN_ISSUER,
-        "aud": f"tool:{scope_tool}",
-        "iat": now,
-        "exp": now + ttl,
-        "jti": str(uuid.uuid4()),
-        "tenantid": tenant_id,
-        "appid": app_id,
-        "tier": tier,
-        "acting_sub": acting_sub,
-        "scope_tool": scope_tool,
-        "mcp_session_id": mcp_session_id,
-        "mcp_request_id": str(mcp_request_id),
-    }
-    return str(jwt.encode(claims, _get_scoped_token_signing_key(), algorithm="HS256"))
+    return request_token.issue_scoped_token(
+        tenant_id=tenant_id,
+        app_id=app_id,
+        tier=tier,
+        acting_sub=acting_sub,
+        scope_tool=scope_tool,
+        mcp_session_id=mcp_session_id,
+        mcp_request_id=mcp_request_id,
+        scoped_token_issuer=SCOPED_TOKEN_ISSUER,
+        ttl_seconds=_scoped_token_ttl_seconds(),
+        signing_key=_get_scoped_token_signing_key(),
+        jwt_module=jwt,
+    )
 
 
 def _get_idempotency_handler() -> Callable[..., dict[str, Any]] | None:
@@ -333,26 +314,14 @@ def _get_idempotency_handler() -> Callable[..., dict[str, Any]] | None:
     if _idempotency_handler is not None and _idempotency_handler_table == table_name:
         return _idempotency_handler
 
-    config = IdempotencyConfig(
-        event_key_jmespath="idempotency_key",
+    _idempotency_handler = request_idempotency.create_idempotency_handler(
+        process_request=_process_request,
+        table_name=table_name,
         expires_after_seconds=_scoped_token_ttl_seconds(),
-        use_local_cache=True,
+        persistence_layer_cls=DynamoDBPersistenceLayer,
+        config_cls=IdempotencyConfig,
+        idempotent_decorator=idempotent_function,
     )
-    persistence = DynamoDBPersistenceLayer(table_name=table_name)
-
-    @idempotent_function(
-        data_keyword_argument="idempotency_data",
-        persistence_store=persistence,
-        config=config,
-    )
-    def _wrapper(
-        *,
-        idempotency_data: dict[str, str],
-        interceptor_event: dict[str, Any],
-    ) -> dict[str, Any]:
-        return _process_request(interceptor_event)
-
-    _idempotency_handler = _wrapper
     _idempotency_handler_table = table_name
     return _idempotency_handler
 
@@ -433,64 +402,23 @@ def _process_request(event: dict[str, Any]) -> dict[str, Any]:
     logger.append_keys(tenant_id=tenant_id, app_id=app_id)
 
     method = str(request_body.get("method") or "")
-    tool_name = _extract_tool_name(method, request_body)
-    if method == "tools/call":
-        if not tool_name:
-            return _error_response(
-                gateway_request=gateway_request,
-                request_id=jsonrpc_id,
-                status_code=400,
-                code=-32600,
-                message="tools/call missing params.name",
-            )
-
-        try:
-            tool_record = get_tool_record(tool_name, tenant_id)
-        except Exception:
-            logger.exception("Failed to read tool registry", extra={"tool_name": tool_name})
-            return _error_response(
-                gateway_request=gateway_request,
-                request_id=jsonrpc_id,
-                status_code=500,
-                code=-32603,
-                message="Failed to resolve tool policy",
-            )
-
-        if tool_record is None:
-            return _error_response(
-                gateway_request=gateway_request,
-                request_id=jsonrpc_id,
-                status_code=403,
-                code=-32003,
-                message="Tool is unavailable for this tenant",
-            )
-
-        # 6. Validate Capability (ADR-017)
-        capability_client = get_capability_client()
-        if capability_client:
-            policy = capability_client.fetch_policy()
-            if not policy.is_enabled(f"tools.{tool_name}", tenant_id=tenant_id, tenant_tier=tier):
-                logger.warning(
-                    "Tool capability disabled",
-                    extra={"tenant_id": tenant_id, "capability": f"tools.{tool_name}"},
-                )
-                return _error_response(
-                    gateway_request=gateway_request,
-                    request_id=jsonrpc_id,
-                    status_code=403,
-                    code=-32003,
-                    message=f"Tool '{tool_name}' is not enabled for this tenant",
-                )
-
-        minimum_tier = _extract_minimum_tier(tool_record)
-        if not _is_tier_allowed(tier, minimum_tier):
-            return _error_response(
-                gateway_request=gateway_request,
-                request_id=jsonrpc_id,
-                status_code=403,
-                code=-32003,
-                message="Tenant tier is insufficient for this tool",
-            )
+    tool_name, tool_error = request_tier.validate_tool_access(
+        method=method,
+        request_body=request_body,
+        gateway_request=gateway_request,
+        request_id=jsonrpc_id,
+        tenant_id=tenant_id,
+        tier=tier,
+        extract_tool_name=_extract_tool_name,
+        get_tool_record=get_tool_record,
+        get_capability_policy=get_capability_policy,
+        extract_minimum_tier=_extract_minimum_tier,
+        is_tier_allowed=_is_tier_allowed,
+        error_response=_error_response,
+        logger=logger,
+    )
+    if tool_error is not None:
+        return tool_error
 
     scope_tool = tool_name if tool_name else method
     scoped_token = _issue_scoped_token(
