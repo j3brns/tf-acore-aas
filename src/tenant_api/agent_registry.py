@@ -6,6 +6,8 @@ from typing import Any
 from data_access.models import REGISTERABLE_AGENT_STATUSES, AgentStatus, normalize_agent_status
 
 try:
+    import handler as shared
+
     from . import (
         agent_logic,
         auth,
@@ -29,6 +31,7 @@ except (ImportError, ValueError):  # pragma: no cover
         utils,
         validation,
     )
+    from src.tenant_api import handler as shared
 
 
 _REGISTER_MUTABLE_FIELDS = frozenset(
@@ -78,7 +81,11 @@ def handle_list_agents(
     _ = event
     _ = deps
     auth.require_admin(caller)
-    db = db_factory.control_plane_db(caller)
+    db = shared._db_for_tenant(
+        tenant_id=caller.tenant_id or "platform",
+        caller=caller,
+        app_id=caller.app_id,
+    )
     items = db.scan_all(db_factory.agents_table_name())
     return http_utils.response(200, {"items": items})
 
@@ -89,7 +96,6 @@ def handle_register_agent(
     deps: models.TenantApiDependencies,
 ) -> dict[str, Any]:
     auth.require_admin(caller)
-    auth.require_platform_actor(caller)
     body = http_utils.require_json_body(event)
 
     agent_name = validation.canonical_tenant_id(body.get("agentName"))
@@ -106,8 +112,12 @@ def handle_register_agent(
         allowed = ", ".join(s.value for s in sorted(REGISTERABLE_AGENT_STATUSES))
         raise ValueError(f"Initial status for registration must be one of: {allowed}")
 
-    db = db_factory.control_plane_db(caller)
-    now = utils.now_utc()
+    db = shared._db_for_tenant(
+        tenant_id=caller.tenant_id or "platform",
+        caller=caller,
+        app_id=caller.app_id,
+    )
+    now = shared._now_utc()
     now_iso = utils.iso(now)
 
     item = {
@@ -122,7 +132,7 @@ def handle_register_agent(
         "streaming_enabled": bool(body.get("streamingEnabled", False)),
         "layer_hash": str(body.get("layerHash", "")).strip(),
         "layer_s3_key": str(body.get("layerS3Key", "")).strip(),
-        "script_s3_key": str(body.get("script_s3_key", "")).strip(),
+        "script_s3_key": str(body.get("scriptS3Key", body.get("script_s3_key", ""))).strip(),
         "deployed_at": now_iso,
         "created_at": now_iso,
         "updated_at": now_iso,
@@ -136,12 +146,20 @@ def handle_register_agent(
         item["runtime_arn"] = str(body["runtimeArn"]).strip()
 
     # AG-UI Config
+    raw_ag_ui_value = body.get("agUi")
+    raw_ag_ui = raw_ag_ui_value if isinstance(raw_ag_ui_value, dict) else {}
+    ag_ui_enabled = bool(body.get("agUiEnabled", raw_ag_ui.get("enabled", False)))
+    ag_ui_transport = str(body.get("agUiTransport", raw_ag_ui.get("transport", "sse"))).strip()
+    ag_ui_endpoint = str(body.get("agUiEndpoint", raw_ag_ui.get("endpoint", ""))).strip() or None
     ag_ui = {
-        "enabled": bool(body.get("agUiEnabled", False)),
-        "transport": str(body.get("agUiTransport", "sse")).strip(),
-        "endpoint": str(body.get("agUiEndpoint", "")).strip() or None,
+        "enabled": ag_ui_enabled,
+        "transport": ag_ui_transport,
+        "endpoint": ag_ui_endpoint,
     }
     item["ag_ui"] = ag_ui
+    item["ag_ui_enabled"] = ag_ui_enabled
+    item["ag_ui_transport"] = ag_ui_transport
+    item["ag_ui_endpoint"] = ag_ui_endpoint
 
     _validate_layer_metadata_invariants(item)
 
@@ -164,6 +182,35 @@ def handle_promote_agent(
     )
 
 
+def handle_patch_agent_version(
+    event: dict[str, Any],
+    caller: models.CallerIdentity,
+    deps: models.TenantApiDependencies,
+    *,
+    agent_name: str,
+    version: str,
+) -> dict[str, Any]:
+    auth.require_admin(caller)
+    auth.require_platform_actor(caller)
+    body = http_utils.require_json_body(event)
+    target_status = agent_logic.normalize_agent_status_val(body.get("status"))
+    if "agUi" in body:
+        raise ValueError("agUi is immutable once an agent version is registered")
+    release_notes = utils.str_or_none(body.get("releaseNotes"))
+    evaluation_score = body.get("evaluationScore")
+    evaluation_report_url = utils.str_or_none(body.get("evaluationReportUrl"))
+    return _update_agent_status(
+        caller,
+        deps,
+        agent_name=agent_name,
+        version=version,
+        target_status=target_status,
+        release_notes=release_notes,
+        evaluation_score=evaluation_score,
+        evaluation_report_url=evaluation_report_url,
+    )
+
+
 def handle_rollback_agent(
     caller: models.CallerIdentity,
     deps: models.TenantApiDependencies,
@@ -183,11 +230,18 @@ def _update_agent_status(
     agent_name: str,
     version: str,
     target_status: AgentStatus,
+    release_notes: str | None = None,
+    evaluation_score: Any = None,
+    evaluation_report_url: str | None = None,
 ) -> dict[str, Any]:
     auth.require_admin(caller)
     auth.require_platform_actor(caller)
 
-    db = db_factory.control_plane_db(caller)
+    db = shared._db_for_tenant(
+        tenant_id=caller.tenant_id or "platform",
+        caller=caller,
+        app_id=caller.app_id,
+    )
     table_name = db_factory.agents_table_name()
     key = {"PK": f"AGENT#{agent_name}", "SK": f"VERSION#{version}"}
 
@@ -198,16 +252,25 @@ def _update_agent_status(
     current_status = normalize_agent_status(existing.get("status"))
     agent_logic.validate_agent_status_transition(current_status, target_status)
 
-    now = utils.now_utc()
+    now = shared._now_utc()
     now_iso = utils.iso(now)
 
     updates: dict[str, Any] = {
         "status": target_status.value,
         "updatedAt": now_iso,
     }
-    if target_status == AgentStatus.PROMOTED:
+    if target_status == AgentStatus.APPROVED:
         updates["approved_at"] = now_iso
         updates["approved_by"] = caller.sub
+        if release_notes is not None:
+            updates["release_notes"] = release_notes
+    elif target_status == AgentStatus.PROMOTED:
+        if not existing.get("approved_by") or not existing.get("approved_at"):
+            raise ValueError("Promotion requires existing approval evidence")
+        if evaluation_score is not None:
+            updates["evaluation_score"] = float(evaluation_score)
+        if evaluation_report_url is not None:
+            updates["evaluation_report_url"] = evaluation_report_url
     elif target_status == AgentStatus.ROLLED_BACK:
         updates["rolled_back_at"] = now_iso
         updates["rolled_back_by"] = caller.sub
@@ -229,11 +292,17 @@ def _update_agent_status(
         previous_status=current_status,
         new_status=target_status,
         occurred_at=now_iso,
-        approved_by=updates.get("approved_by"),
-        approved_at=updates.get("approved_at"),
-        release_notes=existing.get("release_notes"),
-        evaluation_score=existing.get("evaluation_score"),
-        evaluation_report_url=existing.get("evaluation_report_url"),
+        approved_by=utils.str_or_none(updates.get("approved_by") or existing.get("approved_by")),
+        approved_at=utils.str_or_none(updates.get("approved_at") or existing.get("approved_at")),
+        release_notes=release_notes or utils.str_or_none(existing.get("release_notes")),
+        evaluation_score=(
+            float(updates["evaluation_score"])
+            if "evaluation_score" in updates
+            else existing.get("evaluation_score")
+        ),
+        evaluation_report_url=utils.str_or_none(
+            updates.get("evaluation_report_url") or existing.get("evaluation_report_url")
+        ),
         rolled_back_by=updates.get("rolled_back_by"),
         rolled_back_at=updates.get("rolled_back_at"),
     )
@@ -265,6 +334,16 @@ def dispatch_routes(
     if promote_match and method == "POST":
         return handle_promote_agent(
             caller, deps, agent_name=promote_match.group(1), version=promote_match.group(2)
+        )
+
+    update_match = re.match(r"^/v1/platform/agents/([^/]+)/versions/([^/]+)$", path)
+    if update_match and method == "PATCH":
+        return handle_patch_agent_version(
+            event,
+            caller,
+            deps,
+            agent_name=update_match.group(1),
+            version=update_match.group(2),
         )
 
     # /v1/platform/agents/{name}/versions/{version}/rollback

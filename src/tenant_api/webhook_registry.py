@@ -9,6 +9,8 @@ from typing import Any
 from boto3.dynamodb.conditions import Key
 
 try:
+    import handler as shared
+
     from . import auth, db_factory, http_utils, models, utils
 except (ImportError, ValueError):  # pragma: no cover
     from src.tenant_api import (
@@ -18,6 +20,7 @@ except (ImportError, ValueError):  # pragma: no cover
         models,
         utils,
     )
+    from src.tenant_api import handler as shared
 
 
 def handle_list_webhooks(
@@ -30,7 +33,7 @@ def handle_list_webhooks(
     if not auth.can_manage_tenant_self_service(caller, tenant_id):
         raise PermissionError("Caller requires a tenant self-service admin role")
 
-    db = db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     result = db.query(
         db_factory.tenants_table_name(),
         sk_condition=Key("SK").begins_with("WEBHOOK#"),
@@ -106,7 +109,7 @@ def handle_register_webhook(
         )
 
     webhook_id = str(uuid.uuid4())
-    now = utils.now_utc()
+    now = shared._now_utc()
     webhook_secret = secrets.token_urlsafe(32)
 
     webhook = {
@@ -117,7 +120,7 @@ def handle_register_webhook(
         "callback_url": callback_url,
         "events": normalized_events,
         "status": "active",
-        "secret": webhook_secret,
+        "signature_secret": webhook_secret,
         "description": description,
         "created_at": utils.iso(now),
         "updated_at": utils.iso(now),
@@ -125,15 +128,19 @@ def handle_register_webhook(
         "signature_algorithm": "HMAC-SHA256",
     }
 
-    db = db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     db.put_item(db_factory.tenants_table_name(), webhook)
 
     return http_utils.response(
         201,
         {
             "webhookId": webhook_id,
-            "secret": webhook_secret,
+            "callbackUrl": callback_url,
+            "events": normalized_events,
             "status": "active",
+            "createdAt": utils.iso(now),
+            "signatureHeader": "X-Platform-Signature",
+            "signatureAlgorithm": "HMAC-SHA256",
         },
     )
 
@@ -149,7 +156,7 @@ def handle_delete_webhook(
     if not auth.can_manage_tenant_self_service(caller, tenant_id):
         raise PermissionError("Caller requires a tenant self-service admin role")
 
-    db = db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     key = {"PK": f"TENANT#{tenant_id}", "SK": f"WEBHOOK#{webhook_id}"}
 
     # Verify existence and ownership
@@ -169,8 +176,11 @@ def dispatch_routes(
     deps: models.TenantApiDependencies,
     tenant_id: str | None = None,
 ) -> dict[str, Any] | None:
+    if tenant_id is None:
+        tenant_id = caller.tenant_id
+
     # /v1/tenants/{tenant_id}/webhooks
-    if tenant_id and path == f"/v1/tenants/{tenant_id}/webhooks":
+    if tenant_id and path in {f"/v1/tenants/{tenant_id}/webhooks", "/v1/webhooks"}:
         if method == "GET":
             return handle_list_webhooks(caller, deps, tenant_id=tenant_id)
         if method == "POST":
@@ -179,6 +189,8 @@ def dispatch_routes(
     # /v1/tenants/{tenant_id}/webhooks/{webhook_id}
     if tenant_id:
         match = re.match(rf"^/v1/tenants/{tenant_id}/webhooks/([^/]+)$", path)
+        if match is None:
+            match = re.match(r"^/v1/webhooks/([^/]+)$", path)
         if match and method == "DELETE":
             return handle_delete_webhook(
                 caller, deps, tenant_id=tenant_id, webhook_id=match.group(1)

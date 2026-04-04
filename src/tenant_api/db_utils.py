@@ -3,15 +3,20 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from src.tenant_api.db_factory import (
-    control_plane_db,
-    db_for_tenant,
-    tenants_table_name,
-)
+from src.tenant_api.db_factory import control_plane_db, tenants_table_name
 from src.tenant_api.db_factory import (
     ops_locks_table_name as _ops_locks_table_name,
 )
 from src.tenant_api.models import CallerIdentity, TenantApiDependencies
+
+try:
+    import handler as shared
+except (ImportError, ValueError):  # pragma: no cover
+    from src.tenant_api import handler as shared
+
+
+def db_for_tenant(*, tenant_id: str, caller: CallerIdentity, app_id: str | None = None):
+    return shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
 
 
 def tenant_pk(tenant_id: str) -> str:
@@ -34,7 +39,7 @@ def read_tenant_record(
     caller: CallerIdentity,
     app_id: str | None = None,
 ) -> dict[str, Any] | None:
-    db = db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
     return db.get_item(tenants_table_name(), tenant_key(tenant_id))
 
 

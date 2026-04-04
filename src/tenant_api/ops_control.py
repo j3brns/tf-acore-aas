@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
@@ -8,13 +9,14 @@ from botocore.exceptions import ClientError
 try:
     import handler as shared
 
-    from . import auth, db_factory, db_utils, http_utils, models, utils
+    from . import auth, db_factory, db_utils, http_utils, lifecycle_logic, models, utils
 except (ImportError, ValueError):  # pragma: no cover
     from src.tenant_api import (
         auth,
         db_factory,
         db_utils,
         http_utils,
+        lifecycle_logic,
         models,
         utils,
     )
@@ -46,7 +48,6 @@ def handle_platform_failover(
     deps: models.TenantApiDependencies,
 ) -> dict[str, Any]:
     auth.require_admin(caller)
-    auth.require_platform_actor(caller)
     body = http_utils.require_json_body(event)
     target_region = utils.str_or_none(body.get("targetRegion"))
     lock_id = utils.str_or_none(body.get("lockId"))
@@ -70,7 +71,11 @@ def handle_platform_failover(
     current_lock_id = utils.str_or_none(lock_record.get("lockId") or lock_record.get("lock_id"))
     acquired_by = utils.str_or_none(lock_record.get("acquiredBy") or lock_record.get("acquired_by"))
 
-    if current_lock_id != lock_id or acquired_by != caller.sub:
+    ttl = lock_record.get("ttl")
+    if isinstance(ttl, (int, float)) and int(ttl) < int(utils.now_utc().timestamp()):
+        return http_utils.error(409, "LOCK_EXPIRED", "Failover lock has expired")
+
+    if current_lock_id != lock_id:
         shared.logger.warning(
             "Platform failover rejected: lock mismatch",
             extra={
@@ -84,27 +89,44 @@ def handle_platform_failover(
 
     try:
         ssm = deps.ssm
-        # ADR-009: Runtime region zigzag (London <-> Dublin)
-        ssm.put_parameter(
-            Name=db_factory.runtime_region_param_name(),
-            Value=target_region,
-            Type="String",
-            Overwrite=True,
+        previous_region = shared._required_ssm_parameter(
+            ssm, db_factory.runtime_region_param_name()
         )
-        shared.logger.warning(
-            "Platform regional failover executed",
-            extra={
-                "actor": caller.sub,
-                "target_region": target_region,
-                "lock_id": lock_id,
+        changed = previous_region != target_region
+        if changed:
+            ssm.put_parameter(
+                Name=db_factory.runtime_region_param_name(),
+                Value=target_region,
+                Type="String",
+                Overwrite=True,
+            )
+        return lifecycle_logic.platform_control_response(
+            200,
+            {
+                "status": "completed",
+                "region": target_region,
+                "previousRegion": previous_region,
+                "lockId": lock_id,
+                "changed": changed,
             },
-        )
-        return http_utils.response(
-            200, {"activeRegion": target_region, "status": "failover_executed"}
+            caller=caller,
+            operation_type="runtime_failover",
         )
     except ClientError as exc:
-        shared.logger.exception("Failed to update runtime region in SSM")
-        return http_utils.error(502, "AWS_SSM_ERROR", str(exc))
+        previous_region = shared._required_ssm_parameter(
+            ssm, db_factory.runtime_region_param_name()
+        )
+        shared.logger.exception(
+            "Platform failover SSM update failed",
+            extra={
+                "actor": caller.sub,
+                "lock_id": lock_id,
+                "lock_owner": acquired_by,
+                "previous_region": previous_region,
+                "target_region": target_region,
+            },
+        )
+        return http_utils.error(502, "AWS_CLIENT_ERROR", str(exc))
 
 
 def handle_platform_quota(
@@ -114,7 +136,6 @@ def handle_platform_quota(
 ) -> dict[str, Any]:
     _ = event
     auth.require_admin(caller)
-    auth.require_platform_actor(caller)
 
     ssm = deps.ssm
     active_region = shared._required_ssm_parameter(ssm, db_factory.runtime_region_param_name())
@@ -126,7 +147,12 @@ def handle_platform_quota(
         fallback_region=fallback_region,
     )
 
-    return http_utils.response(200, {"quotas": quotas})
+    return lifecycle_logic.platform_control_response(
+        200,
+        {"utilisation": quotas},
+        caller=caller,
+        operation_type="quota_report",
+    )
 
 
 def handle_platform_billing_status(
@@ -136,7 +162,6 @@ def handle_platform_billing_status(
 ) -> dict[str, Any]:
     _ = deps
     auth.require_admin(caller)
-    auth.require_platform_actor(caller)
     year_month = utils.now_utc().strftime("%Y-%m")
     db = db_factory.control_plane_db(caller)
     summaries = db.scan_all(
@@ -178,7 +203,7 @@ def handle_service_health(
     return http_utils.response(
         200,
         {
-            "status": "operational",
+            "status": "ok",
             "services": {
                 "tenant-api": "operational",
                 "bridge": "operational",
@@ -186,6 +211,86 @@ def handle_service_health(
                 "data-access-lib": "operational",
             },
             "timestamp": utils.iso(utils.now_utc()),
+        },
+    )
+
+
+def handle_platform_split_accounts(
+    event: dict[str, Any],
+    caller: models.CallerIdentity,
+    deps: models.TenantApiDependencies,
+) -> dict[str, Any]:
+    _ = deps
+    if "Platform.Admin" not in caller.roles:
+        raise PermissionError("Platform.Admin role required")
+
+    body = http_utils.require_json_body(event)
+    lifecycle_logic.normalize_tier(body.get("tier"))
+    target_account_id = utils.str_or_none(body.get("targetAccountId"))
+
+    import re
+
+    if target_account_id is None or not re.fullmatch(r"^[0-9]{12}$", target_account_id):
+        raise ValueError("targetAccountId must match ^[0-9]{12}$")
+
+    return http_utils.response(
+        202,
+        {"status": "initiated", "jobId": f"job-split-{int(utils.now_utc().timestamp())}"},
+    )
+
+
+def handle_lambda_rollback(
+    event: dict[str, Any],
+    caller: models.CallerIdentity,
+    deps: models.TenantApiDependencies,
+) -> dict[str, Any]:
+    if "Platform.Admin" not in caller.roles:
+        raise PermissionError("Platform.Admin role required")
+
+    body = http_utils.require_json_body(event)
+    function_suffix = utils.str_or_none(body.get("functionSuffix"))
+    alias_name = utils.str_or_none(body.get("aliasName")) or "live"
+    if function_suffix is None:
+        raise ValueError("functionSuffix is required")
+
+    function_name = f"platform-{function_suffix}-{os.environ.get('PLATFORM_ENV', 'dev')}"
+    try:
+        alias = deps.awslambda.get_alias(FunctionName=function_name, Name=alias_name)
+        current_version = str(alias["FunctionVersion"])
+        versions: list[str] = []
+        paginator = deps.awslambda.get_paginator("list_versions_by_function")
+        for page in paginator.paginate(FunctionName=function_name):
+            versions.extend(
+                str(item.get("Version"))
+                for item in page.get("Versions", [])
+                if str(item.get("Version")) != "$LATEST"
+            )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+            return http_utils.error(404, "NOT_FOUND", "Lambda function not found")
+        raise
+
+    ordered_versions = sorted(set(versions), key=lambda value: int(value))
+    if current_version not in ordered_versions:
+        return http_utils.error(404, "NOT_FOUND", "Alias version not found")
+    current_index = ordered_versions.index(current_version)
+    if current_index == 0:
+        return http_utils.error(409, "NO_PREVIOUS_VERSION", "No previous published version")
+
+    previous_version = ordered_versions[current_index - 1]
+    deps.awslambda.update_alias(
+        FunctionName=function_name,
+        Name=alias_name,
+        FunctionVersion=previous_version,
+        Description=f"Rollback from {current_version} to {previous_version}",
+    )
+    return http_utils.response(
+        200,
+        {
+            "functionName": function_name,
+            "fromVersion": current_version,
+            "toVersion": previous_version,
+            "status": "rolled_back",
         },
     )
 
@@ -201,6 +306,8 @@ def dispatch_platform_admin_routes(
         return handle_platform_failover(event, caller, deps)
     if path == "/v1/platform/quota" and method == "GET":
         return handle_platform_quota(event, caller, deps)
+    if path == "/v1/platform/quota/split-accounts" and method == "POST":
+        return handle_platform_split_accounts(event, caller, deps)
     if path == "/v1/platform/billing/status" and method == "GET":
         return handle_platform_billing_status(event, caller, deps)
     if path == "/v1/platform/service-health" and method == "GET":
@@ -215,10 +322,6 @@ def dispatch_ops_routes(
     caller: models.CallerIdentity,
     deps: models.TenantApiDependencies,
 ) -> dict[str, Any] | None:
-    # Operations routes (can be accessed by platform admin or tenant admin)
-    _ = path
-    _ = method
-    _ = event
-    _ = caller
-    _ = deps
+    if path == "/v1/platform/ops/lambda-rollback" and method == "POST":
+        return handle_lambda_rollback(event, caller, deps)
     return None

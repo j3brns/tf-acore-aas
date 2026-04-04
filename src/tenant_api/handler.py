@@ -119,6 +119,21 @@ def _dependencies() -> TenantApiDependencies:
         return 1000.0 if region == "us-east-1" else 500.0
 
 
+_parse_roles = http_utils.parse_roles
+
+
+def _db_for_tenant(*, tenant_id: str, caller: CallerIdentity, app_id: str | None):
+    return db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+
+
+def _control_plane_db(caller: CallerIdentity):
+    return db_factory.control_plane_db(caller)
+
+
+def _now_utc():
+    return utils.now_utc()
+
+
 def _optional_ssm_parameter(ssm: Any, name: str) -> str | None:
     try:
         response = ssm.get_parameter(Name=name)
@@ -245,13 +260,18 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     ).rstrip("/")
 
     try:
+        path_params = event.get("pathParameters") or {}
         tenant_id = (
             validation.canonical_tenant_id(
-                (event.get("pathParameters") or {}).get("tenantId"), allow_reserved=caller.is_admin
+                path_params.get("tenantId"), allow_reserved=caller.is_admin
             )
-            if (event.get("pathParameters") or {}).get("tenantId")
+            if path_params.get("tenantId")
             else None
         )
+        if tenant_id and isinstance(path_params, dict):
+            raw_tenant_id = path_params.get("tenantId")
+            if raw_tenant_id:
+                path = path.replace(str(raw_tenant_id), tenant_id)
 
         if path == "/v1/health" and method == "GET":
             try:
@@ -265,6 +285,12 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             except (ImportError, ValueError):
                 from src.tenant_api import tenant_lifecycle
             return tenant_lifecycle.handle_sessions(event, caller)
+        if (
+            path.startswith("/v1/platform")
+            and not path.startswith("/v1/platform/agents")
+            and not caller.is_platform_actor
+        ):
+            raise PermissionError("Platform tenant context required")
 
         # Dispatch route groups
         response = _dispatch_platform_routes(path, method, event, caller, deps)
