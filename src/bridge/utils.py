@@ -1,34 +1,40 @@
 from __future__ import annotations
 
-import secrets
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+
+from src.platform_utils import (
+    coerce_optional_int as _coerce_optional_int,
+)
+from src.platform_utils import (
+    coerce_optional_string as _coerce_optional_string,
+)
+from src.platform_utils import (
+    get_retry_jitter as _get_retry_jitter,
+)
+from src.platform_utils import (
+    iso_utc as _iso_utc,
+)
+from src.platform_utils import (
+    now_utc as _now_utc,
+)
 
 
 def now_utc() -> datetime:
-    return datetime.now(UTC)
+    return _now_utc()
 
 
 def iso(ts: datetime) -> str:
-    return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return _iso_utc(ts)
 
 
 def get_retry_jitter(base_delay: float) -> float:
-    """Return a random jittered delay between 0 and base_delay using Full Jitter strategy."""
-    return secrets.SystemRandom().uniform(0, base_delay)
+    return _get_retry_jitter(base_delay)
 
 
 def coerce_optional_string(val: Any) -> str | None:
-    if val is None:
-        return None
-    s = str(val).strip()
-    return s if s else None
+    return _coerce_optional_string(val)
 
 
 def coerce_optional_int(val: Any) -> int | None:
-    if val is None:
-        return None
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return None
+    return _coerce_optional_int(val)

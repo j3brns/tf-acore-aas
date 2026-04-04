@@ -1,9 +1,26 @@
 from __future__ import annotations
 
-import secrets
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import datetime
 from typing import Any
+
+from src.platform_utils import (
+    coerce_optional_string as _coerce_optional_string,
+)
+from src.platform_utils import (
+    coerce_positive_int as _coerce_positive_int,
+)
+from src.platform_utils import (
+    get_retry_jitter as _get_retry_jitter,
+)
+from src.platform_utils import (
+    iso_utc as _iso_utc,
+)
+from src.platform_utils import (
+    json_default as _json_default,
+)
+from src.platform_utils import (
+    now_utc as _now_utc,
+)
 
 _OVERRIDE_NOW: datetime | None = None
 
@@ -11,31 +28,23 @@ _OVERRIDE_NOW: datetime | None = None
 def now_utc() -> datetime:
     if _OVERRIDE_NOW:
         return _OVERRIDE_NOW
-    return datetime.now(UTC)
+    return _now_utc()
 
 
 def get_retry_jitter(base_delay: float) -> float:
-    """Return a random jittered delay between 0 and base_delay using Full Jitter strategy."""
-    return secrets.SystemRandom().uniform(0, base_delay)
+    return _get_retry_jitter(base_delay)
 
 
 def iso(dt: datetime) -> str:
-    return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return _iso_utc(dt)
 
 
 def str_or_none(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+    return _coerce_optional_string(value)
 
 
 def json_default(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        if value == value.to_integral_value():
-            return int(value)
-        return float(value)
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+    return _json_default(value)
 
 
 def as_float(value: Any, *, field: str) -> float:
@@ -48,8 +57,4 @@ def as_float(value: Any, *, field: str) -> float:
 
 
 def coerce_positive_int(value: Any, *, default: int) -> int:
-    try:
-        parsed = int(str(value))
-    except (TypeError, ValueError):
-        return default
-    return max(1, parsed)
+    return _coerce_positive_int(value, default=default)

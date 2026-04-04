@@ -8,6 +8,8 @@ from typing import Any
 
 from boto3.dynamodb.types import TypeDeserializer
 
+from src.platform_utils import coerce_optional_string as _coerce_optional_string
+
 WEBHOOK_SIGNATURE_HEADER = "X-Platform-Signature"
 WEBHOOK_SIGNATURE_ALGORITHM = "HMAC-SHA256"
 
@@ -99,9 +101,4 @@ def build_signed_request(
 
 
 def coerce_optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return str(value)
+    return _coerce_optional_string(value)

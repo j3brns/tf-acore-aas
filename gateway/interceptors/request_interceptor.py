@@ -15,7 +15,6 @@ ADRs: ADR-004
 """
 
 import hashlib
-import json
 import os
 import time
 from collections.abc import Callable
@@ -32,6 +31,7 @@ from aws_lambda_powertools.utilities.parameters import get_secret
 from jwt import PyJWKClient
 
 from gateway.interceptors import request_idempotency, request_tier, request_token
+from src.platform_utils import coerce_positive_int, parse_json_object_or_empty
 
 try:
     from data_access import ControlPlaneDynamoDB, TenantCapabilityClient, TenantContext, TenantTier
@@ -86,10 +86,17 @@ _scoped_token_signing_key_expiry: float = 0
 
 
 def _scoped_token_ttl_seconds() -> int:
-    return request_token.scoped_token_ttl_seconds(
-        os.environ.get("SCOPED_TOKEN_TTL_SECONDS"),
-        logger=logger,
-    )
+    raw_value = os.environ.get("SCOPED_TOKEN_TTL_SECONDS")
+    if raw_value is None:
+        return 300
+    parsed = coerce_positive_int(raw_value, default=300)
+    if str(parsed) != str(raw_value).strip():
+        logger.warning(
+            "Invalid SCOPED_TOKEN_TTL_SECONDS, falling back to 300",
+            extra={"value": raw_value},
+        )
+        return 300
+    return parsed
 
 
 def get_jwk_client() -> PyJWKClient | None:
@@ -129,16 +136,7 @@ def _normalized_headers(headers: Any) -> dict[str, str]:
 
 
 def _parse_body(body: Any) -> dict[str, Any]:
-    if isinstance(body, dict):
-        return dict(body)
-    if isinstance(body, str):
-        try:
-            parsed = json.loads(body)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    return parse_json_object_or_empty(body)
 
 
 def _build_interceptor_response(

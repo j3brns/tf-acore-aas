@@ -14,14 +14,11 @@ from data_access.models import (
     is_invokable_agent_status,
 )
 
+from src.platform_utils import coerce_optional_string as _shared_coerce_optional_string
+
 
 def _coerce_optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    return text
+    return _shared_coerce_optional_string(value)
 
 
 def _agent_summary_from_item(item: dict[str, Any]) -> dict[str, Any]:

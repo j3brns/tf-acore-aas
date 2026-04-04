@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 import time
 import uuid
 from typing import Any
@@ -9,16 +8,16 @@ from typing import Any
 from botocore.exceptions import ClientError
 from data_access.models import AgentRecord, InvocationMode, InvocationStatus, TenantContext
 
+from src.platform_utils import coerce_optional_string as _coerce_optional_string
+from src.platform_utils import get_hex_jitter as _get_hex_jitter
+
 
 def coerce_optional_string(val: Any) -> str | None:
-    if val is None:
-        return None
-    s = str(val).strip()
-    return s if s else None
+    return _coerce_optional_string(val)
 
 
 def get_jitter() -> str:
-    return secrets.token_hex(1)
+    return _get_hex_jitter()
 
 
 def validate_execution_role_arn(role_arn: str, expected_account_id: str, pattern: Any) -> str:
