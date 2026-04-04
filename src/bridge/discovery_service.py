@@ -188,6 +188,16 @@ def _agent_record_from_item(item: dict[str, Any]) -> AgentRecord:
         raise ValueError("Incomplete zip-agent layer metadata")
 
     ag_ui_item = item.get("ag_ui", {})
+    if not isinstance(ag_ui_item, dict):
+        ag_ui_item = {}
+    if not ag_ui_item and any(
+        key in item for key in ("ag_ui_enabled", "ag_ui_transport", "ag_ui_endpoint")
+    ):
+        ag_ui_item = {
+            "enabled": bool(item.get("ag_ui_enabled", False)),
+            "transport": str(item.get("ag_ui_transport", AgUiTransport.SSE.value)),
+            "endpoint": _coerce_optional_string(item.get("ag_ui_endpoint")),
+        }
     return AgentRecord(
         agent_name=str(item.get("agent_name", "")),
         version=str(item.get("version", "")),

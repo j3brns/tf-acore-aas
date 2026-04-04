@@ -18,7 +18,7 @@ def handle_invoke_request(
     coerce_optional_string: Any,
     is_invoke_contract_path: Any,
     get_agent_record: Any,
-    get_capability_client: Any,
+    capability_policy: Any,
     invoke_agent: Any,
 ) -> Any:
     agent_name = coerce_optional_string(path_params.get("agentName"))
@@ -49,27 +49,30 @@ def handle_invoke_request(
             403, "FORBIDDEN", "Tenant tier insufficient for this agent", request_id
         )
 
-    capability_client = get_capability_client()
-    policy = capability_client.fetch_policy()
+    if capability_policy is not None:
+        if not capability_policy.is_enabled(
+            "agents.invoke",
+            tenant_id=tenant_context.tenant_id,
+            tenant_tier=tenant_context.tier,
+        ):
+            return error_response(
+                403,
+                "FORBIDDEN",
+                "Agent invocation capability disabled",
+                request_id,
+            )
 
-    if not policy.is_enabled(
-        "agents.invoke",
-        tenant_id=tenant_context.tenant_id,
-        tenant_tier=tenant_context.tier,
-    ):
-        return error_response(403, "FORBIDDEN", "Agent invocation capability disabled", request_id)
-
-    if not policy.is_enabled(
-        f"agents.{agent_name}",
-        tenant_id=tenant_context.tenant_id,
-        tenant_tier=tenant_context.tier,
-    ):
-        return error_response(
-            403,
-            "FORBIDDEN",
-            f"Access to agent '{agent_name}' is not enabled for this tenant",
-            request_id,
-        )
+        if not capability_policy.is_enabled(
+            f"agents.{agent_name}",
+            tenant_id=tenant_context.tenant_id,
+            tenant_tier=tenant_context.tier,
+        ):
+            return error_response(
+                403,
+                "FORBIDDEN",
+                f"Access to agent '{agent_name}' is not enabled for this tenant",
+                request_id,
+            )
 
     return invoke_agent(
         agent, tenant_context, prompt, session_id, webhook_id, request_id, response_stream
