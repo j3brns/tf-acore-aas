@@ -22,6 +22,8 @@ from boto3.dynamodb.conditions import Attr, Key
 from data_access import ControlPlaneDynamoDB, TenantContext, TenantTier
 from jwt import PyJWKClient
 
+from src.authoriser import jwt_service, sigv4_service
+
 logger = Logger(service="authoriser")
 tracer = Tracer()
 
@@ -115,174 +117,47 @@ def get_tenant_status(tenant_id: str) -> str | None:
 
 
 def _sigv4_caller_role_arns(caller_arn: str) -> set[str]:
-    """Return tenant role ARN candidates for an API Gateway SigV4 caller ARN."""
-    candidates = {caller_arn}
-    match = _SIGV4_ASSUMED_ROLE_ARN_RE.fullmatch(caller_arn)
-    if match:
-        candidates.add(f"arn:aws:iam::{match.group('account_id')}:role/{match.group('role_name')}")
-    return candidates
+    return sigv4_service.sigv4_caller_role_arns(
+        caller_arn, assumed_role_pattern=_SIGV4_ASSUMED_ROLE_ARN_RE
+    )
 
 
 def resolve_sigv4_tenant_binding(caller_arn: str) -> dict[str, str] | None:
-    """Resolve a SigV4 caller to a trusted tenant using tenant metadata.
-
-    CR005: Results are cached in-process for SIGV4_BINDING_CACHE_TTL_SECONDS (60s)
-    to avoid a DynamoDB lookup on every machine-auth request.
-
-    Uses the 'gsi-execution-role-arn' GSI for O(1) lookup instead of a table scan.
-    """
-    if not TENANTS_TABLE:
-        logger.warning("TENANTS_TABLE not set; SigV4 tenant binding unavailable")
-        return None
-
-    # 1. Check in-memory cache first
-    now = time.time()
-    for arn in _sigv4_caller_role_arns(caller_arn):
-        cached = _sigv4_binding_cache.get(arn)
-        if cached is not None:
-            binding, expiry = cached
-            if now < expiry:
-                return binding
-            del _sigv4_binding_cache[arn]
-
-    # 2. Resolve via DynamoDB GSI
-    candidate_role_arns = _sigv4_caller_role_arns(caller_arn)
-    db = ControlPlaneDynamoDB(get_platform_context())
-    matches: dict[str, dict[str, str]] = {}
-
-    try:
-        for role_arn in candidate_role_arns:
-            # O(1) GSI Query
-            response = db.query(
-                TENANTS_TABLE,
-                key_condition=Key("executionRoleArn").eq(role_arn),
-                index_name="gsi-execution-role-arn",
-                ProjectionExpression="PK, SK",
-            )
-
-            for index_item in response.items:
-                # Follow-up GetItem for full metadata (since GSI is KEYS_ONLY)
-                item = db.get_item(
-                    TENANTS_TABLE,
-                    {"PK": index_item["PK"], "SK": index_item["SK"]},
-                    ProjectionExpression="tenantId, tenant_id, appId, app_id, tier",
-                )
-                if not item:
-                    continue
-
-                tenant_id = str(item.get("tenantId") or item.get("tenant_id") or "").strip()
-                app_id = str(item.get("appId") or item.get("app_id") or "").strip()
-                tier = _normalise_tier(str(item.get("tier") or "basic"))
-
-                if tenant_id:
-                    result = {"tenant_id": tenant_id, "app_id": app_id, "tier": tier}
-                    matches[tenant_id] = result
-                    # Update cache for this specific role ARN
-                    _sigv4_binding_cache[role_arn] = (
-                        result,
-                        now + _SIGV4_BINDING_CACHE_TTL_SECONDS,
-                    )
-
-    except Exception:
-        logger.exception(
-            "Failed to resolve SigV4 tenant binding via GSI", extra={"caller_arn": caller_arn}
-        )
-        return None
-
-    if not matches:
-        return None
-
-    if len(matches) != 1:
-        logger.warning(
-            "SigV4 caller tenant binding not unique",
-            extra={"caller_arn": caller_arn, "match_count": len(matches)},
-        )
-        return None
-
-    return next(iter(matches.values()))
+    return sigv4_service.resolve_sigv4_tenant_binding(
+        caller_arn,
+        tenants_table=TENANTS_TABLE,
+        cache=_sigv4_binding_cache,
+        cache_ttl_seconds=_SIGV4_BINDING_CACHE_TTL_SECONDS,
+        caller_role_arns=_sigv4_caller_role_arns,
+        db_factory=ControlPlaneDynamoDB,
+        get_platform_context=get_platform_context,
+        key_condition_builder=lambda role_arn: Key("executionRoleArn").eq(role_arn),
+        normalise_tier=_normalise_tier,
+        logger=logger,
+    )
 
 
 def _normalise_headers(event: dict[str, Any]) -> dict[str, str]:
-    """Return request headers as a lowercase key map."""
-    raw_headers = event.get("headers") or {}
-    if not isinstance(raw_headers, dict):
-        return {}
-    normalised: dict[str, str] = {}
-    for raw_key, raw_value in raw_headers.items():
-        key = str(raw_key).strip().lower()
-        value = str(raw_value).strip() if raw_value is not None else ""
-        if key:
-            normalised[key] = value
-    return normalised
+    return sigv4_service.normalise_headers(event)
 
 
 def _parse_sigv4_authorization(auth_header: str) -> dict[str, Any] | None:
-    """Parse AWS SigV4 Authorization header into structured fields."""
-    if not auth_header.startswith("AWS4-HMAC-SHA256 "):
-        return None
-
-    payload = auth_header.removeprefix("AWS4-HMAC-SHA256 ").strip()
-    pieces = [part.strip() for part in payload.split(",") if part.strip()]
-    parsed: dict[str, str] = {}
-    for piece in pieces:
-        if "=" not in piece:
-            continue
-        key, value = piece.split("=", 1)
-        parsed[key.strip()] = value.strip()
-
-    credential = parsed.get("Credential")
-    signed_headers = parsed.get("SignedHeaders")
-    signature = parsed.get("Signature")
-    if not credential or not signed_headers or not signature:
-        return None
-    if not _SIGV4_SIGNATURE_RE.fullmatch(signature.lower()):
-        return None
-
-    scope = credential.split("/")
-    if len(scope) != 5:
-        return None
-    access_key, date, region, service, terminator = scope
-    if not _SIGV4_ACCESS_KEY_RE.fullmatch(access_key):
-        return None
-    if terminator != "aws4_request":
-        return None
-    if not re.fullmatch(r"\d{8}", date):
-        return None
-    if not region or not service:
-        return None
-
-    signed_headers_set = {
-        header.strip().lower() for header in signed_headers.split(";") if header.strip()
-    }
-    if not SIGV4_REQUIRED_SIGNED_HEADERS.issubset(signed_headers_set):
-        return None
-
-    return {
-        "access_key": access_key,
-        "date": date,
-        "region": region,
-        "service": service,
-        "signed_headers": signed_headers_set,
-    }
+    return sigv4_service.parse_sigv4_authorization(
+        auth_header,
+        signature_pattern=_SIGV4_SIGNATURE_RE,
+        access_key_pattern=_SIGV4_ACCESS_KEY_RE,
+        required_signed_headers=SIGV4_REQUIRED_SIGNED_HEADERS,
+    )
 
 
 def _is_valid_sigv4_timestamp(value: str) -> bool:
-    """Validate x-amz-date value and enforce clock skew."""
-    try:
-        ts = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
-    except ValueError:
-        return False
-    skew = abs((datetime.now(UTC) - ts).total_seconds())
-    return skew <= SIGV4_MAX_CLOCK_SKEW_SECONDS
+    return sigv4_service.is_valid_sigv4_timestamp(
+        value, max_clock_skew_seconds=SIGV4_MAX_CLOCK_SKEW_SECONDS
+    )
 
 
 def _normalise_tier(value: str | None) -> str:
-    if not value:
-        return "basic"
-    candidate = value.strip().lower()
-    if candidate in {"basic", "standard", "premium"}:
-        return candidate
-    return "basic"
+    return sigv4_service.normalise_tier(value)
 
 
 def is_admin_route(method_arn: str) -> bool:
@@ -351,175 +226,34 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 
 def handle_jwt(token: str, method_arn: str) -> dict[str, Any]:
-    """Validate and process Entra JWT (ADR-002)."""
-    try:
-        jwk_client = get_jwk_client()
-        if not jwk_client:
-            logger.error("JWK client not initialized (ENTRA_JWKS_URL missing)")
-            return generate_policy("user", "Deny", method_arn, {})
-
-        signing_key = jwk_client.get_signing_key_from_jwt(token)
-        payload = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=ENTRA_AUDIENCE,
-            issuer=ENTRA_ISSUER,
-        )
-
-        tenant_id = payload.get("tenantid")
-        app_id = payload.get("appid")
-        tier = payload.get("tier", "basic")
-        sub = payload.get("sub", "unknown")
-        roles = payload.get("roles", [])
-
-        if not tenant_id or not app_id:
-            logger.error(
-                "Missing tenantid or appid in token",
-                extra={"present_claims": sorted(str(key) for key in payload.keys())},
-            )
-            return generate_policy(sub, "Deny", method_arn, {})
-
-        effective_tenant_id = _PLATFORM_TENANT_ID if is_platform_route(method_arn) else tenant_id
-
-        # Check tenant status (Isolation Layer 1)
-        status = get_tenant_status(effective_tenant_id)
-        if status != "active":
-            logger.error(
-                "Tenant not active",
-                extra={"tenant_id": effective_tenant_id, "status": status},
-            )
-            return generate_policy(sub, "Deny", method_arn, {})
-
-        # RBAC check for admin routes (ADR-013)
-        if is_admin_route(method_arn):
-            if "Platform.Admin" not in roles and "Platform.Operator" not in roles:
-                logger.error(
-                    "User lacks required roles for admin route",
-                    extra={"sub": sub, "roles": roles, "method_arn": method_arn},
-                )
-                return generate_policy(sub, "Deny", method_arn, {})
-
-        # Prepare authoriser context for downstream Lambdas
-        auth_context = {
-            "tenantid": effective_tenant_id,
-            "appid": app_id,
-            "tier": tier,
-            "sub": sub,
-            "roles": json.dumps(roles),
-            "usageIdentifierKey": effective_tenant_id,  # Mapped to API Gateway usage plan key
-        }
-
-        # Inject context into all subsequent log lines (structured logging mandate)
-        logger.append_keys(tenant_id=effective_tenant_id, app_id=app_id)
-
-        logger.info(
-            "Authentication successful",
-            extra={"tenant_id": effective_tenant_id, "sub": sub},
-        )
-        return generate_policy(sub, "Allow", method_arn, auth_context)
-
-    except jwt.ExpiredSignatureError:
-        logger.warning("JWT has expired")
-        return generate_policy("user", "Deny", method_arn, {})
-    except jwt.InvalidTokenError as e:
-        logger.warning("Invalid JWT", extra={"error": str(e)})
-        return generate_policy("user", "Deny", method_arn, {})
-    except Exception:
-        logger.exception("Unexpected error during JWT validation")
-        return generate_policy("user", "Deny", method_arn, {})
+    return jwt_service.handle_jwt(
+        token,
+        method_arn,
+        get_jwk_client=get_jwk_client,
+        generate_policy=generate_policy,
+        get_tenant_status=get_tenant_status,
+        is_admin_route=is_admin_route,
+        is_platform_route=is_platform_route,
+        entra_audience=ENTRA_AUDIENCE,
+        entra_issuer=ENTRA_ISSUER,
+        platform_tenant_id=_PLATFORM_TENANT_ID,
+        logger=logger,
+        jwt_module=jwt,
+    )
 
 
 def handle_sigv4(auth_header: str, method_arn: str, event: dict[str, Any]) -> dict[str, Any]:
-    """Validate and process AWS SigV4 machine caller context."""
-    parsed = _parse_sigv4_authorization(auth_header)
-    if not parsed:
-        logger.warning("Malformed SigV4 Authorization header")
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    if parsed["service"] != "execute-api":
-        logger.warning("SigV4 service must be execute-api", extra={"service": parsed["service"]})
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    headers = _normalise_headers(event)
-    requested_tenant_id = headers.get("x-tenant-id", "")
-    if not requested_tenant_id or not _SIGV4_TENANT_ID_RE.fullmatch(requested_tenant_id):
-        logger.warning("Missing or invalid x-tenant-id for SigV4 request")
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    amz_date = headers.get("x-amz-date", "")
-    if not _is_valid_sigv4_timestamp(amz_date):
-        logger.warning("Invalid or stale x-amz-date for SigV4 request")
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    request_context = event.get("requestContext", {})
-    identity = request_context.get("identity", {}) if isinstance(request_context, dict) else {}
-    if not isinstance(identity, dict):
-        identity = {}
-
-    identity_access_key = str(identity.get("accessKey", "")).strip()
-    if identity_access_key and identity_access_key != parsed["access_key"]:
-        mismatch = {
-            "identity_access_key": identity_access_key,
-            "credential_access_key": parsed["access_key"],
-        }
-        logger.warning(
-            "SigV4 access key mismatch between request context and Authorization header",
-            extra=mismatch,
-        )
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    # Token authoriser events can omit full request context.
-    # If API Gateway did not provide caller identity metadata, reject as unverifiable.
-    caller_arn = str(identity.get("userArn", "")).strip()
-    caller_id = str(identity.get("caller", "")).strip()
-    if not caller_arn and not caller_id:
-        logger.warning("SigV4 caller identity missing from request context")
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    tenant_binding = resolve_sigv4_tenant_binding(caller_arn)
-    if not tenant_binding:
-        logger.warning(
-            "SigV4 caller has no trusted tenant binding", extra={"caller_arn": caller_arn}
-        )
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    tenant_id = tenant_binding["tenant_id"]
-    if requested_tenant_id != tenant_id:
-        logger.warning(
-            "SigV4 x-tenant-id does not match trusted tenant binding",
-            extra={
-                "caller_arn": caller_arn,
-                "requested_tenant_id": requested_tenant_id,
-                "trusted_tenant_id": tenant_id,
-            },
-        )
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    status = get_tenant_status(tenant_id)
-    if status != "active":
-        logger.error(
-            "Tenant not active for SigV4 request",
-            extra={"tenant_id": tenant_id, "status": status},
-        )
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    if is_admin_route(method_arn):
-        logger.warning("SigV4 caller denied on admin route", extra={"tenant_id": tenant_id})
-        return generate_policy("machine", "Deny", method_arn, {})
-
-    app_id = tenant_binding["app_id"] or identity_access_key or parsed["access_key"]
-    tier = tenant_binding["tier"]
-    actor = caller_arn or caller_id or f"sigv4:{parsed['access_key']}"
-    auth_context = {
-        "tenantid": tenant_id,
-        "appid": app_id,
-        "tier": tier,
-        "sub": actor,
-        "roles": json.dumps(["Machine.Invoke"]),
-        "usageIdentifierKey": tenant_id,
-    }
-
-    logger.append_keys(tenant_id=tenant_id, app_id=app_id)
-    logger.info("SigV4 authentication successful", extra={"tenant_id": tenant_id, "actor": actor})
-    return generate_policy(actor, "Allow", method_arn, auth_context)
+    return sigv4_service.handle_sigv4(
+        auth_header,
+        method_arn,
+        event,
+        parse_sigv4_authorization=_parse_sigv4_authorization,
+        normalise_headers=_normalise_headers,
+        is_valid_sigv4_timestamp=_is_valid_sigv4_timestamp,
+        tenant_id_pattern=_SIGV4_TENANT_ID_RE,
+        resolve_sigv4_tenant_binding=resolve_sigv4_tenant_binding,
+        get_tenant_status=get_tenant_status,
+        is_admin_route=is_admin_route,
+        generate_policy=generate_policy,
+        logger=logger,
+    )
