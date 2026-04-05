@@ -4,7 +4,7 @@
 # =============================================================================
 
 .PHONY: help help-all bootstrap ensure-tools validate-local validate-local-full
-.PHONY: validate-local-prereqs validate-python validate-openapi validate-guardrails validate-cdk validate-cdk-ts validate-cdk-ts-push validate-cdk-synth
+.PHONY: validate-local-prereqs validate-python validate-openapi validate-guardrails validate-cdk validate-cdk-ts validate-cdk-ts-prereqs validate-cdk-ts-local validate-cdk-ts-push validate-cdk-synth validate-cdk-synth-prereqs
 .PHONY: validate-pre-push validate-secrets-diff validate-secrets-push validate-secrets-full
 .PHONY: docs-sync-audit docs-sync-stamp rules-sync-audit
 .PHONY: dev dev-stop dev-logs dev-invoke
@@ -171,21 +171,11 @@ ensure-tools:
 ## validate-local: Run local validation checks before commit (fast path)
 ## Uses diff-only secret detection for speed. Run `make validate-local-full` for full repo secret scan.
 validate-local: validate-local-prereqs
-	@echo "==> Running local validation (fast)"
-	@$(MAKE) --no-print-directory rules-sync-audit
-	@$(MAKE) --no-print-directory validate-python
-	@$(MAKE) --no-print-directory validate-cdk
-	@$(MAKE) --no-print-directory validate-secrets-diff
-	@echo "==> Validation passed"
+	uv run python scripts/validate_local.py fast
 
 ## validate-local-full: Full local validation including full-repo secret scan
 validate-local-full: validate-local-prereqs
-	@echo "==> Running local validation (full)"
-	@$(MAKE) --no-print-directory rules-sync-audit
-	@$(MAKE) --no-print-directory validate-python
-	@$(MAKE) --no-print-directory validate-cdk
-	@$(MAKE) --no-print-directory validate-secrets-full
-	@echo "==> Validation passed"
+	uv run python scripts/validate_local.py full
 
 ## docs-sync-audit: Check docs/code semver sync and drift heuristics
 ## Usage: make docs-sync-audit [JSON=1]
@@ -244,9 +234,28 @@ validate-cdk:
 	@$(MAKE) --no-print-directory validate-cdk-synth
 	@$(MAKE) --no-print-directory validate-cfn-guard
 
+## validate-cdk-ts-prereqs: Ensure local TypeScript compiler is available
+validate-cdk-ts-prereqs:
+	@cd infra/cdk && npx --no-install tsc --version >/dev/null 2>&1 || \
+		(echo "ERROR: typescript not installed in infra/cdk. Run: make ensure-tools" && exit 1)
+
 ## validate-cdk-ts: TypeScript compile only (no synth)
-validate-cdk-ts:
+validate-cdk-ts: validate-cdk-ts-prereqs
 	cd infra/cdk && npx --no-install tsc --noEmit
+
+## validate-cdk-ts-local: Run CDK TypeScript compile only when local working tree has CDK/TS changes
+validate-cdk-ts-local:
+	@files="$$( \
+		(git diff --name-only --diff-filter=ACMR; \
+		 git diff --name-only --cached --diff-filter=ACMR; \
+		 git ls-files --others --exclude-standard) | sort -u \
+	)"; \
+	if ! printf '%s\n' "$$files" | grep -Eq '^(infra/cdk/|pyrightconfig\.json$$|tsconfig\.json$$|package\.json$$|package-lock\.json$$|pnpm-lock\.yaml$$|yarn\.lock$$)'; then \
+		echo "==> validate-cdk-ts-local: skipped (no local CDK/TS changes)"; \
+		exit 0; \
+	fi; \
+	echo "==> validate-cdk-ts-local: running (local CDK/TS changes detected)"; \
+	$(MAKE) --no-print-directory validate-cdk-ts
 
 ## validate-cdk-ts-push: Run CDK TypeScript compile only when CDK paths changed in commits-to-push
 validate-cdk-ts-push:
@@ -270,7 +279,12 @@ validate-cdk-ts-push:
 	$(MAKE) --no-print-directory validate-cdk-ts
 
 ## validate-cdk-synth: CDK synth only
-validate-cdk-synth:
+validate-cdk-synth-prereqs:
+	@cd infra/cdk && npx --no-install cdk --version >/dev/null 2>&1 || \
+		(echo "ERROR: aws-cdk not installed in infra/cdk. Run: make ensure-tools" && exit 1)
+
+## validate-cdk-synth: CDK synth only
+validate-cdk-synth: validate-cdk-synth-prereqs
 	cd infra/cdk && npx --no-install cdk synth --context env=dev --context entraTenantId=00000000-0000-0000-0000-000000000000 --quiet > /dev/null
 
 ## validate-cfn-guard: Run cfn-guard against synthesised templates

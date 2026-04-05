@@ -59,7 +59,7 @@ Before writing any code:
 6. Start from a known fresh issue worktree based on current `main`/`origin/main`; do not begin implementation in a stale resumed worktree without first refreshing or recreating it
 7. If not already in that fresh issue worktree, start via `make worktree` / `make worktree-next-issue` unless the operator explicitly instructs in-place work
 8. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
-   (use `make validate-local-full` when a full-repo secret scan is required)
+   (`validate-local` is the fast default path; use `make validate-local-full` when a full-repo secret scan is required)
 9. State which issue/task you are working on explicitly
 10. Do not use `make task-*` unless the operator explicitly asks for the legacy snapshot workflow.
 11. If branch validation exposes unrelated breakage outside the active issue scope, do not bundle it into the same branch; queue/fix it separately or restart from a mainline that already contains that fix.

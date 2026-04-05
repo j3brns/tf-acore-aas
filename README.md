@@ -306,7 +306,8 @@ make bootstrap                # One-time: check prerequisites and install depend
 make install-git-hooks        # One-time: install pre-push hook
 make dev                      # Start LocalStack and mock services
 make test-unit                # Run all unit tests
-make validate-local           # ruff + pyright + tsc + cdk synth + detect-secrets
+make validate-local           # fast local validation (parallel rules/python/diff-aware cdk-ts/diff-secrets)
+make validate-local-full      # full local validation (parallel fast checks + full cdk validation + full repo secret scan)
 ```
 
 ### Working on issues
