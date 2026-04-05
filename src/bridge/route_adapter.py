@@ -46,6 +46,7 @@ def send_streaming_response(
 def handle_streaming_invocation(
     *,
     url: str,
+    headers: dict[str, str] | None,
     payload: dict[str, Any],
     agent: AgentRecord,
     tenant_context: TenantContext,
@@ -67,31 +68,42 @@ def handle_streaming_invocation(
             request_id,
         )
 
+    stream_started = False
     try:
-        response = get_http_session().post(url.rstrip("/"), json=payload, stream=True, timeout=5)
-        send_streaming_response(
-            response_stream,
-            200,
-            b"",
-            {"Content-Type": "text/event-stream"},
-        )
-        for raw_line in response.iter_lines():
-            if not raw_line:
-                continue
-            response_stream.write(raw_line + b"\n\n")
-        latency_ms = int((time.time() - start_time) * 1000)
-        log_invocation(
-            tenant_context,
-            agent,
-            invocation_id,
-            InvocationStatus.SUCCESS,
-            latency_ms,
-            agent.invocation_mode,
-            session_id=session_id,
-            runtime_region="mock-runtime",
-        )
-        return None
+        with get_http_session().post(
+            url.rstrip("/"),
+            headers=headers or {},
+            json=payload,
+            stream=True,
+            timeout=5,
+        ) as response:
+            response.raise_for_status()
+            send_streaming_response(
+                response_stream,
+                200,
+                b"",
+                {"Content-Type": "text/event-stream"},
+            )
+            stream_started = True
+            for raw_line in response.iter_lines():
+                if not raw_line:
+                    continue
+                response_stream.write(raw_line + b"\n\n")
+            latency_ms = int((time.time() - start_time) * 1000)
+            log_invocation(
+                tenant_context,
+                agent,
+                invocation_id,
+                InvocationStatus.SUCCESS,
+                latency_ms,
+                agent.invocation_mode,
+                session_id=session_id or "mock-session-id",
+                runtime_region="mock-runtime",
+            )
+            return None
     except Exception as exc:
+        if not stream_started:
+            raise
         return runtime_failure_response(
             tenant_context,
             agent,

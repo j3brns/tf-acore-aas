@@ -401,6 +401,7 @@ _is_runtime_unavailable_error = route_adapter.is_runtime_unavailable_error
 def handle_streaming_invocation(
     *,
     url: str,
+    headers: dict[str, str] | None = None,
     payload: dict[str, Any],
     agent: AgentRecord,
     tenant_context: TenantContext,
@@ -416,6 +417,7 @@ def handle_streaming_invocation(
 ) -> dict[str, Any] | None:
     return route_adapter.handle_streaming_invocation(
         url=url,
+        headers=headers,
         payload=payload,
         agent=agent,
         tenant_context=tenant_context,
