@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
@@ -9,10 +8,11 @@ from botocore.exceptions import ClientError
 try:
     import handler as shared
 
-    from . import auth, db_factory, db_utils, http_utils, lifecycle_logic, models, utils
+    from . import auth, config, db_factory, db_utils, http_utils, lifecycle_logic, models, utils
 except (ImportError, ValueError):  # pragma: no cover
     from src.tenant_api import (
         auth,
+        config,
         db_factory,
         db_utils,
         http_utils,
@@ -253,7 +253,7 @@ def handle_lambda_rollback(
     if function_suffix is None:
         raise ValueError("functionSuffix is required")
 
-    function_name = f"platform-{function_suffix}-{os.environ.get('PLATFORM_ENV', 'dev')}"
+    function_name = f"platform-{function_suffix}-{config.current_config().platform_env}"
     try:
         alias = deps.awslambda.get_alias(FunctionName=function_name, Name=alias_name)
         current_version = str(alias["FunctionVersion"])

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import sys
 from datetime import timedelta
@@ -13,6 +12,7 @@ from data_access.models import TenantStatus
 try:
     from . import (
         auth,
+        config,
         constants,
         db_factory,
         db_utils,
@@ -28,6 +28,7 @@ try:
 except (ImportError, ValueError):  # pragma: no cover
     from src.tenant_api import (
         auth,
+        config,
         constants,
         db_factory,
         db_utils,
@@ -374,7 +375,7 @@ def handle_health(deps: models.TenantApiDependencies) -> dict[str, Any]:
         {
             "status": "ok",
             "version": "pre-release",
-            "runtimeRegion": os.environ.get("AWS_REGION", "unknown"),
+            "runtimeRegion": config.current_config().region,
             "timestamp": utils.iso(_now_utc()),
         },
     )
@@ -559,8 +560,7 @@ def _format_export_timestamp(value: Any) -> str:
 
 
 def _audit_export_url_expiry_seconds() -> int:
-    raw = os.environ.get("AUDIT_EXPORT_URL_EXPIRY_SECONDS")
-    return utils.coerce_positive_int(raw, default=constants.AUDIT_EXPORT_URL_EXPIRY_SECONDS)
+    return config.current_config().audit_export_url_expiry_seconds
 
 
 def _audit_export_key(tenant_id: str, generated_at: Any) -> str:
@@ -607,7 +607,7 @@ def handle_audit_export(
     if start_at is not None and end_at is not None and start_at > end_at:
         raise ValueError("start must be less than or equal to end")
 
-    bucket = utils.str_or_none(os.environ.get(constants.AUDIT_EXPORT_BUCKET_ENV))
+    bucket = config.current_config().audit_export_bucket
     if bucket is None:
         return http_utils.error(500, "INTERNAL_ERROR", "Audit export bucket is not configured")
 

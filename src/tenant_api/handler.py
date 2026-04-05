@@ -11,7 +11,6 @@ ADRs: ADR-012
 from __future__ import annotations
 
 import json
-import os
 import secrets
 from datetime import UTC, datetime
 from typing import Any
@@ -36,6 +35,7 @@ from data_access.models import (
 from src.tenant_api import (
     agent_logic,
     auth,
+    config,
     constants,
     db_factory,
     db_utils,
@@ -63,7 +63,7 @@ _AwsPlatformQuotaClient = dependency_factories._AwsPlatformQuotaClient
 
 
 def _dependencies() -> TenantApiDependencies:
-    return dependency_factories.build_tenant_api_dependencies(region=os.environ["AWS_REGION"])
+    return dependency_factories.build_tenant_api_dependencies(region=config.current_config().region)
 
 
 _parse_roles = http_utils.parse_roles
