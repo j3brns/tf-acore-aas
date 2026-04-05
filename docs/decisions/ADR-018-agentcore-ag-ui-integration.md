@@ -69,6 +69,8 @@ The design has four parts:
 - The SPA must choose between:
   - the existing REST invoke flow, or
   - the AG-UI flow for agents explicitly marked AG-UI capable
+- The explicit bootstrap request/response and audit contract is published in
+  [docs/contracts/ag-ui-bootstrap-contract.md](../contracts/ag-ui-bootstrap-contract.md)
 - The thin BFF decision in ADR-011 remains valid for the current invoke path.
   AG-UI bootstrap may live in the control plane or in a narrowly-scoped BFF
   extension, but it must not become a second generic invoke router
