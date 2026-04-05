@@ -56,11 +56,13 @@ Before writing any code:
 3. Identify the issue you are working on. GitHub Issues are the canonical task queue; `docs/TASKS.md` is a snapshot.
 4. Read the ADR(s) linked to the current task/issue (use `docs/TASKS.md` as a reference snapshot when needed)
 5. In local WSL, confirm you are in an issue worktree on a policy branch (not `main` in the primary repo working tree)
-6. If not, start via `make worktree` / `make worktree-next-issue` unless the operator explicitly instructs in-place work
-7. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
+6. Start from a known fresh issue worktree based on current `main`/`origin/main`; do not begin implementation in a stale resumed worktree without first refreshing or recreating it
+7. If not already in that fresh issue worktree, start via `make worktree` / `make worktree-next-issue` unless the operator explicitly instructs in-place work
+8. If you are in local WSL with the repo checked out, run `make validate-local` — confirm it passes
    (use `make validate-local-full` when a full-repo secret scan is required)
-8. State which issue/task you are working on explicitly
-9. Do not use `make task-*` unless the operator explicitly asks for the legacy snapshot workflow.
+9. State which issue/task you are working on explicitly
+10. Do not use `make task-*` unless the operator explicitly asks for the legacy snapshot workflow.
+11. If branch validation exposes unrelated breakage outside the active issue scope, do not bundle it into the same branch; queue/fix it separately or restart from a mainline that already contains that fix.
 
 Before marking any task complete:
 1. All tests pass
@@ -73,6 +75,14 @@ Before marking any task complete:
 8. State completion with the issue/task identifier (for legacy tasks, `TASK-NNN complete. Tests passing.`)
 
 When uncertain about a security decision — stop and ask. Do not guess.
+
+Approved shared helper paths for handler bootstrap:
+- `src/platform_aws.py` for default-region boto3 session/client/resource bootstrap
+- `src/platform_utils.py` for shared boring utilities such as UTC time, retry jitter, JSON default handling, and coercion
+- `src/bridge/runtime_dependencies.py` for Bridge runtime/config/data access wiring
+- `gateway/interceptors/request_*.py` modules for Request interceptor sub-boundaries
+
+Do not introduce new handler-local `boto3.client(...)`, `boto3.resource(...)`, `boto3.session.Session(...)`, or `requests.Session()` construction outside an explicitly documented allowlist.
 
 When changing AWS infrastructure or service configuration, verify service-specific
 assumptions against current AWS documentation before shipping. Use the
@@ -371,7 +381,7 @@ git worktree prune
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **wt389** (2825 symbols, 7315 relationships, 229 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **ag** (3321 symbols, 8277 relationships, 265 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -387,7 +397,7 @@ This project is indexed by GitNexus as **wt389** (2825 symbols, 7315 relationshi
 
 1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
 2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/wt389/process/{processName}` — trace the full execution flow step by step
+3. `READ gitnexus://repo/ag/process/{processName}` — trace the full execution flow step by step
 4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
 
 ## When Refactoring
@@ -426,10 +436,10 @@ This project is indexed by GitNexus as **wt389** (2825 symbols, 7315 relationshi
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/wt389/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/wt389/clusters` | All functional areas |
-| `gitnexus://repo/wt389/processes` | All execution flows |
-| `gitnexus://repo/wt389/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/ag/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/ag/clusters` | All functional areas |
+| `gitnexus://repo/ag/processes` | All execution flows |
+| `gitnexus://repo/ag/process/{name}` | Step-by-step execution trace |
 
 ## Self-Check Before Finishing
 

@@ -22,6 +22,10 @@ ALLOWED_PRODUCTION_HANDLER_IMPORTS = {
     "src/tenant_api/webhook_registry_handler.py",
 }
 
+ALLOWED_HANDLER_LOCAL_BOOTSTRAP = {
+    "gateway/interceptors/response_interceptor.py",
+}
+
 
 def test_security_critical_files_stay_under_guardrail_limits() -> None:
     offenders: list[str] = []
@@ -56,4 +60,31 @@ def test_production_code_does_not_add_new_handler_to_handler_imports() -> None:
     assert offenders == [], (
         "production handler-to-handler imports are limited to explicit shim allowlist entries: "
         f"{offenders}"
+    )
+
+
+def test_production_handlers_do_not_add_new_local_bootstrap() -> None:
+    patterns = (
+        re.compile(r"\bboto3\.(client|resource)\("),
+        re.compile(r"\bboto3\.session\.Session\("),
+        re.compile(r"\brequests\.Session\("),
+    )
+
+    handler_paths = [
+        *sorted((REPO_ROOT / "src").rglob("*handler.py")),
+        *sorted((REPO_ROOT / "gateway").rglob("*interceptor.py")),
+    ]
+
+    offenders: list[str] = []
+    for path in handler_paths:
+        relative_path = path.relative_to(REPO_ROOT).as_posix()
+        if relative_path in ALLOWED_HANDLER_LOCAL_BOOTSTRAP:
+            continue
+        content = path.read_text(encoding="utf-8")
+        if any(pattern.search(content) for pattern in patterns):
+            offenders.append(relative_path)
+
+    assert offenders == [], (
+        "production handlers must use shared bootstrap helpers instead of ad hoc boto3/session "
+        f"construction: {offenders}"
     )
