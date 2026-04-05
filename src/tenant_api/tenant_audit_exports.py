@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import secrets
 from datetime import timedelta
 from typing import Any
@@ -9,10 +8,21 @@ from typing import Any
 from boto3.dynamodb.conditions import Key
 
 try:
-    from . import auth, constants, db_factory, db_utils, http_utils, models, utils, validation
+    from . import (
+        auth,
+        config,
+        constants,
+        db_factory,
+        db_utils,
+        http_utils,
+        models,
+        utils,
+        validation,
+    )
 except (ImportError, ValueError):  # pragma: no cover
     from src.tenant_api import (
         auth,
+        config,
         constants,
         db_factory,
         db_utils,
@@ -89,8 +99,7 @@ def _format_export_timestamp(value: Any) -> str:
 
 
 def _audit_export_url_expiry_seconds() -> int:
-    raw = os.environ.get("AUDIT_EXPORT_URL_EXPIRY_SECONDS")
-    return utils.coerce_positive_int(raw, default=constants.AUDIT_EXPORT_URL_EXPIRY_SECONDS)
+    return config.current_config().audit_export_url_expiry_seconds
 
 
 def _audit_export_key(tenant_id: str, generated_at: Any) -> str:
@@ -137,7 +146,7 @@ def handle_audit_export(
     if start_at is not None and end_at is not None and start_at > end_at:
         raise ValueError("start must be less than or equal to end")
 
-    bucket = utils.str_or_none(os.environ.get(constants.AUDIT_EXPORT_BUCKET_ENV))
+    bucket = config.current_config().audit_export_bucket
     if bucket is None:
         return http_utils.error(500, "INTERNAL_ERROR", "Audit export bucket is not configured")
 

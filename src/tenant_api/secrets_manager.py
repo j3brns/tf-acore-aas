@@ -1,22 +1,18 @@
 from __future__ import annotations
 
 import json
-import os
 import secrets
 
 from aws_lambda_powertools import Logger
 
-from src.tenant_api.constants import (
-    API_KEY_SECRET_PREFIX_ENV,
-    TENANT_MGMT_ROLE_ARN_ENV,
-)
+from src.tenant_api import config
 from src.tenant_api.models import TenantApiDependencies
 
 logger = Logger(service="tenant-api-secrets")
 
 
 def secret_prefix() -> str:
-    return os.environ.get(API_KEY_SECRET_PREFIX_ENV, "platform/tenants")
+    return config.current_config().api_key_secret_prefix
 
 
 def create_api_key_secret(
@@ -58,7 +54,7 @@ def attach_tenant_api_key_secret_policy(
     tenant_id: str,
     app_id: str,
 ) -> None:
-    tenant_mgmt_role_arn = os.environ.get(TENANT_MGMT_ROLE_ARN_ENV, "").strip()
+    tenant_mgmt_role_arn = (config.current_config().tenant_mgmt_role_arn or "").strip()
     if not tenant_mgmt_role_arn:
         logger.warning(
             "Skipping tenant API key secret resource policy: manager role ARN not configured",

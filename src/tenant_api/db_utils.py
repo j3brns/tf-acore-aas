@@ -66,13 +66,11 @@ def build_update_expression(
 def read_failover_lock_record(
     caller: CallerIdentity, deps: TenantApiDependencies
 ) -> dict[str, Any] | None:
-    import os
-
-    from src.tenant_api.constants import DEFAULT_FAILOVER_LOCK_NAME, FAILOVER_LOCK_NAME_ENV
+    from src.tenant_api import config
 
     _ = deps
     db = control_plane_db(caller)
-    lock_name = os.environ.get(FAILOVER_LOCK_NAME_ENV, DEFAULT_FAILOVER_LOCK_NAME)
+    lock_name = config.current_config().failover_lock_name
     return db.get_item(
         _ops_locks_table_name(),
         {"PK": f"LOCK#{lock_name}", "SK": "METADATA"},

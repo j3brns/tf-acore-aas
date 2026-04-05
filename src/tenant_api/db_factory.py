@@ -1,53 +1,42 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from data_access import ControlPlaneDynamoDB, TenantContext, TenantScopedDynamoDB, TenantScopedS3
 from data_access.models import TenantTier
 
-from src.tenant_api.constants import (
-    AUDIT_EXPORT_BUCKET_ENV,
-    INVOCATIONS_TABLE_ENV,
-    TENANTS_TABLE_ENV,
-)
+from src.tenant_api import config
 
 if TYPE_CHECKING:
     from src.tenant_api.models import CallerIdentity
 
 
 def tenants_table_name() -> str:
-    return os.environ.get(TENANTS_TABLE_ENV, "platform-tenants")
+    return config.current_config().tenants_table_name
 
 
 def agents_table_name() -> str:
-    return os.environ.get("AGENTS_TABLE_NAME", "platform-agents")
+    return config.current_config().agents_table_name
 
 
 def invocations_table_name() -> str:
-    return os.environ.get(INVOCATIONS_TABLE_ENV, "platform-invocations")
+    return config.current_config().invocations_table_name
 
 
 def audit_export_bucket_name() -> str:
-    return os.environ.get(AUDIT_EXPORT_BUCKET_ENV, "platform-audit-exports")
+    return config.current_config().audit_export_bucket or "platform-audit-exports"
 
 
 def ops_locks_table_name() -> str:
-    from src.tenant_api.constants import DEFAULT_OPS_LOCKS_TABLE, OPS_LOCKS_TABLE_ENV
-
-    return os.environ.get(OPS_LOCKS_TABLE_ENV, DEFAULT_OPS_LOCKS_TABLE)
+    return config.current_config().ops_locks_table_name
 
 
 def runtime_region_param_name() -> str:
-    from src.tenant_api.constants import DEFAULT_RUNTIME_REGION_PARAM, RUNTIME_REGION_PARAM_ENV
-
-    return os.environ.get(RUNTIME_REGION_PARAM_ENV, DEFAULT_RUNTIME_REGION_PARAM)
+    return config.current_config().runtime_region_param_name
 
 
 def fallback_region_param_name() -> str:
-    from src.tenant_api.constants import DEFAULT_FALLBACK_REGION_PARAM, FALLBACK_REGION_PARAM_ENV
-
-    return os.environ.get(FALLBACK_REGION_PARAM_ENV, DEFAULT_FALLBACK_REGION_PARAM)
+    return config.current_config().fallback_region_param_name
 
 
 def _tenant_context_for_scope(
