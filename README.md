@@ -314,6 +314,9 @@ make validate-local-full      # full local validation (parallel fast checks + fu
 
 All work is tracked through [GitHub Issues](https://github.com/j3brns/tf-acore-aas/issues), using `Seq:` for ordering and `Depends on:` for dependency gating.
 
+Canonical issue-tool CLI entrypoint: `uv run python -m scripts.issue_tool ...`
+The legacy `scripts/worktree_issues.py` file remains only as a compatibility shim.
+
 ```bash
 make issue-queue              # Dependency-aware queue ordered by Seq
 make worktree-next-issue      # Create worktree for next runnable issue

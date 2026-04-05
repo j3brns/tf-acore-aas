@@ -1464,6 +1464,18 @@ def choose_default_launch_agent(pool: tuple[str, ...] = DEFAULT_INTERACTIVE_AGEN
     return random.choice(pool)
 
 
+def resolve_cli_launch_request(
+    args: argparse.Namespace, *, default_agent: str = "gemini"
+) -> tuple[str, str, str, str]:
+    agent, agent_mode, handoff, mux = resolve_launch_request(args)
+    requested_agent = getattr(args, "agent", None)
+    if requested_agent == "random":
+        agent = choose_default_launch_agent()
+    elif requested_agent is None:
+        agent = default_agent
+    return agent, agent_mode, handoff, mux
+
+
 def build_agent_prompt_for_worktree(path: Path, root: Path, repo: str | None) -> str:
     branch = run(["git", "branch", "--show-current"], cwd=path).stdout.strip() or "(detached)"
     issue_id = worktree_issue_id(path)
@@ -2877,7 +2889,7 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
                 open_shell(existing_wt.path)
                 return 0
             if wants_agent_launch(args) and not args.dry_run:
-                agent, agent_mode, handoff, mux = resolve_launch_request(args)
+                agent, agent_mode, handoff, mux = resolve_cli_launch_request(args)
                 record_issue_handoff_event(
                     root=root,
                     repo=repo,
@@ -2954,7 +2966,7 @@ def cmd_worktree_next(args: argparse.Namespace) -> int:
         open_shell(wt_path)
         return 0
     if wants_agent_launch(args) and not args.dry_run:
-        agent, agent_mode, handoff, mux = resolve_launch_request(args)
+        agent, agent_mode, handoff, mux = resolve_cli_launch_request(args)
         record_issue_handoff_event(
             root=root,
             repo=repo,
@@ -3027,7 +3039,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
             open_shell(existing_wt.path)
             return 0
         if wants_agent_launch(args) and not args.dry_run:
-            agent, agent_mode, handoff, mux = resolve_launch_request(args)
+            agent, agent_mode, handoff, mux = resolve_cli_launch_request(args)
             record_issue_handoff_event(
                 root=root,
                 repo=repo,
@@ -3109,7 +3121,7 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
             f"wt/{args.scope or infer_scope(issue)}/"
             f"{issue.number}-{args.slug or slugify_text(issue.title)}"
         )
-        agent, agent_mode, handoff, mux = resolve_launch_request(args)
+        agent, agent_mode, handoff, mux = resolve_cli_launch_request(args)
         record_issue_handoff_event(
             root=root,
             repo=repo,
@@ -3198,7 +3210,7 @@ def cmd_worktree_resume(args: argparse.Namespace) -> int:
         )
         open_shell(target.path)
     elif wants_agent_launch(args):
-        agent, agent_mode, handoff, mux = resolve_launch_request(args)
+        agent, agent_mode, handoff, mux = resolve_cli_launch_request(args)
         print_only = bool(getattr(args, "print_only", False))
         record_issue_handoff_event(
             root=root,
@@ -3272,7 +3284,7 @@ def cmd_agent_handoff(args: argparse.Namespace) -> int:
     target_path = Path(args.path).resolve() if args.path else current_path()
     branch = current_branch(target_path)
     issue_id = extract_issue_id_from_branch(branch)
-    agent, agent_mode, handoff, mux = resolve_launch_request(args)
+    agent, agent_mode, handoff, mux = resolve_cli_launch_request(args, default_agent="codex")
     record_issue_handoff_event(
         root=root,
         repo=repo,

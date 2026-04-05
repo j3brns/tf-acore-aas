@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import importlib
 import json
 import os
 import signal
@@ -12,20 +12,11 @@ from pathlib import Path
 
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-def _load_worktree_module():
-    repo_root = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location(
-        "worktree_issues", repo_root / "scripts" / "worktree_issues.py"
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-worktree_issues = _load_worktree_module()
+worktree_issues = importlib.import_module("scripts.issue_tool.cli")
 
 
 def _issue(
@@ -49,6 +40,34 @@ def _issue(
         seq=seq,
         depends_on=depends_on or [],
     )
+
+
+def test_canonical_issue_tool_entrypoint_help_smoke():
+    proc = subprocess.run(
+        [sys.executable, "-m", "scripts.issue_tool", "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert "Issue-driven worktree workflow" in proc.stdout
+
+
+def test_legacy_worktree_shim_delegates_without_exec():
+    shim_path = REPO_ROOT / "scripts" / "worktree_issues.py"
+    proc = subprocess.run(
+        [sys.executable, str(shim_path), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert "exec(" not in shim_path.read_text(encoding="utf-8")
+    assert proc.returncode == 0
+    assert "Issue-driven worktree workflow" in proc.stdout
 
 
 def test_build_queue_auto_excludes_in_progress_from_candidates():
