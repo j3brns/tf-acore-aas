@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
 from typing import Any
 
@@ -9,14 +10,18 @@ from src.tenant_api.db_factory import (
 )
 from src.tenant_api.models import CallerIdentity, TenantApiDependencies
 
-try:
-    import handler as shared
-except (ImportError, ValueError):  # pragma: no cover
-    from src.tenant_api import handler as shared
+
+def _shared_handler() -> Any | None:
+    return sys.modules.get("src.tenant_api.handler") or sys.modules.get("handler")
 
 
 def db_for_tenant(*, tenant_id: str, caller: CallerIdentity, app_id: str | None = None):
-    return shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_db_for_tenant"):
+        return shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    from src.tenant_api.db_factory import db_for_tenant as _db_for_tenant_impl
+
+    return _db_for_tenant_impl(tenant_id=tenant_id, caller=caller, app_id=app_id)
 
 
 def tenant_pk(tenant_id: str) -> str:
@@ -39,7 +44,7 @@ def read_tenant_record(
     caller: CallerIdentity,
     app_id: str | None = None,
 ) -> dict[str, Any] | None:
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    db = db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
     return db.get_item(tenants_table_name(), tenant_key(tenant_id))
 
 

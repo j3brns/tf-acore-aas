@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import sys
 import urllib.parse
 import uuid
 from typing import Any
@@ -9,8 +10,6 @@ from typing import Any
 from boto3.dynamodb.conditions import Key
 
 try:
-    import handler as shared
-
     from . import auth, db_factory, http_utils, models, utils
 except (ImportError, ValueError):  # pragma: no cover
     from src.tenant_api import (
@@ -20,7 +19,24 @@ except (ImportError, ValueError):  # pragma: no cover
         models,
         utils,
     )
-    from src.tenant_api import handler as shared
+
+
+def _shared_handler() -> Any | None:
+    return sys.modules.get("src.tenant_api.handler") or sys.modules.get("handler")
+
+
+def _db_for_tenant(*, tenant_id: str, caller: models.CallerIdentity, app_id: str | None):
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_db_for_tenant"):
+        return shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    return db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+
+
+def _now_utc():
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_now_utc"):
+        return shared._now_utc()
+    return utils.now_utc()
 
 
 def handle_list_webhooks(
@@ -33,7 +49,7 @@ def handle_list_webhooks(
     if not auth.can_manage_tenant_self_service(caller, tenant_id):
         raise PermissionError("Caller requires a tenant self-service admin role")
 
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     result = db.query(
         db_factory.tenants_table_name(),
         sk_condition=Key("SK").begins_with("WEBHOOK#"),
@@ -109,7 +125,7 @@ def handle_register_webhook(
         )
 
     webhook_id = str(uuid.uuid4())
-    now = shared._now_utc()
+    now = _now_utc()
     webhook_secret = secrets.token_urlsafe(32)
 
     webhook = {
@@ -128,7 +144,7 @@ def handle_register_webhook(
         "signature_algorithm": "HMAC-SHA256",
     }
 
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     db.put_item(db_factory.tenants_table_name(), webhook)
 
     return http_utils.response(
@@ -156,7 +172,7 @@ def handle_delete_webhook(
     if not auth.can_manage_tenant_self_service(caller, tenant_id):
         raise PermissionError("Caller requires a tenant self-service admin role")
 
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     key = {"PK": f"TENANT#{tenant_id}", "SK": f"WEBHOOK#{webhook_id}"}
 
     # Verify existence and ownership

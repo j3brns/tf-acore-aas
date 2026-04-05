@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
 
 from data_access.models import REGISTERABLE_AGENT_STATUSES, AgentStatus, normalize_agent_status
 
 try:
-    import handler as shared
-
     from . import (
         agent_logic,
         auth,
@@ -31,7 +30,24 @@ except (ImportError, ValueError):  # pragma: no cover
         utils,
         validation,
     )
-    from src.tenant_api import handler as shared
+
+
+def _shared_handler() -> Any | None:
+    return sys.modules.get("src.tenant_api.handler") or sys.modules.get("handler")
+
+
+def _db_for_tenant(*, tenant_id: str, caller: models.CallerIdentity, app_id: str | None):
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_db_for_tenant"):
+        return shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    return db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+
+
+def _now_utc():
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_now_utc"):
+        return shared._now_utc()
+    return utils.now_utc()
 
 
 _REGISTER_MUTABLE_FIELDS = frozenset(
@@ -62,10 +78,17 @@ def _validate_layer_metadata_invariants(item: dict[str, Any]) -> None:
     if not _requires_zip_layer_metadata(item):
         return
 
+    layer_hash = str(item.get("layer_hash", "")).strip()
+    layer_s3_key = str(item.get("layer_s3_key", "")).strip()
+    script_s3_key = str(item.get("script_s3_key", "")).strip()
+
+    if layer_hash == "" and layer_s3_key == "" and script_s3_key == "":
+        return
+
     missing_fields: list[str] = []
-    if str(item.get("layer_hash", "")).strip() == "":
+    if layer_hash == "":
         missing_fields.append("layerHash")
-    if str(item.get("layer_s3_key", "")).strip() == "":
+    if layer_s3_key == "":
         missing_fields.append("layerS3Key")
 
     if missing_fields:
@@ -81,7 +104,7 @@ def handle_list_agents(
     _ = event
     _ = deps
     auth.require_admin(caller)
-    db = shared._db_for_tenant(
+    db = _db_for_tenant(
         tenant_id=caller.tenant_id or "platform",
         caller=caller,
         app_id=caller.app_id,
@@ -112,12 +135,12 @@ def handle_register_agent(
         allowed = ", ".join(s.value for s in sorted(REGISTERABLE_AGENT_STATUSES))
         raise ValueError(f"Initial status for registration must be one of: {allowed}")
 
-    db = shared._db_for_tenant(
+    db = _db_for_tenant(
         tenant_id=caller.tenant_id or "platform",
         caller=caller,
         app_id=caller.app_id,
     )
-    now = shared._now_utc()
+    now = _now_utc()
     now_iso = utils.iso(now)
 
     item = {
@@ -237,7 +260,7 @@ def _update_agent_status(
     auth.require_admin(caller)
     auth.require_platform_actor(caller)
 
-    db = shared._db_for_tenant(
+    db = _db_for_tenant(
         tenant_id=caller.tenant_id or "platform",
         caller=caller,
         app_id=caller.app_id,
@@ -252,7 +275,7 @@ def _update_agent_status(
     current_status = normalize_agent_status(existing.get("status"))
     agent_logic.validate_agent_status_transition(current_status, target_status)
 
-    now = shared._now_utc()
+    now = _now_utc()
     now_iso = utils.iso(now)
 
     updates: dict[str, Any] = {

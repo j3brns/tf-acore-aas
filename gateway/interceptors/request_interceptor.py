@@ -30,8 +30,15 @@ from aws_lambda_powertools.utilities.idempotency import (
 from aws_lambda_powertools.utilities.parameters import get_secret
 from jwt import PyJWKClient
 
-from gateway.interceptors import request_idempotency, request_tier, request_token
-from src.platform_utils import coerce_positive_int, parse_json_object_or_empty
+from gateway.interceptors import (
+    request_adapter,
+    request_idempotency,
+    request_pipeline,
+    request_tier,
+    request_token,
+    request_tools,
+)
+from src.platform_utils import coerce_positive_int
 
 try:
     from data_access import ControlPlaneDynamoDB, TenantCapabilityClient, TenantContext, TenantTier
@@ -119,24 +126,15 @@ def get_platform_context():
 
 
 def _get_header(headers: dict[str, str], key: str) -> str | None:
-    key_lower = key.lower()
-    for header_key, value in headers.items():
-        if header_key.lower() == key_lower:
-            return value
-    return None
+    return request_adapter.get_header(headers, key)
 
 
 def _normalized_headers(headers: Any) -> dict[str, str]:
-    if not isinstance(headers, dict):
-        return {}
-    output: dict[str, str] = {}
-    for key, value in headers.items():
-        output[str(key)] = str(value)
-    return output
+    return request_adapter.normalized_headers(headers)
 
 
 def _parse_body(body: Any) -> dict[str, Any]:
-    return parse_json_object_or_empty(body)
+    return request_adapter.parse_body(body)
 
 
 def _build_interceptor_response(
@@ -144,10 +142,10 @@ def _build_interceptor_response(
     transformed_gateway_request: dict[str, Any],
     transformed_gateway_response: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    mcp: dict[str, Any] = {"transformedGatewayRequest": transformed_gateway_request}
-    if transformed_gateway_response is not None:
-        mcp["transformedGatewayResponse"] = transformed_gateway_response
-    return {"interceptorOutputVersion": "1.0", "mcp": mcp}
+    return request_adapter.build_interceptor_response(
+        transformed_gateway_request=transformed_gateway_request,
+        transformed_gateway_response=transformed_gateway_response,
+    )
 
 
 def _error_response(
@@ -158,34 +156,20 @@ def _error_response(
     code: int,
     message: str,
 ) -> dict[str, Any]:
-    transformed_request = {
-        "body": _parse_body(gateway_request.get("body")),
-        "headers": _normalized_headers(gateway_request.get("headers", {})),
-    }
-    transformed_gateway_response = {
-        "statusCode": status_code,
-        "body": {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {"code": code, "message": message},
-        },
-    }
-    return _build_interceptor_response(
-        transformed_gateway_request=transformed_request,
-        transformed_gateway_response=transformed_gateway_response,
+    return request_adapter.error_response(
+        gateway_request=gateway_request,
+        request_id=request_id,
+        status_code=status_code,
+        code=code,
+        message=message,
+        parse_body=_parse_body,
+        normalized_headers=_normalized_headers,
+        build_interceptor_response=_build_interceptor_response,
     )
 
 
 def _extract_tool_name(method: str, body: dict[str, Any]) -> str | None:
-    if method != "tools/call":
-        return None
-    params = body.get("params", {})
-    if not isinstance(params, dict):
-        return None
-    name = params.get("name") or params.get("toolName")
-    if not name:
-        return None
-    return str(name)
+    return request_tools.extract_tool_name(method, body)
 
 
 def _build_idempotency_key(headers: dict[str, str], body: dict[str, Any]) -> str | None:
@@ -203,7 +187,7 @@ def _extract_minimum_tier(tool_record: dict[str, Any]) -> str:
 def get_tool_record(tool_name: str, tenant_id: str) -> dict[str, Any] | None:
     if ControlPlaneDynamoDB is None:
         raise RuntimeError("data-access-lib is required for tool record lookups")
-    return request_tier.get_tool_record(
+    return request_tools.get_tool_record(
         tool_name,
         tenant_id,
         db_factory=ControlPlaneDynamoDB,
@@ -325,124 +309,27 @@ def _get_idempotency_handler() -> Callable[..., dict[str, Any]] | None:
 
 
 def _process_request(event: dict[str, Any]) -> dict[str, Any]:
-    mcp = event.get("mcp", {})
-    if not isinstance(mcp, dict):
-        mcp = {}
-    gateway_request = mcp.get("gatewayRequest", {})
-    if not isinstance(gateway_request, dict):
-        gateway_request = {}
-
-    request_body = _parse_body(gateway_request.get("body"))
-    request_headers = _normalized_headers(gateway_request.get("headers", {}))
-    jsonrpc_id = request_body.get("id")
-
-    authorization = _get_header(request_headers, "Authorization")
-    if not authorization or not authorization.startswith("Bearer "):
-        return _error_response(
-            gateway_request=gateway_request,
-            request_id=jsonrpc_id,
-            status_code=401,
-            code=-32001,
-            message="Missing or invalid Bearer token",
-        )
-
-    user_token = authorization.split(" ", 1)[1]
-    try:
-        payload = _validate_bearer_token(user_token)
-    except jwt.ExpiredSignatureError:
-        return _error_response(
-            gateway_request=gateway_request,
-            request_id=jsonrpc_id,
-            status_code=401,
-            code=-32001,
-            message="Bearer token expired",
-        )
-    except jwt.InvalidTokenError:
-        return _error_response(
-            gateway_request=gateway_request,
-            request_id=jsonrpc_id,
-            status_code=401,
-            code=-32001,
-            message="Bearer token validation failed",
-        )
-    except Exception:
-        logger.exception("Unexpected JWT validation error")
-        return _error_response(
-            gateway_request=gateway_request,
-            request_id=jsonrpc_id,
-            status_code=401,
-            code=-32001,
-            message="Bearer token validation failed",
-        )
-
-    if payload is None:
-        return _error_response(
-            gateway_request=gateway_request,
-            request_id=jsonrpc_id,
-            status_code=401,
-            code=-32001,
-            message="Bearer token validation failed",
-        )
-
-    tenant_id = str(payload.get("tenantid") or "")
-    app_id = str(payload.get("appid") or "")
-    tier = str(payload.get("tier") or "basic")
-    acting_sub = str(payload.get("sub") or "unknown")
-    if not tenant_id or not app_id:
-        return _error_response(
-            gateway_request=gateway_request,
-            request_id=jsonrpc_id,
-            status_code=401,
-            code=-32001,
-            message="Missing tenant context in token",
-        )
-
-    logger.append_keys(tenant_id=tenant_id, app_id=app_id)
-
-    method = str(request_body.get("method") or "")
-    tool_name, tool_error = request_tier.validate_tool_access(
-        method=method,
-        request_body=request_body,
-        gateway_request=gateway_request,
-        request_id=jsonrpc_id,
-        tenant_id=tenant_id,
-        tier=tier,
-        extract_tool_name=_extract_tool_name,
-        get_tool_record=get_tool_record,
-        get_capability_policy=get_capability_policy,
-        extract_minimum_tier=_extract_minimum_tier,
-        is_tier_allowed=_is_tier_allowed,
+    return request_pipeline.process_request(
+        event,
+        parse_body=_parse_body,
+        normalized_headers=_normalized_headers,
+        get_header=_get_header,
         error_response=_error_response,
+        validate_bearer_token=_validate_bearer_token,
+        validate_tool_access=lambda **kwargs: request_tools.validate_tool_access(
+            **kwargs,
+            extract_tool_name=_extract_tool_name,
+            get_tool_record=get_tool_record,
+            get_capability_policy=get_capability_policy,
+            extract_minimum_tier=_extract_minimum_tier,
+            is_tier_allowed=_is_tier_allowed,
+            error_response=_error_response,
+            logger=logger,
+        ),
+        issue_scoped_token=_issue_scoped_token,
         logger=logger,
+        jwt_module=jwt,
     )
-    if tool_error is not None:
-        return tool_error
-
-    scope_tool = tool_name if tool_name else method
-    scoped_token = _issue_scoped_token(
-        tenant_id=tenant_id,
-        app_id=app_id,
-        tier=tier,
-        acting_sub=acting_sub,
-        scope_tool=scope_tool,
-        mcp_session_id=_get_header(request_headers, "Mcp-Session-Id"),
-        mcp_request_id=jsonrpc_id,
-    )
-
-    transformed_headers = {
-        key: value for key, value in request_headers.items() if key.lower() != "authorization"
-    }
-    transformed_headers["Authorization"] = f"Bearer {scoped_token}"
-    transformed_headers["x-tenant-id"] = tenant_id
-    transformed_headers["x-app-id"] = app_id
-    transformed_headers["x-tier"] = tier
-    transformed_headers["x-acting-sub"] = acting_sub
-
-    transformed_request = dict(gateway_request)
-    transformed_request["headers"] = transformed_headers
-    transformed_request["body"] = request_body
-
-    return _build_interceptor_response(transformed_gateway_request=transformed_request)
 
 
 @logger.inject_lambda_context

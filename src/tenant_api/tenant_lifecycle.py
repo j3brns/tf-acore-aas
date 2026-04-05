@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 from datetime import timedelta
 from typing import Any
 
@@ -10,8 +11,6 @@ from boto3.dynamodb.conditions import Key
 from data_access.models import TenantStatus
 
 try:
-    import handler as shared
-
     from . import (
         auth,
         constants,
@@ -41,7 +40,31 @@ except (ImportError, ValueError):  # pragma: no cover
         utils,
         validation,
     )
-    from src.tenant_api import handler as shared
+
+
+def _shared_handler() -> Any | None:
+    return sys.modules.get("src.tenant_api.handler") or sys.modules.get("handler")
+
+
+def _db_for_tenant(*, tenant_id: str, caller: models.CallerIdentity, app_id: str | None):
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_db_for_tenant"):
+        return shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    return db_factory.db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+
+
+def _control_plane_db(caller: models.CallerIdentity):
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_control_plane_db"):
+        return shared._control_plane_db(caller)
+    return db_factory.control_plane_db(caller)
+
+
+def _now_utc():
+    shared = _shared_handler()
+    if shared is not None and hasattr(shared, "_now_utc"):
+        return shared._now_utc()
+    return utils.now_utc()
 
 
 def handle_create(
@@ -58,7 +81,7 @@ def handle_create(
 
     tenant_id = validation.canonical_tenant_id(body["tenantId"])
     app_id = str(body["appId"]).strip()
-    now = shared._now_utc()
+    now = _now_utc()
     tier = lifecycle_logic.normalize_tier(body.get("tier"))
 
     if db_utils.read_tenant_record(tenant_id=tenant_id, caller=caller, app_id=app_id) is not None:
@@ -98,7 +121,7 @@ def handle_create(
     }
 
     # Save to DynamoDB
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
     db.put_item(db_factory.tenants_table_name(), item)
 
     # Emit event
@@ -157,7 +180,7 @@ def handle_list_tenants(
     query = event.get("queryStringParameters") or {}
     status_filter = utils.str_or_none(query.get("status")) if isinstance(query, dict) else None
     tier_filter = utils.str_or_none(query.get("tier")) if isinstance(query, dict) else None
-    db = shared._control_plane_db(caller)
+    db = _control_plane_db(caller)
     items = db.scan_all(db_factory.tenants_table_name())
     records = [
         serialization.serialize_tenant(item)
@@ -183,7 +206,7 @@ def handle_update(
     if item is None:
         return http_utils.error(404, "NOT_FOUND", f"Tenant '{tenant_id}' not found")
 
-    now = shared._now_utc()
+    now = _now_utc()
     updates: dict[str, Any] = {"updatedAt": utils.iso(now)}
 
     if "displayName" in body:
@@ -198,7 +221,7 @@ def handle_update(
         )
 
     expression, names, values = db_utils.build_update_expression(updates)
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     db.update_item(
         db_factory.tenants_table_name(),
         db_utils.tenant_key(tenant_id),
@@ -236,7 +259,7 @@ def handle_delete(
     if item is None:
         return http_utils.error(404, "NOT_FOUND", f"Tenant '{tenant_id}' not found")
 
-    now = shared._now_utc()
+    now = _now_utc()
     # Soft delete: update status and set purge date
     updates = {
         "status": "deleted",
@@ -248,7 +271,7 @@ def handle_delete(
     }
 
     expression, names, values = db_utils.build_update_expression(updates)
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     db.update_item(
         db_factory.tenants_table_name(),
         db_utils.tenant_key(tenant_id),
@@ -292,7 +315,7 @@ def handle_tenant_provisioning_event(
     if status not in constants.TENANT_PROVISIONING_STATUSES:
         raise ValueError(f"Invalid provisioning status: {status}")
 
-    now = shared._now_utc()
+    now = _now_utc()
     updates: dict[str, Any] = {
         "provisioningStatus": status,
         "provisioningUpdatedAt": utils.iso(now),
@@ -323,7 +346,7 @@ def handle_tenant_provisioning_event(
         usage_identifier_key=None,
     )
 
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=system_caller, app_id=app_id)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=system_caller, app_id=app_id)
     expression, names, values = db_utils.build_update_expression(updates)
     db.update_item(
         db_factory.tenants_table_name(),
@@ -352,7 +375,7 @@ def handle_health(deps: models.TenantApiDependencies) -> dict[str, Any]:
             "status": "ok",
             "version": "pre-release",
             "runtimeRegion": os.environ.get("AWS_REGION", "unknown"),
-            "timestamp": utils.iso(shared._now_utc()),
+            "timestamp": utils.iso(_now_utc()),
         },
     )
 
@@ -394,7 +417,7 @@ def handle_rotate_api_key(
     if app_id is None or secret_arn is None:
         return http_utils.error(409, "CONFLICT", "Tenant is missing API key secret metadata")
 
-    rotated_at = shared._now_utc()
+    rotated_at = _now_utc()
     put_response = deps.secretsmanager.put_secret_value(
         SecretId=secret_arn,
         SecretString=json.dumps(
@@ -452,7 +475,7 @@ def handle_invite_user(
         "email": email.lower(),
         "role": role,
         "status": "pending",
-        "expiresAt": utils.iso(shared._now_utc() + timedelta(days=7)),
+        "expiresAt": utils.iso(_now_utc() + timedelta(days=7)),
     }
     events.put_event(
         deps,
@@ -503,7 +526,7 @@ def _collect_audit_export_records(
     start_at: Any,
     end_at: Any,
 ) -> list[dict[str, Any]]:
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=app_id)
     last_evaluated_key: dict[str, Any] | None = None
     items: list[dict[str, Any]] = []
     sk_condition = _audit_export_sk_condition(start_at=start_at, end_at=end_at)
@@ -596,7 +619,7 @@ def handle_audit_export(
         start_at=start_at,
         end_at=end_at,
     )
-    generated_at = shared._now_utc()
+    generated_at = _now_utc()
     object_key = _audit_export_key(tenant_id, generated_at)
     payload = _build_audit_export_payload(
         tenant_id=tenant_id,
@@ -644,7 +667,7 @@ def handle_list_invites(
     ):
         raise PermissionError("Access denied")
 
-    db = shared._db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
+    db = _db_for_tenant(tenant_id=tenant_id, caller=caller, app_id=None)
     item = db.get_item(db_factory.tenants_table_name(), db_utils.tenant_key(tenant_id))
     if item is None:
         return http_utils.error(404, "NOT_FOUND", f"Tenant '{tenant_id}' not found")
